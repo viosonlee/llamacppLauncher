@@ -270,6 +270,51 @@ public partial class MainWindow : Window
         // Flash Attention: -fa / --flash-attn
         m = Regex.Match(args, @"(?:^|\s)(?:-fa|--flash-attn)\b");
         FlashAttentionBox.SelectedIndex = m.Success ? 1 : 0;
+
+        // Batch Size: -b N
+        m = Regex.Match(args, @"(?:^|\s)-b\s+(\d+)");
+        if (m.Success)
+        {
+            var val = m.Groups[1].Value;
+            var found = false;
+            for (int i = 0; i < BatchSizeBox.Items.Count; i++)
+            {
+                if (((ComboBoxItem)BatchSizeBox.Items[i]).Content.ToString() == val)
+                { BatchSizeBox.SelectedIndex = i; found = true; break; }
+            }
+            if (!found) { BatchSizeBox.Text = val; }
+        }
+        else BatchSizeBox.Text = "2048";
+
+        // UBatch Size: -ub N
+        m = Regex.Match(args, @"(?:^|\s)-ub\s+(\d+)");
+        if (m.Success)
+        {
+            var val = m.Groups[1].Value;
+            var found = false;
+            for (int i = 0; i < UBatchSizeBox.Items.Count; i++)
+            {
+                if (((ComboBoxItem)UBatchSizeBox.Items[i]).Content.ToString() == val)
+                { UBatchSizeBox.SelectedIndex = i; found = true; break; }
+            }
+            if (!found) { UBatchSizeBox.Text = val; }
+        }
+        else UBatchSizeBox.Text = "512";
+
+        // MoE Offload: --n-cpu-moe N
+        m = Regex.Match(args, @"(?:^|\s)--n-cpu-moe\s+(\d+)");
+        if (m.Success)
+        {
+            var val = m.Groups[1].Value;
+            var found = false;
+            for (int i = 0; i < MoeOffloadBox.Items.Count; i++)
+            {
+                if (((ComboBoxItem)MoeOffloadBox.Items[i]).Content.ToString() == val)
+                { MoeOffloadBox.SelectedIndex = i; found = true; break; }
+            }
+            if (!found) { MoeOffloadBox.Text = val; }
+        }
+        else MoeOffloadBox.Text = "0";
     }
 
     private void UpdateSelectedModelText()
@@ -302,6 +347,12 @@ public partial class MainWindow : Window
     private void CpuCores_SelectionChanged(object sender, SelectionChangedEventArgs e) => SyncArgsFromControls();
     private void Reasoning_SelectionChanged(object sender, SelectionChangedEventArgs e) => SyncArgsFromControls();
     private void FlashAttention_SelectionChanged(object sender, SelectionChangedEventArgs e) => SyncArgsFromControls();
+    private void BatchSize_SelectionChanged(object sender, SelectionChangedEventArgs e) => SyncArgsFromControls();
+    private void BatchSize_LostFocus(object sender, RoutedEventArgs e) => SyncArgsFromControls();
+    private void UBatchSize_SelectionChanged(object sender, SelectionChangedEventArgs e) => SyncArgsFromControls();
+    private void UBatchSize_LostFocus(object sender, RoutedEventArgs e) => SyncArgsFromControls();
+    private void MoeOffload_SelectionChanged(object sender, SelectionChangedEventArgs e) => SyncArgsFromControls();
+    private void MoeOffload_LostFocus(object sender, RoutedEventArgs e) => SyncArgsFromControls();
 
     private void SyncArgsFromControls()
     {
@@ -332,6 +383,20 @@ public partial class MainWindow : Window
             {
                 args = Regex.Replace(args, @"(?:^|\s)(?:-fa|--flash-attn)\b", "").Trim();
                 args = Regex.Replace(args, @"\s+", " ").Trim();
+            }
+
+            if (int.TryParse(BatchSizeBox.Text, out var bSize) && bSize > 0)
+                args = UpdateArgInString(args, "-b", bSize.ToString());
+            
+            if (int.TryParse(UBatchSizeBox.Text, out var ubSize) && ubSize > 0)
+                args = UpdateArgInString(args, "-ub", ubSize.ToString());
+            
+            if (int.TryParse(MoeOffloadBox.Text, out var moeLayers) && moeLayers >= 0)
+            {
+                if (moeLayers == 0)
+                    args = Regex.Replace(args, @"(?:^|\s)--n-cpu-moe\s+\d+", "").Trim();
+                else
+                    args = UpdateArgInString(args, "--n-cpu-moe", moeLayers.ToString());
             }
 
             ArgsTextBox.Text = args;
@@ -536,6 +601,15 @@ public partial class MainWindow : Window
 
             "flash_attention" => ("Flash Attention (-fa)", "启用 Flash Attention 优化计算速度并降低长上下文的显存占用。\n部分模型或量化格式可能不完全兼容，如遇报错请关闭。"
                 + $"\n{recs}\n默认关闭，需要时开启"),
+
+            "batch_size" => ("批处理大小 (-b)", "控制单次推理的最大 Token 数量。\n适当调低（如 512）能有效降低显存峰值占用，避免小显存设备 OOM 崩溃。"
+                + $"\n{recs}\n6G 显存推荐 512，显存充足推荐 2048"),
+
+            "ubatch_size" => ("物理批大小 (-ub)", "内部计算推理的物理分块大小。\n建议设置为与 Batch Size 相同或更小（如 256/128），进一步减少长提示词（Prompt）处理阶段的显存压力。"
+                + $"\n{recs}\n6G 显存极低负载推荐 128~256，显存充足推荐 512"),
+
+            "n_cpu_moe" => ("MoE CPU 卸载 (--n-cpu-moe)", "专用于 MoE (混合专家) 模型的优化。\n将多少层不常激活的专家权重强制留在内存/CPU，而把 Attention 等公共核心层保留在 GPU。\n- 0: 混合自动分配\n- 数字: 强制保留在内存的专家层数"
+                + $"\n{recs}\n若运行 MoE 模型导致显存溢出卡顿，可尝试设置为 10~30"),
 
             _ => ("参数说明", "暂无详细说明")
         };

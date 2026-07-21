@@ -87,11 +87,14 @@
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
 
                     <!-- Context Length -->
-                    <Grid Grid.Row="0" Margin="0,0,0,6">
+                    <Grid Grid.Row="0" Grid.Column="0" Margin="0,0,6,6">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="110"/>
                             <ColumnDefinition Width="*"/>
@@ -106,7 +109,7 @@
                     </Grid>
 
                     <!-- Context Quantization -->
-                    <Grid Grid.Row="1" Margin="0,0,0,6">
+                    <Grid Grid.Row="0" Grid.Column="1" Margin="6,0,0,6">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="110"/>
                             <ColumnDefinition Width="*"/>
@@ -126,7 +129,7 @@
                     </Grid>
 
                     <!-- Offload Layers -->
-                    <Grid Grid.Row="2" Margin="0,0,0,6">
+                    <Grid Grid.Row="1" Grid.Column="0" Margin="0,0,6,6">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="110"/>
                             <ColumnDefinition Width="*"/>
@@ -146,7 +149,7 @@
                     </Grid>
 
                     <!-- CPU Cores -->
-                    <Grid Grid.Row="3" Margin="0,0,0,6">
+                    <Grid Grid.Row="1" Grid.Column="1" Margin="6,0,0,6">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="110"/>
                             <ColumnDefinition Width="*"/>
@@ -161,7 +164,7 @@
                     </Grid>
 
                     <!-- Reasoning -->
-                    <Grid Grid.Row="4" Margin="0,0,0,6">
+                    <Grid Grid.Row="2" Grid.Column="0" Margin="0,0,6,6">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="110"/>
                             <ColumnDefinition Width="*"/>
@@ -179,7 +182,7 @@
                     </Grid>
 
                     <!-- Flash Attention -->
-                    <Grid Grid.Row="5" Margin="0,0,0,0">
+                    <Grid Grid.Row="2" Grid.Column="1" Margin="6,0,0,6">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="110"/>
                             <ColumnDefinition Width="*"/>
@@ -194,6 +197,64 @@
                         <Button Grid.Column="2" Content="?" FontSize="11" Width="24" Height="22"
                                 Padding="0" Margin="4,0,0,0" Click="InfoButton_Click"
                                 Tag="flash_attention"/>
+                    </Grid>
+
+                    <!-- Batch Size -->
+                    <Grid Grid.Row="3" Grid.Column="0" Margin="0,0,6,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="110"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="30"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="批处理大小 (-b)" FontSize="12" VerticalAlignment="Center"/>
+                        <ComboBox x:Name="BatchSizeBox" Grid.Column="1" FontSize="12" Height="26"
+                                  IsEditable="True" Text="2048" SelectionChanged="BatchSize_SelectionChanged"
+                                  LostFocus="BatchSize_LostFocus">
+                            <ComboBoxItem Content="2048"/>
+                            <ComboBoxItem Content="1024"/>
+                            <ComboBoxItem Content="512"/>
+                        </ComboBox>
+                        <Button Grid.Column="2" Content="?" FontSize="11" Width="24" Height="22"
+                                Padding="0" Margin="4,0,0,0" Click="InfoButton_Click" Tag="batch_size"/>
+                    </Grid>
+
+                    <!-- UBatch Size -->
+                    <Grid Grid.Row="3" Grid.Column="1" Margin="6,0,0,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="110"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="30"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="物理批大小 (-ub)" FontSize="12" VerticalAlignment="Center"/>
+                        <ComboBox x:Name="UBatchSizeBox" Grid.Column="1" FontSize="12" Height="26"
+                                  IsEditable="True" Text="512" SelectionChanged="UBatchSize_SelectionChanged"
+                                  LostFocus="UBatchSize_LostFocus">
+                            <ComboBoxItem Content="512"/>
+                            <ComboBoxItem Content="256"/>
+                            <ComboBoxItem Content="128"/>
+                        </ComboBox>
+                        <Button Grid.Column="2" Content="?" FontSize="11" Width="24" Height="22"
+                                Padding="0" Margin="4,0,0,0" Click="InfoButton_Click" Tag="ubatch_size"/>
+                    </Grid>
+
+                    <!-- MoE CPU Offload -->
+                    <Grid Grid.Row="4" Grid.Column="0" Margin="0,0,6,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="110"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="30"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="MoE卸载 (--n-cpu-moe)" FontSize="11" VerticalAlignment="Center" ToolTip="专为MoE模型使用的CPU卸载层数"/>
+                        <ComboBox x:Name="MoeOffloadBox" Grid.Column="1" FontSize="12" Height="26"
+                                  IsEditable="True" Text="0" SelectionChanged="MoeOffload_SelectionChanged"
+                                  LostFocus="MoeOffload_LostFocus">
+                            <ComboBoxItem Content="0"/>
+                            <ComboBoxItem Content="10"/>
+                            <ComboBoxItem Content="20"/>
+                            <ComboBoxItem Content="30"/>
+                        </ComboBox>
+                        <Button Grid.Column="2" Content="?" FontSize="11" Width="24" Height="22"
+                                Padding="0" Margin="4,0,0,0" Click="InfoButton_Click" Tag="n_cpu_moe"/>
                     </Grid>
                 </Grid>
             </TabItem>
