@@ -1,0 +1,32 @@
+# Build results
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Rr]eleases/
+x64/
+x86/
+[Ww][Ii][Nn]32/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Bb]in/
+[Oo]bj/
+[Oo]ut/
+[Ll]og/
+[Ll]ogs/
+publish/
+
+# VS/IDE files
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Logs and runtime configs
+*.log
+*.txt
+llama-manager.config.json
+
+# Exclude large binaries if any (llama-server.exe is probably downloaded, but if they want to track it, I will leave it, but typically it shouldn't be tracked)
+# llama-server.exe
