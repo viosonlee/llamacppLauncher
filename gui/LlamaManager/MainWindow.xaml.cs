@@ -268,7 +268,7 @@ public partial class MainWindow : Window
             ReasoningBox.SelectedIndex = 0;
 
         // Flash Attention: -fa / --flash-attn
-        m = Regex.Match(args, @"(?:^|\s)(?:-fa|--flash-attn)\b");
+        m = Regex.Match(args, @"(?:^|\s)(?:-fa|--flash-attn)(?:\s+(on|1))?");
         FlashAttentionBox.SelectedIndex = m.Success ? 1 : 0;
 
         // Batch Size: -b N
@@ -377,11 +377,13 @@ public partial class MainWindow : Window
             if (FlashAttentionBox.SelectedIndex == 1)
             {
                 if (!Regex.IsMatch(args, @"(?:^|\s)(?:-fa|--flash-attn)\b"))
-                    args = (args.TrimEnd() + " -fa").TrimStart();
+                    args = (args.TrimEnd() + " -fa on").TrimStart();
+                else if (Regex.IsMatch(args, @"(?:^|\s)(?:-fa|--flash-attn)\s*$"))
+                    args = args + " on"; // Fix missing value
             }
             else
             {
-                args = Regex.Replace(args, @"(?:^|\s)(?:-fa|--flash-attn)\b", "").Trim();
+                args = Regex.Replace(args, @"(?:^|\s)(?:-fa|--flash-attn)(?:\s+(?:on|off|auto|1|0))?\b", "").Trim();
                 args = Regex.Replace(args, @"\s+", " ").Trim();
             }
 

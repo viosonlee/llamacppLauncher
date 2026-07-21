@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Management;
 using System.Net.Http;
 using System.Text.RegularExpressions;
@@ -9,6 +10,7 @@ namespace LlamaManager.Services;
 public static class ServerService
 {
     private static Process? _managedProcess;
+    private static readonly object _logLock = new object();
 
     public static bool IsRunning(Models.ManagerConfig config)
     {
@@ -152,6 +154,26 @@ public static class ServerService
         _managedProcess = Process.Start(psi);
         if (_managedProcess == null)
             throw new InvalidOperationException("无法启动 llama-server 进程。");
+
+        var stderrPath = ConfigService.GetStderrPath();
+        try { File.WriteAllText(stderrPath, ""); } catch { } // Clear old log
+
+        _managedProcess.ErrorDataReceived += (s, e) => {
+            if (e.Data != null) {
+                lock (_logLock) {
+                    try { File.AppendAllText(stderrPath, e.Data + Environment.NewLine); } catch { }
+                }
+            }
+        };
+        _managedProcess.OutputDataReceived += (s, e) => {
+            if (e.Data != null) {
+                lock (_logLock) {
+                    try { File.AppendAllText(stderrPath, e.Data + Environment.NewLine); } catch { }
+                }
+            }
+        };
+        _managedProcess.BeginErrorReadLine();
+        _managedProcess.BeginOutputReadLine();
 
         config.LastPid = _managedProcess.Id;
         config.LastStartedAt = DateTime.Now.ToString("o");
