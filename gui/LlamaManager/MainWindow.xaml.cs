@@ -266,6 +266,10 @@ public partial class MainWindow : Window
             ReasoningBox.SelectedIndex = 1;
         else
             ReasoningBox.SelectedIndex = 0;
+
+        // Flash Attention: -fa / --flash-attn
+        m = Regex.Match(args, @"(?:^|\s)(?:-fa|--flash-attn)\b");
+        FlashAttentionBox.SelectedIndex = m.Success ? 1 : 0;
     }
 
     private void UpdateSelectedModelText()
@@ -297,6 +301,7 @@ public partial class MainWindow : Window
     private void OffloadLayers_LostFocus(object sender, RoutedEventArgs e) => SyncArgsFromControls();
     private void CpuCores_SelectionChanged(object sender, SelectionChangedEventArgs e) => SyncArgsFromControls();
     private void Reasoning_SelectionChanged(object sender, SelectionChangedEventArgs e) => SyncArgsFromControls();
+    private void FlashAttention_SelectionChanged(object sender, SelectionChangedEventArgs e) => SyncArgsFromControls();
 
     private void SyncArgsFromControls()
     {
@@ -317,6 +322,17 @@ public partial class MainWindow : Window
                 args = UpdateArgInString(args, "-tb", cores);
             }
             args = UpdateArgInString(args, "--reasoning", ReasoningBox.SelectedIndex == 1 ? "on" : "off");
+
+            if (FlashAttentionBox.SelectedIndex == 1)
+            {
+                if (!Regex.IsMatch(args, @"(?:^|\s)(?:-fa|--flash-attn)\b"))
+                    args = (args.TrimEnd() + " -fa").TrimStart();
+            }
+            else
+            {
+                args = Regex.Replace(args, @"(?:^|\s)(?:-fa|--flash-attn)\b", "").Trim();
+                args = Regex.Replace(args, @"\s+", " ").Trim();
+            }
 
             ArgsTextBox.Text = args;
         }
@@ -517,6 +533,9 @@ public partial class MainWindow : Window
 
             "reasoning" => ("思考模式 (--reasoning)", "控制是否启用模型的思维链（Chain-of-Thought）能力。\n- 关闭: 直接回答，速度更快\n- 开启: 先生成思考过程再回答，质量更高但更慢"
                 + $"\n{recs}\n默认关闭，非推理模型开启无效"),
+
+            "flash_attention" => ("Flash Attention (-fa)", "启用 Flash Attention 优化计算速度并降低长上下文的显存占用。\n部分模型或量化格式可能不完全兼容，如遇报错请关闭。"
+                + $"\n{recs}\n默认关闭，需要时开启"),
 
             _ => ("参数说明", "暂无详细说明")
         };

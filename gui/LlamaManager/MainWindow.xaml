@@ -87,6 +87,7 @@
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
 
                     <!-- Context Length -->
@@ -160,7 +161,7 @@
                     </Grid>
 
                     <!-- Reasoning -->
-                    <Grid Grid.Row="4" Margin="0,0,0,0">
+                    <Grid Grid.Row="4" Margin="0,0,0,6">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="110"/>
                             <ColumnDefinition Width="*"/>
@@ -175,6 +176,24 @@
                         <Button Grid.Column="2" Content="?" FontSize="11" Width="24" Height="22"
                                 Padding="0" Margin="4,0,0,0" Click="InfoButton_Click"
                                 Tag="reasoning"/>
+                    </Grid>
+
+                    <!-- Flash Attention -->
+                    <Grid Grid.Row="5" Margin="0,0,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="110"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="30"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Flash Attention" FontSize="12" VerticalAlignment="Center"/>
+                        <ComboBox x:Name="FlashAttentionBox" Grid.Column="1" FontSize="12" Height="26"
+                                  SelectedIndex="0" SelectionChanged="FlashAttention_SelectionChanged">
+                            <ComboBoxItem Content="关闭 (默认)"/>
+                            <ComboBoxItem Content="开启 (-fa)"/>
+                        </ComboBox>
+                        <Button Grid.Column="2" Content="?" FontSize="11" Width="24" Height="22"
+                                Padding="0" Margin="4,0,0,0" Click="InfoButton_Click"
+                                Tag="flash_attention"/>
                     </Grid>
                 </Grid>
             </TabItem>
