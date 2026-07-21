@@ -8,6 +8,12 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>LlamaManager</AssemblyName>
     <RootNamespace>LlamaManager</RootNamespace>
+
+    <!-- Publish as self-contained single file to avoid requiring users to install .NET 10 -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>
 
   <ItemGroup>
