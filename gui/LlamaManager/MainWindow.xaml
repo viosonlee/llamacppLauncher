@@ -183,18 +183,30 @@
             <TabItem Header="高级选项">
                 <Grid Margin="12,8">
                     <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
 
-                    <TextBox x:Name="ArgsTextBox" Grid.Row="0"
+                    <Grid Grid.Row="0" Margin="0,0,0,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="模型文件夹:" Margin="0,0,8,0" VerticalAlignment="Center" FontSize="12"/>
+                        <TextBox x:Name="ModelsDirTextBox" Grid.Column="1" FontSize="11" IsReadOnly="True" Background="{StaticResource SurfaceBrush}" VerticalContentAlignment="Center"/>
+                        <Button Grid.Column="2" Content="更改..." Click="ModelsDirButton_Click" Margin="6,0,0,0" Padding="12,4" FontSize="11"/>
+                    </Grid>
+
+                    <TextBox x:Name="ArgsTextBox" Grid.Row="1"
                              AcceptsReturn="True" TextWrapping="Wrap"
                              VerticalScrollBarVisibility="Auto" Height="100"
                              FontFamily="Consolas" FontSize="11"
                              VerticalContentAlignment="Top"
                              TextChanged="ArgsTextBox_TextChanged"/>
 
-                    <Grid Grid.Row="1" Margin="0,6,0,0">
+                    <Grid Grid.Row="2" Margin="0,6,0,0">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>

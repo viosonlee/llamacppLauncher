@@ -7,6 +7,9 @@ public class ManagerConfig
     [JsonPropertyName("ModelPath")]
     public string ModelPath { get; set; } = string.Empty;
 
+    [JsonPropertyName("ModelsDirectory")]
+    public string ModelsDirectory { get; set; } = string.Empty;
+
     [JsonPropertyName("Args")]
     public string Args { get; set; } = string.Empty;
 

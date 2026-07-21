@@ -75,7 +75,7 @@ public partial class MainWindow : Window
 
     private void RefreshModels()
     {
-        var modelsDir = Path.Combine(ConfigService.GetRoot(), "models");
+        var modelsDir = string.IsNullOrEmpty(_config.ModelsDirectory) ? Path.Combine(ConfigService.GetRoot(), "models") : _config.ModelsDirectory;
         _models.Clear();
 
         if (Directory.Exists(modelsDir))
@@ -183,10 +183,33 @@ public partial class MainWindow : Window
         {
             ArgsTextBox.Text = _config.Args;
             PortTextBox.Text = _config.Port.ToString();
+            ModelsDirTextBox.Text = string.IsNullOrEmpty(_config.ModelsDirectory) 
+                ? Path.Combine(ConfigService.GetRoot(), "models") 
+                : _config.ModelsDirectory;
             ParseArgsToControls();
             UpdateSelectedModelText();
         }
         finally { _updatingControls = false; }
+    }
+
+    private void ModelsDirButton_Click(object sender, RoutedEventArgs e)
+    {
+        var initialDir = string.IsNullOrEmpty(_config.ModelsDirectory) ? Path.Combine(ConfigService.GetRoot(), "models") : _config.ModelsDirectory;
+        if (!Directory.Exists(initialDir)) initialDir = ConfigService.GetRoot();
+
+        var dialog = new Microsoft.Win32.OpenFolderDialog
+        {
+            Title = "选择模型默认文件夹",
+            InitialDirectory = initialDir
+        };
+
+        if (dialog.ShowDialog() == true)
+        {
+            _config.ModelsDirectory = dialog.FolderName;
+            ModelsDirTextBox.Text = dialog.FolderName;
+            ConfigService.SaveConfig(_config);
+            RefreshModels();
+        }
     }
 
     private void ParseArgsToControls()
@@ -377,7 +400,7 @@ public partial class MainWindow : Window
 
     private void BrowseButton_Click(object sender, RoutedEventArgs e)
     {
-        var initialDir = Path.Combine(ConfigService.GetRoot(), "models");
+        var initialDir = string.IsNullOrEmpty(_config.ModelsDirectory) ? Path.Combine(ConfigService.GetRoot(), "models") : _config.ModelsDirectory;
         if (!Directory.Exists(initialDir)) initialDir = ConfigService.GetRoot();
 
         var dialog = new Microsoft.Win32.OpenFileDialog
