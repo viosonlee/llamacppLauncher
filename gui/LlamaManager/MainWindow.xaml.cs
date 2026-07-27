@@ -497,7 +497,6 @@ public partial class MainWindow : Window
 
         try
         {
-            var previousPort = ServerService.ParsePortFromArgs(_config.Args, _config.Port);
             _config.ModelPath = model.FullName;
 
             // Restore saved preset if exists
@@ -512,13 +511,14 @@ public partial class MainWindow : Window
             {
                 _config.Args = PresetService.GeneratePresetArgs(model.FullName, _config.Port);
                 _config.Port = ServerService.ParsePortFromArgs(_config.Args, _config.Port);
-                LogService.Write($"已选择模型 {model.FileName}（自动生成预设参数）。");
+                ConfigService.SaveModelPreset(_config, model.FullName, _config.Args, _config.Port);
+                LogService.Write($"已选择模型 {model.FileName}（自动生成预设并保存）。");
             }
 
             SaveCurrentConfig();
             ApplyConfig();
             RefreshLog();
-            TryRestartServer(previousPort);
+            AutoRestartServer();
         }
         catch (Exception ex)
         {
@@ -542,7 +542,6 @@ public partial class MainWindow : Window
         {
             try
             {
-                var previousPort = ServerService.ParsePortFromArgs(_config.Args, _config.Port);
                 var newPath = Path.GetFullPath(dialog.FileName);
                 _config.ModelPath = newPath;
 
@@ -557,7 +556,8 @@ public partial class MainWindow : Window
                 {
                     _config.Args = PresetService.GeneratePresetArgs(newPath, _config.Port);
                     _config.Port = ServerService.ParsePortFromArgs(_config.Args, _config.Port);
-                    LogService.Write($"已选择自定义模型（自动生成预设参数）。");
+                    ConfigService.SaveModelPreset(_config, newPath, _config.Args, _config.Port);
+                    LogService.Write($"已选择自定义模型（自动生成预设并保存）。");
                 }
 
                 SaveCurrentConfig();
@@ -576,7 +576,7 @@ public partial class MainWindow : Window
                     ModelListBox.Items.Refresh();
                     ModelListBox.SelectedItem = _models.Last();
                 }
-                TryRestartServer(previousPort);
+                AutoRestartServer();
             }
             catch (Exception ex)
             {
@@ -705,6 +705,14 @@ public partial class MainWindow : Window
     private async void StartButton_Click(object sender, RoutedEventArgs e)
     {
         SaveCurrentConfig();
+
+        var already = ServerService.GetActiveProcess(_config);
+        if (already != null)
+        {
+            ServerService.Stop(_config, msg => LogService.Write(msg));
+            LogService.Write("已停止旧服务，即将启动新实例…");
+        }
+
         SetButtonsEnabled(false);
 
         try
@@ -794,32 +802,26 @@ public partial class MainWindow : Window
         // OpenButton 始终保持可点击，方便用户在启动期间随时尝试打开浏览器
     }
 
-    private void TryRestartServer(int previousPort)
+    private void AutoRestartServer()
     {
         var running = ServerService.GetActiveProcess(_config);
         if (running == null) return;
 
-        var result = MessageBox.Show("检测到服务正在运行，是否重启以应用新模型？",
-            "重启服务", MessageBoxButton.YesNo, MessageBoxImage.Question);
+        LogService.Write("检测到服务正在运行，自动停止并重启以应用新配置…");
+        ServerService.Stop(_config, msg => LogService.Write(msg));
 
-        if (result == MessageBoxResult.Yes)
+        try
         {
-            ServerService.Stop(_config, msg => LogService.Write(msg));
-
-            try
-            {
-                ServerService.StartAsync(_config, openBrowser: true,
-                    msg => Dispatcher.BeginInvoke(() => { LogService.Write(msg); RefreshLog(); })).Wait();
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show(ex.Message, "重启失败", MessageBoxButton.OK, MessageBoxImage.Error);
-                LogService.Write($"重启失败：{ex.Message}");
-            }
-
+            ServerService.StartAsync(_config, openBrowser: true,
+                msg => Dispatcher.BeginInvoke(() => { LogService.Write(msg); RefreshLog(); })).Wait();
             LogService.Write("模型切换已生效，服务已重启。");
-            RefreshStatus();
-            RefreshLog();
         }
+        catch (Exception ex)
+        {
+            LogService.Write($"重启失败：{ex.Message}");
+        }
+
+        RefreshStatus();
+        RefreshLog();
     }
 }
