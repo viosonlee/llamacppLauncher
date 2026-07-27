@@ -30,11 +30,11 @@ public static class PresetService
     {
         var cuda = CudaService.Detect();
         var gpuArgs = cuda.Available
-            ? "-ngl all --fit on --fit-target 512"
+            ? "-ngl auto --fit on --fit-target 256"
             : "-ngl 0";
 
         var freeRAM = GetFreePhysicalMemory();
-        var useNoMmap = freeRAM - size > 2L * 1024 * 1024 * 1024;
+        var useNoMmap = freeRAM - size > 2L * 1024 * 1024 * 1024 && size <= 4L * 1024 * 1024 * 1024;
 
         var parts = new List<string>
         {
@@ -49,7 +49,6 @@ public static class PresetService
             gpuArgs,
             "--cache-prompt",
             "--flash-attn on",
-            "--cpu-moe",
             "--reasoning off"
         };
 

@@ -174,7 +174,7 @@ function Get-MoEPresetArgs {
     }
 
     $gpuArgs = if ((Get-CudaInfo).Available) {
-        '-ngl all --fit on --fit-target 512'
+        '-ngl auto --fit on --fit-target 256'
     } else {
         '-ngl 0'
     }
@@ -191,12 +191,11 @@ function Get-MoEPresetArgs {
         $gpuArgs,
         '--cache-prompt',
         '--flash-attn on',
-        '--cpu-moe',
         '--reasoning off'
     )
 
     $freeRAM = (Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory * 1KB
-    if ($freeRAM - $size -gt 2GB) {
+    if ($freeRAM - $size -gt 2GB -and $size -le 4GB) {
         $parts += '--no-mmap'
         $parts += '--mlock'
     }

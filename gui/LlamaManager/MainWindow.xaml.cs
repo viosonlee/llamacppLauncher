@@ -315,6 +315,9 @@ public partial class MainWindow : Window
             if (!found) { MoeOffloadBox.Text = val; }
         }
         else MoeOffloadBox.Text = "0";
+
+        // CPU MoE toggle: --cpu-moe
+        CpuMoeCheckbox.IsChecked = Regex.IsMatch(args, @"(?:^|\s)--cpu-moe\b");
     }
 
     private void UpdateSelectedModelText()
@@ -353,6 +356,7 @@ public partial class MainWindow : Window
     private void UBatchSize_LostFocus(object sender, RoutedEventArgs e) => SyncArgsFromControls();
     private void MoeOffload_SelectionChanged(object sender, SelectionChangedEventArgs e) => SyncArgsFromControls();
     private void MoeOffload_LostFocus(object sender, RoutedEventArgs e) => SyncArgsFromControls();
+    private void CpuMoeCheckbox_Changed(object sender, RoutedEventArgs e) => SyncArgsFromControls();
 
     private void SyncArgsFromControls()
     {
@@ -400,6 +404,17 @@ public partial class MainWindow : Window
                     args = Regex.Replace(args, @"(?:^|\s)--n-cpu-moe\s+\d+", "").Trim();
                 else
                     args = UpdateArgInString(args, "--n-cpu-moe", moeLayers.ToString());
+            }
+
+            if (CpuMoeCheckbox.IsChecked == true)
+            {
+                if (!Regex.IsMatch(args, @"(?:^|\s)--cpu-moe\b"))
+                    args = (args.TrimEnd() + " --cpu-moe").TrimStart();
+            }
+            else
+            {
+                args = Regex.Replace(args, @"(?:^|\s)--cpu-moe\b", "").Trim();
+                args = Regex.Replace(args, @"\s+", " ").Trim();
             }
 
             ArgsTextBox.Text = args;

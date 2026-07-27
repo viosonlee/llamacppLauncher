@@ -87,6 +87,7 @@
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
@@ -255,6 +256,18 @@
                         </ComboBox>
                         <Button Grid.Column="2" Content="?" FontSize="11" Width="24" Height="22"
                                 Padding="0" Margin="4,0,0,0" Click="InfoButton_Click" Tag="n_cpu_moe"/>
+                    </Grid>
+
+                    <!-- CPU MoE Toggle -->
+                    <Grid Grid.Row="5" Grid.Column="0" Grid.ColumnSpan="2" Margin="0,4,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="110"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <CheckBox x:Name="CpuMoeCheckbox" Grid.Column="0" Content="CPU MoE (--cpu-moe)"
+                                  FontSize="11" VerticalAlignment="Center"
+                                  ToolTip="强制MoE混合专家模型在CPU上计算专家层（而非GPU）"
+                                  Checked="CpuMoeCheckbox_Changed" Unchecked="CpuMoeCheckbox_Changed"/>
                     </Grid>
                 </Grid>
             </TabItem>
