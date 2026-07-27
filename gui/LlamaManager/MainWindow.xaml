@@ -43,6 +43,7 @@
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
@@ -57,12 +58,19 @@
                                 <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
                                         <ColumnDefinition Width="*"/>
                                     </Grid.ColumnDefinitions>
                                     <TextBlock Grid.Column="0" Text="{Binding SizeFormatted}" Width="70"
                                                Foreground="{StaticResource TextSecondaryBrush}" FontSize="11"/>
-                                    <TextBlock Grid.Column="1" Text="{Binding FileName}" TextTrimming="CharacterEllipsis"
-                                               FontSize="12" Margin="8,0,0,0"/>
+                                    <Border Grid.Column="1" CornerRadius="3" Padding="4,1" Margin="0,0,6,0"
+                                            BorderBrush="{StaticResource TextSecondaryBrush}" BorderThickness="1"
+                                            ToolTip="{Binding Category}">
+                                        <TextBlock Text="{Binding ModelTypeDisplay}" FontSize="10"
+                                                   Foreground="{StaticResource TextSecondaryBrush}"/>
+                                    </Border>
+                                    <TextBlock Grid.Column="2" Text="{Binding FileName}" TextTrimming="CharacterEllipsis"
+                                               FontSize="12" Margin="0,0,0,0"/>
                                 </Grid>
                             </DataTemplate>
                         </ListBox.ItemTemplate>
@@ -75,6 +83,9 @@
                     <TextBlock Grid.Row="1" Grid.ColumnSpan="2" x:Name="SelectedModelText"
                                Text="未选择模型" FontSize="11" Foreground="{StaticResource TextSecondaryBrush}"
                                Margin="0,5,0,0" TextTrimming="CharacterEllipsis"/>
+                    <TextBlock Grid.Row="2" Grid.ColumnSpan="2" x:Name="ModelInfoText"
+                               FontSize="10" Foreground="{StaticResource TextSecondaryBrush}"
+                               Margin="0,2,0,0" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
                 </Grid>
             </TabItem>
 
@@ -238,37 +249,53 @@
                                 Padding="0" Margin="4,0,0,0" Click="InfoButton_Click" Tag="ubatch_size"/>
                     </Grid>
 
-                    <!-- MoE CPU Offload -->
-                    <Grid Grid.Row="4" Grid.Column="0" Margin="0,0,6,0">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="110"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="30"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="MoE卸载 (--n-cpu-moe)" FontSize="11" VerticalAlignment="Center" ToolTip="专为MoE模型使用的CPU卸载层数"/>
-                        <ComboBox x:Name="MoeOffloadBox" Grid.Column="1" FontSize="12" Height="26"
-                                  IsEditable="True" Text="0" SelectionChanged="MoeOffload_SelectionChanged"
-                                  LostFocus="MoeOffload_LostFocus">
-                            <ComboBoxItem Content="0"/>
-                            <ComboBoxItem Content="10"/>
-                            <ComboBoxItem Content="20"/>
-                            <ComboBoxItem Content="30"/>
-                        </ComboBox>
-                        <Button Grid.Column="2" Content="?" FontSize="11" Width="24" Height="22"
-                                Padding="0" Margin="4,0,0,0" Click="InfoButton_Click" Tag="n_cpu_moe"/>
-                    </Grid>
+                    <!-- MoE Section (auto-hide for dense models) -->
+                    <Border x:Name="MoeSection" Grid.Row="4" Grid.ColumnSpan="2" BorderThickness="1,0,0,0"
+                            BorderBrush="{StaticResource TextSecondaryBrush}" Padding="8,6,0,4" Margin="0,4,0,0"
+                            ToolTip="以下设置仅对MoE（混合专家）模型生效">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
 
-                    <!-- CPU MoE Toggle -->
-                    <Grid Grid.Row="5" Grid.Column="0" Grid.ColumnSpan="2" Margin="0,4,0,0">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="110"/>
-                            <ColumnDefinition Width="*"/>
-                        </Grid.ColumnDefinitions>
-                        <CheckBox x:Name="CpuMoeCheckbox" Grid.Column="0" Content="CPU MoE (--cpu-moe)"
-                                  FontSize="11" VerticalAlignment="Center"
-                                  ToolTip="强制MoE混合专家模型在CPU上计算专家层（而非GPU）"
-                                  Checked="CpuMoeCheckbox_Changed" Unchecked="CpuMoeCheckbox_Changed"/>
-                    </Grid>
+                            <!-- MoE CPU Offload -->
+                            <Grid Grid.Row="0" Grid.Column="0" Margin="0,0,6,6">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="110"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="30"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="MoE卸载 (--n-cpu-moe)" FontSize="11" VerticalAlignment="Center"/>
+                                <ComboBox x:Name="MoeOffloadBox" Grid.Column="1" FontSize="12" Height="26"
+                                          IsEditable="True" Text="0" SelectionChanged="MoeOffload_SelectionChanged"
+                                          LostFocus="MoeOffload_LostFocus">
+                                    <ComboBoxItem Content="0"/>
+                                    <ComboBoxItem Content="10"/>
+                                    <ComboBoxItem Content="20"/>
+                                    <ComboBoxItem Content="30"/>
+                                </ComboBox>
+                                <Button Grid.Column="2" Content="?" FontSize="11" Width="24" Height="22"
+                                        Padding="0" Margin="4,0,0,0" Click="InfoButton_Click" Tag="n_cpu_moe"/>
+                            </Grid>
+
+                            <!-- CPU MoE Toggle -->
+                            <Grid Grid.Row="0" Grid.Column="1" Margin="6,0,0,6">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="110"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <CheckBox x:Name="CpuMoeCheckbox" Grid.Column="0" Content="CPU MoE (--cpu-moe)"
+                                          FontSize="11" VerticalAlignment="Center"
+                                          ToolTip="强制MoE混合专家模型在CPU上计算专家层（而非GPU）"
+                                          Checked="CpuMoeCheckbox_Changed" Unchecked="CpuMoeCheckbox_Changed"/>
+                            </Grid>
+                        </Grid>
+                    </Border>
                 </Grid>
             </TabItem>
 

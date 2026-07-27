@@ -158,7 +158,7 @@ function Test-MoEModel {
     param([Parameter(Mandatory)][string]$Path)
 
     $filename = [System.IO.Path]::GetFileNameWithoutExtension($Path)
-    return $filename -match '(?i)(A3B|moe|mixture\.of\.experts)'
+    return $filename -match '(?i)(A3B|A4B|moe|mixture\.of\.experts)'
 }
 
 function Get-MoEPresetArgs {
@@ -252,7 +252,7 @@ function Get-PresetArgs {
 
     $cuda = Get-CudaInfo
     if ($cuda.Available) {
-        if ($size -le 3.5GB) {
+        if ($size -le 5GB) {
             $gpu = '-ngl all --fit on --fit-target 1024'
         } else {
             $gpu = '-ngl auto --fit on --fit-target 1024'

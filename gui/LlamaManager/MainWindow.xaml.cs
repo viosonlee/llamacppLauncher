@@ -325,6 +325,8 @@ public partial class MainWindow : Window
         if (string.IsNullOrEmpty(_config.ModelPath))
         {
             SelectedModelText.Text = "未选择模型";
+            ModelInfoText.Text = "";
+            MoeSection.Visibility = Visibility.Collapsed;
             return;
         }
 
@@ -333,14 +335,40 @@ public partial class MainWindow : Window
             var fileName = Path.GetFileName(_config.ModelPath);
             if (File.Exists(_config.ModelPath))
             {
-                var size = new FileInfo(_config.ModelPath).Length;
-                var sizeStr = size >= 1L << 30 ? $"{size / (double)(1L << 30):N2} GB" : $"{size / (double)(1L << 20):N1} MB";
+                var fi = new FileInfo(_config.ModelPath);
+                var sizeStr = fi.Length >= 1L << 30 ? $"{fi.Length / (double)(1L << 30):N2} GB" : $"{fi.Length / (double)(1L << 20):N1} MB";
                 SelectedModelText.Text = $"{fileName}  ({sizeStr})";
+
+                var info = new ModelInfo
+                {
+                    FullName = _config.ModelPath,
+                    FileName = fileName,
+                    SizeBytes = fi.Length
+                };
+                var category = info.Category;
+                var type = info.ModelTypeDisplay;
+                var ctx = info.RecommendedContext;
+                var batch = info.RecommendedBatch;
+                var offload = info.CanFullOffload ? "all" : "auto";
+
+                MoeSection.Visibility = info.IsMoE ? Visibility.Visible : Visibility.Collapsed;
+
+                var extra = info.IsMoE ? "  ·  Flash Attn" : "";
+                ModelInfoText.Text = $"{type}  ·  {category}  ·  -c {ctx}  ·  -b {batch}  ·  -ngl {offload}{extra}";
             }
             else
+            {
                 SelectedModelText.Text = $"{fileName}  (文件不存在)";
+                ModelInfoText.Text = "";
+                MoeSection.Visibility = Visibility.Collapsed;
+            }
         }
-        catch { SelectedModelText.Text = _config.ModelPath; }
+        catch
+        {
+            SelectedModelText.Text = _config.ModelPath;
+            ModelInfoText.Text = "";
+            MoeSection.Visibility = Visibility.Collapsed;
+        }
     }
 
     private void ContextLength_TextChanged(object sender, TextChangedEventArgs e) => SyncArgsFromControls();

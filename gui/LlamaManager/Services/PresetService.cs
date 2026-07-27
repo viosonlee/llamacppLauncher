@@ -17,6 +17,7 @@ public static class PresetService
 
         var filename = Path.GetFileNameWithoutExtension(modelPath);
         var isMoE = filename.Contains("A3B", StringComparison.OrdinalIgnoreCase) ||
+                    filename.Contains("A4B", StringComparison.OrdinalIgnoreCase) ||
                     filename.Contains("moe", StringComparison.OrdinalIgnoreCase) ||
                     filename.Contains("mixture.of.experts", StringComparison.OrdinalIgnoreCase);
 
@@ -93,7 +94,7 @@ public static class PresetService
 
         var cuda = CudaService.Detect();
         var gpu = cuda.Available
-            ? (size <= gb3_5
+            ? (size <= gb5
                 ? "-ngl all --fit on --fit-target 1024"
                 : "-ngl auto --fit on --fit-target 1024")
             : "-ngl 0";
