@@ -17,7 +17,7 @@ public partial class MainWindow : Window
     private List<ModelInfo> _models = [];
     private bool _loaded;
     private bool _parsingArgs;
-    private bool _updatingControls;
+    private int _updateCount;
 
     public MainWindow()
     {
@@ -178,7 +178,7 @@ public partial class MainWindow : Window
 
     private void ApplyConfig()
     {
-        _updatingControls = true;
+        _updateCount++;
         try
         {
             ArgsTextBox.Text = _config.Args;
@@ -189,7 +189,7 @@ public partial class MainWindow : Window
             ParseArgsToControls();
             UpdateSelectedModelText();
         }
-        finally { _updatingControls = false; }
+        finally { _updateCount--; }
     }
 
     private void ModelsDirButton_Click(object sender, RoutedEventArgs e)
@@ -227,7 +227,7 @@ public partial class MainWindow : Window
             var val = m.Groups[1].Value;
             for (int i = 0; i < ContextQuantBox.Items.Count; i++)
             {
-                if (((ComboBoxItem)ContextQuantBox.Items[i]).Content.ToString()!.StartsWith(val))
+                if (ContextQuantBox.Items[i] is ComboBoxItem item && item.Content?.ToString() is string content && content.StartsWith(val))
                 { ContextQuantBox.SelectedIndex = i; break; }
             }
         }
@@ -241,7 +241,7 @@ public partial class MainWindow : Window
             var found = false;
             for (int i = 0; i < OffloadLayersBox.Items.Count; i++)
             {
-                if (((ComboBoxItem)OffloadLayersBox.Items[i]).Content.ToString() == val)
+                if (OffloadLayersBox.Items[i] is ComboBoxItem item && string.Equals(item.Content?.ToString(), val, StringComparison.Ordinal))
                 { OffloadLayersBox.SelectedIndex = i; found = true; break; }
             }
             if (!found) { OffloadLayersBox.Text = val; }
@@ -279,7 +279,7 @@ public partial class MainWindow : Window
             var found = false;
             for (int i = 0; i < BatchSizeBox.Items.Count; i++)
             {
-                if (((ComboBoxItem)BatchSizeBox.Items[i]).Content.ToString() == val)
+                if (BatchSizeBox.Items[i] is ComboBoxItem item && string.Equals(item.Content?.ToString(), val, StringComparison.Ordinal))
                 { BatchSizeBox.SelectedIndex = i; found = true; break; }
             }
             if (!found) { BatchSizeBox.Text = val; }
@@ -294,7 +294,7 @@ public partial class MainWindow : Window
             var found = false;
             for (int i = 0; i < UBatchSizeBox.Items.Count; i++)
             {
-                if (((ComboBoxItem)UBatchSizeBox.Items[i]).Content.ToString() == val)
+                if (UBatchSizeBox.Items[i] is ComboBoxItem item && string.Equals(item.Content?.ToString(), val, StringComparison.Ordinal))
                 { UBatchSizeBox.SelectedIndex = i; found = true; break; }
             }
             if (!found) { UBatchSizeBox.Text = val; }
@@ -309,7 +309,7 @@ public partial class MainWindow : Window
             var found = false;
             for (int i = 0; i < MoeOffloadBox.Items.Count; i++)
             {
-                if (((ComboBoxItem)MoeOffloadBox.Items[i]).Content.ToString() == val)
+                if (MoeOffloadBox.Items[i] is ComboBoxItem item && string.Equals(item.Content?.ToString(), val, StringComparison.Ordinal))
                 { MoeOffloadBox.SelectedIndex = i; found = true; break; }
             }
             if (!found) { MoeOffloadBox.Text = val; }
@@ -356,7 +356,8 @@ public partial class MainWindow : Window
 
     private void SyncArgsFromControls()
     {
-        if (_updatingControls || !_loaded) return;
+        if (_updateCount > 0 || !_loaded) return;
+        if (ArgsTextBox == null) return;
         _parsingArgs = true;
         try
         {
@@ -431,9 +432,9 @@ public partial class MainWindow : Window
     {
         if (_parsingArgs) return;
         if (!_loaded) return;
-        _updatingControls = true;
+        _updateCount++;
         try { ParseArgsToControls(); }
-        finally { _updatingControls = false; }
+        finally { _updateCount--; }
     }
 
     private void SaveCurrentConfig()
@@ -449,6 +450,7 @@ public partial class MainWindow : Window
     private void ModelListBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (ModelListBox.SelectedItem is not ModelInfo model) return;
+        if (!_loaded) return;
 
         try
         {
