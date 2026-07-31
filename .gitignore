@@ -15,6 +15,7 @@ bld/
 [Ll]og/
 [Ll]ogs/
 publish/
+dist/
 
 # VS/IDE files
 .vs/

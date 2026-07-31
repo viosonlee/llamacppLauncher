@@ -18,6 +18,7 @@ public partial class MainWindow : Window
     private bool _loaded;
     private bool _parsingArgs;
     private int _updateCount;
+    private bool _embeddingStarting;
 
     public MainWindow()
     {
@@ -118,6 +119,7 @@ public partial class MainWindow : Window
         try
         {
             var running = ServerService.GetManagedProcess(_config);
+            running ??= ServerService.FindMainProcess(_config);
             if (running != null)
             {
                 StatusDot.Fill = new SolidColorBrush(Colors.Green);
@@ -134,6 +136,26 @@ public partial class MainWindow : Window
                 StartButton.IsEnabled = true;
                 StopButton.IsEnabled = false;
             }
+        }
+        catch { }
+
+        try
+        {
+            var emb = ServerService.GetEmbeddingProcess(_config);
+            emb ??= ServerService.FindEmbeddingProcess(_config);
+            if (emb != null)
+            {
+                EmbeddingStatusDot.Fill = new SolidColorBrush(Colors.Green);
+                EmbeddingStatusText.Text = $"嵌入服务: 运行中 (PID {emb.Id})";
+                EmbeddingToggleButton.Content = "停止";
+            }
+            else
+            {
+                EmbeddingStatusDot.Fill = new SolidColorBrush(Colors.Gray);
+                EmbeddingStatusText.Text = "嵌入服务: 未启动";
+                EmbeddingToggleButton.Content = "启动";
+            }
+            EmbeddingToggleButton.IsEnabled = !_embeddingStarting;
         }
         catch { }
 
@@ -485,12 +507,13 @@ public partial class MainWindow : Window
         if (int.TryParse(PortTextBox.Text, out var port) && port > 0)
             _config.Port = port;
         _config.Args = ArgsTextBox.Text?.Trim() ?? "";
+        _config.EmbeddingPort = 8081;
         ConfigService.SaveConfig(_config);
     }
 
     // ─── Model Selection ───
 
-    private void ModelListBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private async void ModelListBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (ModelListBox.SelectedItem is not ModelInfo model) return;
         if (!_loaded) return;
@@ -518,7 +541,7 @@ public partial class MainWindow : Window
             SaveCurrentConfig();
             ApplyConfig();
             RefreshLog();
-            AutoRestartServer();
+            await AutoRestartServerAsync();
         }
         catch (Exception ex)
         {
@@ -526,7 +549,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void BrowseButton_Click(object sender, RoutedEventArgs e)
+    private async void BrowseButton_Click(object sender, RoutedEventArgs e)
     {
         var initialDir = string.IsNullOrEmpty(_config.ModelsDirectory) ? Path.Combine(ConfigService.GetRoot(), "models") : _config.ModelsDirectory;
         if (!Directory.Exists(initialDir)) initialDir = ConfigService.GetRoot();
@@ -575,8 +598,9 @@ public partial class MainWindow : Window
                     });
                     ModelListBox.Items.Refresh();
                     ModelListBox.SelectedItem = _models.Last();
+                    return; // SelectionChanged handles restart
                 }
-                AutoRestartServer();
+                await AutoRestartServerAsync();
             }
             catch (Exception ex)
             {
@@ -706,7 +730,7 @@ public partial class MainWindow : Window
     {
         SaveCurrentConfig();
 
-        var already = ServerService.GetActiveProcess(_config);
+        var already = ServerService.GetManagedProcess(_config);
         if (already != null)
         {
             ServerService.Stop(_config, msg => LogService.Write(msg));
@@ -793,6 +817,57 @@ public partial class MainWindow : Window
         RefreshLog();
     }
 
+    private async void EmbeddingToggleButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_embeddingStarting) return;
+
+        var running = ServerService.GetEmbeddingProcess(_config);
+        running ??= ServerService.FindEmbeddingProcess(_config);
+        if (running != null)
+        {
+            ServerService.StopEmbedding(_config, msg => LogService.Write(msg));
+            RefreshStatus();
+            RefreshLog();
+            return;
+        }
+
+        if (string.IsNullOrEmpty(_config.EmbeddingModelPath))
+        {
+            var defaultPath = Path.Combine(ConfigService.GetLlamaCppRoot(), "models", "bge-m3-q8_0.gguf");
+            if (File.Exists(defaultPath))
+                _config.EmbeddingModelPath = defaultPath;
+            else
+            {
+                MessageBox.Show("请设置嵌入模型路径。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+        }
+
+        _embeddingStarting = true;
+        EmbeddingToggleButton.IsEnabled = false;
+        EmbeddingToggleButton.Content = "启动中…";
+
+        try
+        {
+            await ServerService.StartEmbeddingAsync(_config, msg => Dispatcher.BeginInvoke(() =>
+            {
+                LogService.Write(msg);
+                RefreshLog();
+            }));
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(ex.Message, "启动嵌入服务失败", MessageBoxButton.OK, MessageBoxImage.Error);
+            LogService.Write($"嵌入服务错误：{ex.Message}");
+        }
+        finally
+        {
+            _embeddingStarting = false;
+            RefreshStatus();
+            RefreshLog();
+        }
+    }
+
     private void StatusTimer_Tick(object? sender, EventArgs e) => RefreshStatus();
 
     private void SetButtonsEnabled(bool enabled)
@@ -802,9 +877,9 @@ public partial class MainWindow : Window
         // OpenButton 始终保持可点击，方便用户在启动期间随时尝试打开浏览器
     }
 
-    private void AutoRestartServer()
+    private async Task AutoRestartServerAsync()
     {
-        var running = ServerService.GetActiveProcess(_config);
+        var running = ServerService.GetManagedProcess(_config);
         if (running == null) return;
 
         LogService.Write("检测到服务正在运行，自动停止并重启以应用新配置…");
@@ -812,8 +887,8 @@ public partial class MainWindow : Window
 
         try
         {
-            ServerService.StartAsync(_config, openBrowser: true,
-                msg => Dispatcher.BeginInvoke(() => { LogService.Write(msg); RefreshLog(); })).Wait();
+            await ServerService.StartAsync(_config, openBrowser: true,
+                msg => Dispatcher.BeginInvoke(() => { LogService.Write(msg); RefreshLog(); }));
             LogService.Write("模型切换已生效，服务已重启。");
         }
         catch (Exception ex)

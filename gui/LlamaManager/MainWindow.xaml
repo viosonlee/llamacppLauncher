@@ -14,6 +14,7 @@
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
@@ -382,8 +383,28 @@
             </Grid>
         </Border>
 
+        <!-- Embedding Service -->
+        <Border Grid.Row="4" Background="{StaticResource SurfaceBrush}" CornerRadius="4"
+                Padding="12,8" Margin="0,0,0,6">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <Ellipse x:Name="EmbeddingStatusDot" Grid.Column="0" Width="10" Height="10"
+                         Fill="{StaticResource ErrorBrush}" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                <TextBlock Grid.Column="1" x:Name="EmbeddingStatusText" Text="嵌入服务: 检测中..."
+                           FontSize="11" VerticalAlignment="Center" Foreground="{StaticResource TextSecondaryBrush}"/>
+                <Button Grid.Column="3" x:Name="EmbeddingToggleButton"
+                        Content="启动" Click="EmbeddingToggleButton_Click"
+                        Padding="12,4" FontSize="11"/>
+            </Grid>
+        </Border>
+
         <!-- Process Info + Log -->
-        <GroupBox Grid.Row="4" Header="日志">
+        <GroupBox Grid.Row="5" Header="日志">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>

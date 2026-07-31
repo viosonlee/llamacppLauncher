@@ -6,42 +6,53 @@ namespace LlamaManager.Services;
 
 public static class ConfigService
 {
-    private static readonly string AppDir;
-    private static readonly string Root;
+    private static readonly string ManagerRoot;
+    private static readonly string LlamaCppRoot;
+    private static readonly string LogsDir;
     private static readonly string ConfigPath;
 
     static ConfigService()
     {
-        var exeDir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var appDir = Path.GetDirectoryName(exeDir) ?? exeDir;
+        var exeDir = AppDomain.CurrentDomain.BaseDirectory
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 
-        var candidate = appDir;
-        for (int i = 0; i < 5; i++)
-        {
-            if (File.Exists(Path.Combine(candidate, "llama-server.exe")))
-            {
-                Root = candidate;
-                break;
-            }
-            var parent = Path.GetDirectoryName(candidate);
-            if (parent == null || parent == candidate)
-                break;
-            candidate = parent;
-        }
+        ManagerRoot = FindParentWithFile(exeDir, "llama-manager.ps1", maxDepth: 8) ?? exeDir;
 
-        if (string.IsNullOrEmpty(Root))
-            Root = appDir;
+        LlamaCppRoot = FindParentWithFile(ManagerRoot, "llama-server.exe", maxDepth: 4)
+                    ?? FindParentWithFile(exeDir, "llama-server.exe", maxDepth: 4)
+                    ?? ManagerRoot;
 
-        AppDir = Root;
-        ConfigPath = Path.Combine(AppDir, "llama-manager.config.json");
+        LogsDir = Path.Combine(ManagerRoot, "logs");
+        Directory.CreateDirectory(LogsDir);
+
+        ConfigPath = Path.Combine(ManagerRoot, "llama-manager.config.json");
     }
 
-    public static string GetAppDir() => AppDir;
-    public static string GetRoot() => Root;
-    public static string GetLlamaServerPath() => Path.Combine(Root, "llama-server.exe");
-    public static string GetLogPath() => Path.Combine(AppDir, "llama-manager.log");
-    public static string GetStdoutPath() => Path.Combine(AppDir, "llama-server.stdout.log");
-    public static string GetStderrPath() => Path.Combine(AppDir, "llama-server.stderr.log");
+    private static string? FindParentWithFile(string startDir, string targetFile, int maxDepth)
+    {
+        var dir = startDir;
+        for (int i = 0; i < maxDepth; i++)
+        {
+            if (File.Exists(Path.Combine(dir, targetFile)))
+                return dir;
+            var parent = Path.GetDirectoryName(dir);
+            if (parent == null || parent == dir)
+                break;
+            dir = parent;
+        }
+        return null;
+    }
+
+    public static string GetManagerRoot() => ManagerRoot;
+    public static string GetLlamaCppRoot() => LlamaCppRoot;
+    public static string GetRoot() => LlamaCppRoot;
+    public static string GetAppDir() => ManagerRoot;
+    public static string GetLlamaServerPath() => Path.Combine(LlamaCppRoot, "llama-server.exe");
+    public static string GetLogPath() => Path.Combine(LogsDir, "llama-manager.log");
+    public static string GetMainStdoutPath() => Path.Combine(LogsDir, "llama-server-main.stdout.log");
+    public static string GetMainStderrPath() => Path.Combine(LogsDir, "llama-server-main.stderr.log");
+    public static string GetEmbeddingStdoutPath() => Path.Combine(LogsDir, "llama-server-embedding.stdout.log");
+    public static string GetEmbeddingStderrPath() => Path.Combine(LogsDir, "llama-server-embedding.stderr.log");
 
     public static ManagerConfig ReadConfig()
     {

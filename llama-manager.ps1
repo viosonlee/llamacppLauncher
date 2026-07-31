@@ -27,9 +27,11 @@ if (Test-Path -LiteralPath (Join-Path $Script:AppDir 'llama-server.exe')) {
 }
 $Script:LlamaServer = Join-Path $Script:Root 'llama-server.exe'
 $Script:ConfigPath = Join-Path $Script:AppDir 'llama-manager.config.json'
-$Script:LogPath = Join-Path $Script:AppDir 'llama-manager.log'
-$Script:ServerStdoutPath = Join-Path $Script:AppDir 'llama-server.stdout.log'
-$Script:ServerStderrPath = Join-Path $Script:AppDir 'llama-server.stderr.log'
+$Script:LogsDir = Join-Path $Script:AppDir 'logs'
+$null = New-Item -ItemType Directory -Path $Script:LogsDir -Force
+$Script:LogPath = Join-Path $Script:LogsDir 'llama-manager.log'
+$Script:ServerStdoutPath = Join-Path $Script:LogsDir 'llama-server-main.stdout.log'
+$Script:ServerStderrPath = Join-Path $Script:LogsDir 'llama-server-main.stderr.log'
 $Script:TaskName = 'LlamaCppModelServer'
 $Script:RunRegistryPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 $Script:RunValueName = 'LlamaCppModelServer'
@@ -46,6 +48,11 @@ function New-DefaultConfig {
         LastStartedAt = ''
         CreatedAt = (Get-Date).ToString('o')
         UpdatedAt = (Get-Date).ToString('o')
+        ModelPresets = @{ }
+        EmbeddingModelPath = ''
+        EmbeddingPort = 8081
+        EmbeddingLastPid = 0
+        EmbeddingLastStartedAt = ''
     }
 }
 
@@ -58,6 +65,13 @@ function Read-ManagerConfig {
                 if ($raw.PSObject.Properties.Name -contains $name) {
                     $config.$name = $raw.$name
                 }
+            }
+            if ($raw.PSObject.Properties.Name -contains 'ModelPresets' -and $raw.ModelPresets) {
+                $ht = @{ }
+                foreach ($key in $raw.ModelPresets.PSObject.Properties.Name) {
+                    $ht[$key] = $raw.ModelPresets.$key
+                }
+                $config.ModelPresets = $ht
             }
         } catch {
             Write-ManagerLog "读取配置失败，使用默认配置：$($_.Exception.Message)"
@@ -76,6 +90,14 @@ function Save-ManagerConfig {
         $Config.CreatedAt = (Get-Date).ToString('o')
     }
     $Config.UpdatedAt = (Get-Date).ToString('o')
+    if ($Config.ModelPresets -and $Config.ModelPath -and $Config.Args) {
+        $normalized = $Config.ModelPath.ToLowerInvariant()
+        $Config.ModelPresets[$normalized] = [pscustomobject][ordered]@{
+            Args = $Config.Args
+            Port = $Config.Port
+            LastUsed = (Get-Date).ToString('o')
+        }
+    }
     $Config | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $Script:ConfigPath -Encoding UTF8
 }
 
@@ -278,6 +300,23 @@ function Get-PresetArgs {
     }
 
     return ($parts -join ' ')
+}
+
+function Restore-ModelPreset {
+    param([Parameter(Mandatory)][object]$Config)
+
+    $key = $Config.ModelPath.ToLowerInvariant()
+    if ($Config.ModelPresets -and $Config.ModelPresets.ContainsKey($key)) {
+        $preset = $Config.ModelPresets[$key]
+        Write-ManagerLog "Restore-ModelPreset: 找到预设 for $($Config.ModelPath)"
+        $Config.Args = $preset.Args
+        if ($preset.Port) { $Config.Port = $preset.Port }
+    } else {
+        Write-ManagerLog "Restore-ModelPreset: 无预设 for $($Config.ModelPath)，生成默认参数"
+        $presetPort = if ($Config.Port -gt 0) { $Config.Port } else { 8080 }
+        $Config.Args = Get-PresetArgs -Path $Config.ModelPath -Port $presetPort
+        $Config.Port = Get-PortFromArgs -Args $Config.Args -Fallback $presetPort
+    }
 }
 
 function Get-ManagedServerProcess {
@@ -807,8 +846,7 @@ function Select-ModelMenu {
 
     $previousPort = Get-PortFromArgs -Args $Config.Args -Fallback $Config.Port
     $Config.ModelPath = $models[$index - 1].FullName
-    $Config.Args = Get-PresetArgs -Path $Config.ModelPath -Port $Config.Port
-    $Config.Port = Get-PortFromArgs -Args $Config.Args -Fallback $Config.Port
+    Restore-ModelPreset -Config $Config
     Save-ManagerConfig -Config $Config
     Write-ManagerLog "已选择模型 $($Config.ModelPath)。"
     if (Restart-ModelServerIfRunning -Config $Config -PreviousPort $previousPort) {
@@ -838,8 +876,7 @@ function Enter-CustomModelMenu {
 
     $previousPort = Get-PortFromArgs -Args $Config.Args -Fallback $Config.Port
     $Config.ModelPath = [System.IO.Path]::GetFullPath($path)
-    $Config.Args = Get-PresetArgs -Path $Config.ModelPath -Port $Config.Port
-    $Config.Port = Get-PortFromArgs -Args $Config.Args -Fallback $Config.Port
+    Restore-ModelPreset -Config $Config
     Save-ManagerConfig -Config $Config
     Write-ManagerLog "已选择自定义模型 $($Config.ModelPath)。"
     if (Restart-ModelServerIfRunning -Config $Config -PreviousPort $previousPort) {
@@ -991,9 +1028,12 @@ try {
 
     if ($ModelPath) {
         $config.ModelPath = Resolve-ModelPath -Path $ModelPath
-        $presetPort = if ($Port -gt 0) { $Port } else { $config.Port }
-        $config.Args = Get-PresetArgs -Path $config.ModelPath -Port $presetPort
-        $config.Port = Get-PortFromArgs -Args $config.Args -Fallback $presetPort
+        if ($Port -gt 0) {
+            $config.Port = $Port
+            $config.Args = Get-PresetArgs -Path $config.ModelPath -Port $config.Port
+        } else {
+            Restore-ModelPreset -Config $config
+        }
         Save-ManagerConfig -Config $config
     } elseif ($Port -gt 0) {
         $config.Port = $Port

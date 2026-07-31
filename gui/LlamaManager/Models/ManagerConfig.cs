@@ -33,6 +33,18 @@ public class ManagerConfig
 
     [JsonPropertyName("ModelPresets")]
     public Dictionary<string, ModelPreset> ModelPresets { get; set; } = [];
+
+    [JsonPropertyName("EmbeddingModelPath")]
+    public string EmbeddingModelPath { get; set; } = string.Empty;
+
+    [JsonPropertyName("EmbeddingPort")]
+    public int EmbeddingPort { get; set; } = 8081;
+
+    [JsonPropertyName("EmbeddingLastPid")]
+    public int EmbeddingLastPid { get; set; }
+
+    [JsonPropertyName("EmbeddingLastStartedAt")]
+    public string EmbeddingLastStartedAt { get; set; } = string.Empty;
 }
 
 public class ModelPreset

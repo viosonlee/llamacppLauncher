@@ -73,19 +73,7 @@ public static class AutostartService
 
     private static string FindScriptPath()
     {
-        var candidates = new[]
-        {
-            Path.Combine(ConfigService.GetRoot(), "llama-manager.ps1"),
-            Path.Combine(ConfigService.GetAppDir(), "llama-manager.ps1"),
-            Path.Combine(ConfigService.GetAppDir(), "..", "llama-manager.ps1"),
-            Path.Combine(ConfigService.GetAppDir(), "..", "..", "llama-manager.ps1")
-        };
-        foreach (var c in candidates)
-        {
-            var full = Path.GetFullPath(c);
-            if (File.Exists(full)) return full;
-        }
-        return Path.GetFullPath(candidates[0]);
+        return Path.Combine(ConfigService.GetManagerRoot(), "llama-manager.ps1");
     }
 
     private static bool HasRunEntry()
