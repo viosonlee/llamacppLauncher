@@ -19,6 +19,7 @@ public partial class MainWindow : Window
     private bool _parsingArgs;
     private int _updateCount;
     private bool _embeddingStarting;
+    private string? _lastLogText;
 
     public MainWindow()
     {
@@ -191,8 +192,11 @@ public partial class MainWindow : Window
     {
         try
         {
-            var lines = LogService.ReadRecent(50);
-            LogTextBox.Text = string.Join("\n", lines);
+            var lines = LogService.ReadRecent(200);
+            var text = string.Join("\n", lines);
+            if (text == _lastLogText) return;
+            _lastLogText = text;
+            LogTextBox.Text = text;
             LogScrollViewer.ScrollToEnd();
         }
         catch { }
@@ -513,7 +517,7 @@ public partial class MainWindow : Window
 
     // ─── Model Selection ───
 
-    private async void ModelListBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private void ModelListBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (ModelListBox.SelectedItem is not ModelInfo model) return;
         if (!_loaded) return;
@@ -538,10 +542,10 @@ public partial class MainWindow : Window
                 LogService.Write($"已选择模型 {model.FileName}（自动生成预设并保存）。");
             }
 
-            SaveCurrentConfig();
+            // 先刷新 UI 到新模型的参数，再保存，避免用旧模型残留的文本框值覆盖新模型预设
             ApplyConfig();
+            SaveCurrentConfig();
             RefreshLog();
-            await AutoRestartServerAsync();
         }
         catch (Exception ex)
         {
@@ -549,7 +553,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void BrowseButton_Click(object sender, RoutedEventArgs e)
+    private void BrowseButton_Click(object sender, RoutedEventArgs e)
     {
         var initialDir = string.IsNullOrEmpty(_config.ModelsDirectory) ? Path.Combine(ConfigService.GetRoot(), "models") : _config.ModelsDirectory;
         if (!Directory.Exists(initialDir)) initialDir = ConfigService.GetRoot();
@@ -583,10 +587,6 @@ public partial class MainWindow : Window
                     LogService.Write($"已选择自定义模型（自动生成预设并保存）。");
                 }
 
-                SaveCurrentConfig();
-                ApplyConfig();
-                RefreshLog();
-
                 if (_models.All(m => m.FullName != _config.ModelPath))
                 {
                     var fileInfo = new FileInfo(_config.ModelPath);
@@ -598,9 +598,13 @@ public partial class MainWindow : Window
                     });
                     ModelListBox.Items.Refresh();
                     ModelListBox.SelectedItem = _models.Last();
-                    return; // SelectionChanged handles restart
+                    return; // SelectionChanged 负责载入新模型参数
                 }
-                await AutoRestartServerAsync();
+
+                // 先刷新 UI 到新模型参数，再保存，避免旧模型残留值覆盖新模型预设
+                ApplyConfig();
+                SaveCurrentConfig();
+                RefreshLog();
             }
             catch (Exception ex)
             {
@@ -868,35 +872,16 @@ public partial class MainWindow : Window
         }
     }
 
-    private void StatusTimer_Tick(object? sender, EventArgs e) => RefreshStatus();
+    private void StatusTimer_Tick(object? sender, EventArgs e)
+    {
+        RefreshStatus();
+        RefreshLog();
+    }
 
     private void SetButtonsEnabled(bool enabled)
     {
         StartButton.IsEnabled = enabled;
         StopButton.IsEnabled = enabled;
         // OpenButton 始终保持可点击，方便用户在启动期间随时尝试打开浏览器
-    }
-
-    private async Task AutoRestartServerAsync()
-    {
-        var running = ServerService.GetManagedProcess(_config);
-        if (running == null) return;
-
-        LogService.Write("检测到服务正在运行，自动停止并重启以应用新配置…");
-        ServerService.Stop(_config, msg => LogService.Write(msg));
-
-        try
-        {
-            await ServerService.StartAsync(_config, openBrowser: true,
-                msg => Dispatcher.BeginInvoke(() => { LogService.Write(msg); RefreshLog(); }));
-            LogService.Write("模型切换已生效，服务已重启。");
-        }
-        catch (Exception ex)
-        {
-            LogService.Write($"重启失败：{ex.Message}");
-        }
-
-        RefreshStatus();
-        RefreshLog();
     }
 }
