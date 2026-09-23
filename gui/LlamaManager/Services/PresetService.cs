@@ -16,10 +16,9 @@ public static class PresetService
         if (threads < 1) threads = 1;
 
         var filename = Path.GetFileNameWithoutExtension(modelPath);
-        var isMoE = filename.Contains("A3B", StringComparison.OrdinalIgnoreCase) ||
-                    filename.Contains("A4B", StringComparison.OrdinalIgnoreCase) ||
-                    filename.Contains("moe", StringComparison.OrdinalIgnoreCase) ||
-                    filename.Contains("mixture.of.experts", StringComparison.OrdinalIgnoreCase);
+        var isMoE = System.Text.RegularExpressions.Regex.IsMatch(
+            filename,
+            @"(?i)(apex|A\d+(\.\d+)?B|\d+x\d+B|moe|mixtral|mixture\.of\.experts|dbrx|jamba|deepseek-v[23]|deepseek-r1(?!\-distill))");
 
         if (isMoE)
             return GenerateMoEArgs(modelPath, port, threads, size);
@@ -50,7 +49,9 @@ public static class PresetService
             gpuArgs,
             "--cache-prompt",
             "--flash-attn on",
-            "--reasoning off"
+            "--jinja",
+            "--reasoning on",
+            "--reasoning-format deepseek"
         };
 
         if (useNoMmap)
@@ -111,7 +112,9 @@ public static class PresetService
             $"-ub {ubatch}",
             gpu,
             "--cache-prompt",
-            "--reasoning off"
+            "--jinja",
+            "--reasoning on",
+            "--reasoning-format deepseek"
         };
 
         return string.Join(" ", parts);

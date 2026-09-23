@@ -64,7 +64,7 @@ public partial class MainWindow : Window
             MessageBox.Show($"初始化失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
         }
 
-        _statusTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+        _statusTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
         _statusTimer.Tick += StatusTimer_Tick;
         _statusTimer.Start();
         _loaded = true;
@@ -90,10 +90,18 @@ public partial class MainWindow : Window
                     .Select(f =>
                     {
                         var info = new FileInfo(f);
+                        string relPath = f;
+                        try
+                        {
+                            relPath = Path.GetRelativePath(modelsDir, f);
+                        }
+                        catch { }
+
                         return new ModelInfo
                         {
                             FullName = Path.GetFullPath(f),
                             FileName = info.Name,
+                            RelativePath = relPath,
                             SizeBytes = info.Length
                         };
                     })
@@ -101,10 +109,21 @@ public partial class MainWindow : Window
 
                 _models.AddRange(ggufFiles);
             }
-            catch { }
+            catch (Exception ex)
+            {
+                LogService.Write($"扫描模型目录失败: {ex.Message}");
+            }
+        }
+        else
+        {
+            LogService.Write($"模型目录不存在: {modelsDir}");
         }
 
+        ModelListBox.ItemsSource = null;
         ModelListBox.ItemsSource = _models;
+
+        if (ModelCountText != null)
+            ModelCountText.Text = $"共 {_models.Count} 个模型";
 
         if (!string.IsNullOrEmpty(_config.ModelPath))
         {
@@ -125,14 +144,35 @@ public partial class MainWindow : Window
             {
                 StatusDot.Fill = new SolidColorBrush(Colors.Green);
                 StatusText.Text = $"运行中（PID {running.Id}）";
-                ProcessInfoText.Text = $"进程: PID {running.Id} | 端口 {_config.Port}";
                 StartButton.IsEnabled = false;
                 StopButton.IsEnabled = true;
+
+                var port = ServerService.ParsePortFromArgs(_config.Args, _config.Port);
+                _ = Task.Run(async () =>
+                {
+                    var speedStr = await SpeedMonitorService.QuerySpeedAsync(port);
+                    Dispatcher.BeginInvoke(() =>
+                    {
+                        if (LiveSpeedText != null)
+                        {
+                            LiveSpeedText.Text = speedStr;
+                            LiveSpeedText.Foreground = speedStr.Contains("生成中") || speedStr.Contains("读取")
+                                ? (Brush)FindResource("AccentBrush")
+                                : (Brush)FindResource("SuccessBrush");
+                        }
+                        if (ProcessInfoText != null)
+                        {
+                            var extra = string.IsNullOrEmpty(speedStr) ? "" : $" | {speedStr}";
+                            ProcessInfoText.Text = $"进程: PID {running.Id} | 端口 {port}{extra}";
+                        }
+                    });
+                });
             }
             else
             {
                 StatusDot.Fill = new SolidColorBrush(Colors.Red);
                 StatusText.Text = "已停止";
+                if (LiveSpeedText != null) LiveSpeedText.Text = "";
                 ProcessInfoText.Text = "进程: 无";
                 StartButton.IsEnabled = true;
                 StopButton.IsEnabled = false;
@@ -192,7 +232,7 @@ public partial class MainWindow : Window
     {
         try
         {
-            var lines = LogService.ReadRecent(200);
+            var lines = LogService.ReadRecent(500);
             var text = string.Join("\n", lines);
             if (text == _lastLogText) return;
             _lastLogText = text;
@@ -225,16 +265,61 @@ public partial class MainWindow : Window
 
         var dialog = new Microsoft.Win32.OpenFolderDialog
         {
-            Title = "选择模型默认文件夹",
+            Title = "选择模型文件夹（将自动递归扫描其所有子目录下的 GGUF 模型）",
             InitialDirectory = initialDir
         };
 
         if (dialog.ShowDialog() == true)
         {
-            _config.ModelsDirectory = dialog.FolderName;
-            ModelsDirTextBox.Text = dialog.FolderName;
-            ConfigService.SaveConfig(_config);
+            _config.ModelsDirectory = Path.GetFullPath(dialog.FolderName);
+            ModelsDirTextBox.Text = _config.ModelsDirectory;
+            SaveCurrentConfig();
             RefreshModels();
+            LogService.Write($"已更新模型目录: {_config.ModelsDirectory}，共扫描到 {_models.Count} 个模型。");
+            RefreshLog();
+        }
+    }
+
+    private void RefreshModelsButton_Click(object sender, RoutedEventArgs e)
+    {
+        RefreshModels();
+        LogService.Write($"已重新扫描模型目录，共扫描到 {_models.Count} 个模型。");
+        RefreshLog();
+    }
+
+    private void ModelsDirTextBox_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key == System.Windows.Input.Key.Enter)
+        {
+            ApplyModelsDirectoryChange();
+        }
+    }
+
+    private void ModelsDirTextBox_LostFocus(object sender, RoutedEventArgs e)
+    {
+        ApplyModelsDirectoryChange();
+    }
+
+    private void ApplyModelsDirectoryChange()
+    {
+        var inputDir = ModelsDirTextBox.Text?.Trim();
+        if (string.IsNullOrEmpty(inputDir)) return;
+
+        if (!string.Equals(inputDir, _config.ModelsDirectory, StringComparison.OrdinalIgnoreCase))
+        {
+            if (Directory.Exists(inputDir))
+            {
+                _config.ModelsDirectory = Path.GetFullPath(inputDir);
+                SaveCurrentConfig();
+                RefreshModels();
+                LogService.Write($"已更新模型目录: {_config.ModelsDirectory}，共扫描到 {_models.Count} 个模型。");
+                RefreshLog();
+            }
+            else
+            {
+                LogService.Write($"指定目录不存在: {inputDir}");
+                RefreshLog();
+            }
         }
     }
 
@@ -293,6 +378,31 @@ public partial class MainWindow : Window
         else
             ReasoningBox.SelectedIndex = 0;
 
+        // Reasoning Budget: --reasoning-budget N
+        m = Regex.Match(args, @"(?:^|\s)--reasoning-budget\s+(-?\d+)");
+        if (m.Success && int.TryParse(m.Groups[1].Value, out var bVal) && bVal > 0)
+        {
+            var found = false;
+            for (int i = 0; i < ReasoningBudgetBox.Items.Count; i++)
+            {
+                if (ReasoningBudgetBox.Items[i] is ComboBoxItem item)
+                {
+                    var itemText = item.Content?.ToString() ?? "";
+                    if (itemText == bVal.ToString() || itemText.StartsWith($"{bVal} "))
+                    {
+                        ReasoningBudgetBox.SelectedIndex = i;
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            if (!found) { ReasoningBudgetBox.Text = bVal.ToString(); }
+        }
+        else
+        {
+            ReasoningBudgetBox.SelectedIndex = 0;
+        }
+
         // Flash Attention: -fa / --flash-attn
         m = Regex.Match(args, @"(?:^|\s)(?:-fa|--flash-attn)(?:\s+(on|1))?");
         FlashAttentionBox.SelectedIndex = m.Success ? 1 : 0;
@@ -344,6 +454,9 @@ public partial class MainWindow : Window
 
         // CPU MoE toggle: --cpu-moe
         CpuMoeCheckbox.IsChecked = Regex.IsMatch(args, @"(?:^|\s)--cpu-moe\b");
+
+        // Verbose Logging: -v / --verbose / --log-verbose
+        VerboseLogBox.SelectedIndex = Regex.IsMatch(args, @"(?:^|\s)(?:-v|--verbose|--log-verbose)\b") ? 1 : 0;
     }
 
     private void UpdateSelectedModelText()
@@ -411,6 +524,9 @@ public partial class MainWindow : Window
     private void MoeOffload_SelectionChanged(object sender, SelectionChangedEventArgs e) => SyncArgsFromControls();
     private void MoeOffload_LostFocus(object sender, RoutedEventArgs e) => SyncArgsFromControls();
     private void CpuMoeCheckbox_Changed(object sender, RoutedEventArgs e) => SyncArgsFromControls();
+    private void VerboseLog_SelectionChanged(object sender, SelectionChangedEventArgs e) => SyncArgsFromControls();
+    private void ReasoningBudget_SelectionChanged(object sender, SelectionChangedEventArgs e) => SyncArgsFromControls();
+    private void ReasoningBudget_LostFocus(object sender, RoutedEventArgs e) => SyncArgsFromControls();
 
     private void SyncArgsFromControls()
     {
@@ -468,6 +584,31 @@ public partial class MainWindow : Window
             else
             {
                 args = Regex.Replace(args, @"(?:^|\s)--cpu-moe\b", "").Trim();
+                args = Regex.Replace(args, @"\s+", " ").Trim();
+            }
+
+            if (VerboseLogBox.SelectedIndex == 1)
+            {
+                if (!Regex.IsMatch(args, @"(?:^|\s)(?:-v|--verbose|--log-verbose)\b"))
+                    args = (args.TrimEnd() + " -v").TrimStart();
+            }
+            else
+            {
+                args = Regex.Replace(args, @"(?:^|\s)(?:-v|--verbose|--log-verbose)\b", "").Trim();
+                args = Regex.Replace(args, @"\s+", " ").Trim();
+            }
+
+            // Reasoning Budget: --reasoning-budget N
+            var budgetText = ReasoningBudgetBox.Text?.Trim() ?? "";
+            if (budgetText.Contains(' '))
+                budgetText = budgetText[..budgetText.IndexOf(' ')].Trim();
+            if (int.TryParse(budgetText, out var budget) && budget > 0)
+            {
+                args = UpdateArgInString(args, "--reasoning-budget", budget.ToString());
+            }
+            else
+            {
+                args = Regex.Replace(args, @"(?:^|\s)--reasoning-budget\s+-?\d+", "").Trim();
                 args = Regex.Replace(args, @"\s+", " ").Trim();
             }
 
@@ -686,6 +827,12 @@ public partial class MainWindow : Window
             "n_cpu_moe" => ("MoE CPU 卸载 (--n-cpu-moe)", "专用于 MoE (混合专家) 模型的优化。\n将多少层不常激活的专家权重强制留在内存/CPU，而把 Attention 等公共核心层保留在 GPU。\n- 0: 混合自动分配\n- 数字: 强制保留在内存的专家层数"
                 + $"\n{recs}\n若运行 MoE 模型导致显存溢出卡顿，可尝试设置为 10~30"),
 
+            "verbose_log" => ("详细调用日志 (-v / --verbose)", "控制是否开启详细的运行与接口调用日志。\n- 开启: 输出外部 API（如 /v1/chat/completions）调用请求、Prompt 预处理进度、Token 生成速度统计（t/s）、Slot 槽位分配及流式传输状态等详细信息\n- 关闭: 仅输出基础服务状态与错误信息"
+                + "\n\n推荐: 需要调试外部工具接入或排查请求耗时时开启"),
+
+            "reasoning_budget" => ("思考上限 (--reasoning-budget)", "控制推理模型（如 DeepSeek-R1、Qwen、Spark 等）单次回复的最大思考 Token 数量。\n\n- 无限制 (-1/默认): 模型自行决定思考何时结束。\n- 设置数值（如 2048）: 当思考达到上限时，llama-server 会强制注入闭合标记并结束思考，促使模型直接开始输出正文。\n- 优点: 防止长篇思考耗尽单次输出上限，彻底杜绝 OpenCode 等外部 Agent 客户端的 5 分钟超时中断问题。"
+                + "\n\n推荐值:\n通用对话建议 1024~2048；代码 Agent 任务建议 2048~4096"),
+
             _ => ("参数说明", "暂无详细说明")
         };
     }
@@ -883,5 +1030,31 @@ public partial class MainWindow : Window
         StartButton.IsEnabled = enabled;
         StopButton.IsEnabled = enabled;
         // OpenButton 始终保持可点击，方便用户在启动期间随时尝试打开浏览器
+    }
+
+    private void ClearLogButton_Click(object sender, RoutedEventArgs e)
+    {
+        LogTextBox.Text = "";
+        _lastLogText = "";
+    }
+
+    private void OpenLogFileButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var logPath = ConfigService.GetMainStderrPath();
+            if (File.Exists(logPath))
+            {
+                Process.Start(new ProcessStartInfo(logPath) { UseShellExecute = true });
+            }
+            else
+            {
+                MessageBox.Show("尚未生成日志文件。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"打开日志失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 }

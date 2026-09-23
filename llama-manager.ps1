@@ -1,4 +1,4 @@
-﻿param(
+param(
     [switch]$Service,
     [switch]$Start,
     [switch]$Stop,
@@ -180,7 +180,7 @@ function Test-MoEModel {
     param([Parameter(Mandatory)][string]$Path)
 
     $filename = [System.IO.Path]::GetFileNameWithoutExtension($Path)
-    return $filename -match '(?i)(A3B|A4B|moe|mixture\.of\.experts)'
+    return $filename -match '(?i)(apex|A\d+(\.\d+)?B|\d+x\d+B|moe|mixtral|mixture\.of\.experts|dbrx|jamba|deepseek-v[23]|deepseek-r1(?!\-distill))'
 }
 
 function Get-MoEPresetArgs {
@@ -213,7 +213,9 @@ function Get-MoEPresetArgs {
         $gpuArgs,
         '--cache-prompt',
         '--flash-attn on',
-        '--reasoning off'
+        '--jinja',
+        '--reasoning on',
+        '--reasoning-format deepseek'
     )
 
     $freeRAM = (Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory * 1KB
@@ -249,27 +251,27 @@ function Get-PresetArgs {
         $ctx = 40960
         $batch = 2048
         $ubatch = 512
-        $extra = '--reasoning off'
+        $extra = '--jinja --reasoning on --reasoning-format deepseek'
     } elseif ($size -le 3.5GB) {
         $ctx = 20480
         $batch = 2048
         $ubatch = 512
-        $extra = '--reasoning off'
+        $extra = '--jinja --reasoning on --reasoning-format deepseek'
     } elseif ($size -le 5GB) {
         $ctx = 10240
         $batch = 1024
         $ubatch = 512
-        $extra = '--reasoning off'
+        $extra = '--jinja --reasoning on --reasoning-format deepseek'
     } elseif ($size -le 6GB) {
         $ctx = 8192
         $batch = 1024
         $ubatch = 512
-        $extra = '--reasoning off'
+        $extra = '--jinja --reasoning on --reasoning-format deepseek'
     } else {
         $ctx = 4096
         $batch = 512
         $ubatch = 256
-        $extra = '--reasoning off'
+        $extra = '--jinja --reasoning on --reasoning-format deepseek'
     }
 
     $cuda = Get-CudaInfo

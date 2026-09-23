@@ -28,6 +28,7 @@
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                     <Ellipse x:Name="StatusDot" Width="10" Height="10" Fill="{StaticResource ErrorBrush}" Margin="0,0,8,0"/>
                     <TextBlock x:Name="StatusText" Text="已停止" FontSize="13" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="LiveSpeedText" Text="" FontSize="12" Foreground="{StaticResource SuccessBrush}" FontWeight="SemiBold" Margin="14,0,0,0" VerticalAlignment="Center"/>
                 </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                     <TextBlock x:Name="CudaText" Text="CUDA: 检测中..." FontSize="12" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,16,0"/>
@@ -45,46 +46,71 @@
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
 
-                    <ListBox x:Name="ModelListBox" Grid.Row="0" Grid.ColumnSpan="2"
+                    <!-- Models Directory Row -->
+                    <Grid Grid.Row="0" Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="模型目录:" VerticalAlignment="Center" FontSize="12" Margin="0,0,8,0"/>
+                        <TextBox x:Name="ModelsDirTextBox" Grid.Column="1" FontSize="11"
+                                 VerticalContentAlignment="Center" KeyDown="ModelsDirTextBox_KeyDown"
+                                 LostFocus="ModelsDirTextBox_LostFocus"
+                                 ToolTip="指定模型文件夹，将自动递归扫描其所有子目录下的 .gguf 文件"/>
+                        <Button Grid.Column="2" Content="选择文件夹..." Click="ModelsDirButton_Click"
+                                Margin="6,0,0,0" Padding="8,4" FontSize="11"/>
+                        <Button Grid.Column="3" Content="刷新" Click="RefreshModelsButton_Click"
+                                Margin="4,0,0,0" Padding="8,4" FontSize="11" ToolTip="重新扫描该目录及所有子目录"/>
+                        <Button Grid.Column="4" Content="单文件..." Click="BrowseButton_Click"
+                                Margin="4,0,0,0" Padding="8,4" FontSize="11" ToolTip="选择任意单独的 GGUF 文件"/>
+                    </Grid>
+
+                    <ListBox x:Name="ModelListBox" Grid.Row="1"
                              Height="120" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                              SelectionChanged="ModelListBox_SelectionChanged">
                         <ListBox.ItemTemplate>
                             <DataTemplate>
-                                <Grid>
+                                <Grid ToolTip="{Binding FullName}">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="Auto"/>
                                         <ColumnDefinition Width="Auto"/>
                                         <ColumnDefinition Width="*"/>
                                     </Grid.ColumnDefinitions>
                                     <TextBlock Grid.Column="0" Text="{Binding SizeFormatted}" Width="70"
-                                               Foreground="{StaticResource TextSecondaryBrush}" FontSize="11"/>
+                                               Foreground="{StaticResource TextSecondaryBrush}" FontSize="11" VerticalAlignment="Center"/>
                                     <Border Grid.Column="1" CornerRadius="3" Padding="4,1" Margin="0,0,6,0"
                                             BorderBrush="{StaticResource TextSecondaryBrush}" BorderThickness="1"
-                                            ToolTip="{Binding Category}">
+                                            ToolTip="{Binding Category}" VerticalAlignment="Center">
                                         <TextBlock Text="{Binding ModelTypeDisplay}" FontSize="10"
                                                    Foreground="{StaticResource TextSecondaryBrush}"/>
                                     </Border>
-                                    <TextBlock Grid.Column="2" Text="{Binding FileName}" TextTrimming="CharacterEllipsis"
-                                               FontSize="12" Margin="0,0,0,0"/>
+                                    <TextBlock Grid.Column="2" Text="{Binding DisplayName}" TextTrimming="CharacterEllipsis"
+                                               FontSize="12" VerticalAlignment="Center"/>
                                 </Grid>
                             </DataTemplate>
                         </ListBox.ItemTemplate>
                     </ListBox>
 
-                    <Button Grid.Row="0" Grid.Column="1" Content="浏览..." VerticalAlignment="Top"
-                            Click="BrowseButton_Click" Margin="8,0,0,0" Padding="12,6"
-                            FontSize="11" Width="70"/>
-
-                    <TextBlock Grid.Row="1" Grid.ColumnSpan="2" x:Name="SelectedModelText"
-                               Text="未选择模型" FontSize="11" Foreground="{StaticResource TextSecondaryBrush}"
-                               Margin="0,5,0,0" TextTrimming="CharacterEllipsis"/>
-                    <TextBlock Grid.Row="2" Grid.ColumnSpan="2" x:Name="ModelInfoText"
+                    <Grid Grid.Row="2" Margin="0,5,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" x:Name="SelectedModelText"
+                                   Text="未选择模型" FontSize="11" Foreground="{StaticResource TextSecondaryBrush}"
+                                   TextTrimming="CharacterEllipsis"/>
+                        <TextBlock Grid.Column="1" x:Name="ModelCountText"
+                                   Text="共 0 个模型" FontSize="11" Foreground="{StaticResource TextSecondaryBrush}"
+                                   Margin="8,0,0,0"/>
+                    </Grid>
+                    
+                    <TextBlock Grid.Row="3" x:Name="ModelInfoText"
                                FontSize="10" Foreground="{StaticResource TextSecondaryBrush}"
                                Margin="0,2,0,0" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
                 </Grid>
@@ -250,8 +276,48 @@
                                 Padding="0" Margin="4,0,0,0" Click="InfoButton_Click" Tag="ubatch_size"/>
                     </Grid>
 
+                    <!-- Verbose Logging -->
+                    <Grid Grid.Row="4" Grid.Column="0" Margin="0,0,6,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="110"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="30"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="详细调用日志" FontSize="12" VerticalAlignment="Center"/>
+                        <ComboBox x:Name="VerboseLogBox" Grid.Column="1" FontSize="12" Height="26"
+                                  SelectedIndex="0" SelectionChanged="VerboseLog_SelectionChanged">
+                            <ComboBoxItem Content="关闭 (默认)"/>
+                            <ComboBoxItem Content="开启 (-v / 详细)"/>
+                        </ComboBox>
+                        <Button Grid.Column="2" Content="?" FontSize="11" Width="24" Height="22"
+                                Padding="0" Margin="4,0,0,0" Click="InfoButton_Click"
+                                Tag="verbose_log"/>
+                    </Grid>
+
+                    <!-- Reasoning Budget -->
+                    <Grid Grid.Row="4" Grid.Column="1" Margin="6,0,0,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="110"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="30"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="思考上限 (tokens)" FontSize="12" VerticalAlignment="Center"/>
+                        <ComboBox x:Name="ReasoningBudgetBox" Grid.Column="1" FontSize="12" Height="26"
+                                  IsEditable="True" Text="无限制" SelectionChanged="ReasoningBudget_SelectionChanged"
+                                  LostFocus="ReasoningBudget_LostFocus">
+                            <ComboBoxItem Content="无限制"/>
+                            <ComboBoxItem Content="1024"/>
+                            <ComboBoxItem Content="2048 (推荐)"/>
+                            <ComboBoxItem Content="4096"/>
+                            <ComboBoxItem Content="8192"/>
+                        </ComboBox>
+                        <Button Grid.Column="2" Content="?" FontSize="11" Width="24" Height="22"
+                                Padding="0" Margin="4,0,0,0" Click="InfoButton_Click"
+                                Tag="reasoning_budget"/>
+                    </Grid>
+
                     <!-- MoE Section (auto-hide for dense models) -->
-                    <Border x:Name="MoeSection" Grid.Row="4" Grid.ColumnSpan="2" BorderThickness="1,0,0,0"
+                    <Border x:Name="MoeSection" Grid.Row="5" Grid.ColumnSpan="2" BorderThickness="1,0,0,0"
                             BorderBrush="{StaticResource TextSecondaryBrush}" Padding="8,6,0,4" Margin="0,4,0,0"
                             ToolTip="以下设置仅对MoE（混合专家）模型生效">
                         <Grid>
@@ -309,16 +375,7 @@
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
 
-                    <Grid Grid.Row="0" Margin="0,0,0,6">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="模型文件夹:" Margin="0,0,8,0" VerticalAlignment="Center" FontSize="12"/>
-                        <TextBox x:Name="ModelsDirTextBox" Grid.Column="1" FontSize="11" IsReadOnly="True" Background="{StaticResource SurfaceBrush}" VerticalContentAlignment="Center"/>
-                        <Button Grid.Column="2" Content="更改..." Click="ModelsDirButton_Click" Margin="6,0,0,0" Padding="12,4" FontSize="11"/>
-                    </Grid>
+                    <TextBlock Grid.Row="0" Text="自定义启动参数 (llama-server 命令行):" Margin="0,0,0,6" FontSize="12"/>
 
                     <TextBox x:Name="ArgsTextBox" Grid.Row="1"
                              AcceptsReturn="True" TextWrapping="Wrap"
@@ -410,8 +467,18 @@
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
-                <TextBlock Grid.Row="0" x:Name="ProcessInfoText" Text="进程: 无"
-                           FontSize="11" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4"/>
+                <Grid Grid.Row="0" Margin="0,0,0,4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" x:Name="ProcessInfoText" Text="进程: 无"
+                               FontSize="11" Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center"/>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal">
+                        <Button Content="清空显示" Click="ClearLogButton_Click" FontSize="10" Padding="6,1" Margin="0,0,4,0"/>
+                        <Button Content="打开日志文件" Click="OpenLogFileButton_Click" FontSize="10" Padding="6,1"/>
+                    </StackPanel>
+                </Grid>
                 <ScrollViewer Grid.Row="1" x:Name="LogScrollViewer" VerticalScrollBarVisibility="Auto">
                     <TextBox x:Name="LogTextBox" IsReadOnly="True"
                              Background="Transparent" BorderThickness="0"

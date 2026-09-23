@@ -4,15 +4,16 @@ public class ModelInfo
 {
     public string FullName { get; set; } = string.Empty;
     public string FileName { get; set; } = string.Empty;
+    public string RelativePath { get; set; } = string.Empty;
+    public string DisplayName => string.IsNullOrEmpty(RelativePath) ? FileName : RelativePath;
     public long SizeBytes { get; set; }
 
     public string SizeFormatted => FormatBytes(SizeBytes);
 
     public bool IsMoE =>
-        FileName.Contains("A3B", StringComparison.OrdinalIgnoreCase) ||
-        FileName.Contains("A4B", StringComparison.OrdinalIgnoreCase) ||
-        FileName.Contains("moe", StringComparison.OrdinalIgnoreCase) ||
-        FileName.Contains("mixture.of.experts", StringComparison.OrdinalIgnoreCase);
+        System.Text.RegularExpressions.Regex.IsMatch(
+            FileName,
+            @"(?i)(apex|A\d+(\.\d+)?B|\d+x\d+B|moe|mixtral|mixture\.of\.experts|dbrx|jamba|deepseek-v[23]|deepseek-r1(?!\-distill))");
 
     public string ModelTypeDisplay => IsMoE ? "MoE" : "Dense";
 
