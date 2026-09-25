@@ -151,7 +151,7 @@ public partial class MainWindow : Window
                 _ = Task.Run(async () =>
                 {
                     var speedStr = await SpeedMonitorService.QuerySpeedAsync(port);
-                    Dispatcher.BeginInvoke(() =>
+                    _ = Dispatcher.BeginInvoke(() =>
                     {
                         if (LiveSpeedText != null)
                         {
@@ -336,11 +336,13 @@ public partial class MainWindow : Window
         if (m.Success)
         {
             var val = m.Groups[1].Value;
-            for (int i = 0; i < ContextQuantBox.Items.Count; i++)
+            var found = false;
+            for (int i = 1; i < ContextQuantBox.Items.Count; i++)
             {
-                if (ContextQuantBox.Items[i] is ComboBoxItem item && item.Content?.ToString() is string content && content.StartsWith(val))
-                { ContextQuantBox.SelectedIndex = i; break; }
+                if (ContextQuantBox.Items[i] is ComboBoxItem item && item.Content?.ToString() is string content && content.StartsWith(val, StringComparison.OrdinalIgnoreCase))
+                { ContextQuantBox.SelectedIndex = i; found = true; break; }
             }
+            if (!found) ContextQuantBox.SelectedIndex = 0;
         }
         else ContextQuantBox.SelectedIndex = 0;
 
@@ -445,12 +447,20 @@ public partial class MainWindow : Window
             var found = false;
             for (int i = 0; i < MoeOffloadBox.Items.Count; i++)
             {
-                if (MoeOffloadBox.Items[i] is ComboBoxItem item && string.Equals(item.Content?.ToString(), val, StringComparison.Ordinal))
-                { MoeOffloadBox.SelectedIndex = i; found = true; break; }
+                if (MoeOffloadBox.Items[i] is ComboBoxItem item)
+                {
+                    var content = item.Content?.ToString() ?? "";
+                    if (content == val || content.StartsWith(val + " "))
+                    {
+                        MoeOffloadBox.SelectedIndex = i;
+                        found = true;
+                        break;
+                    }
+                }
             }
             if (!found) { MoeOffloadBox.Text = val; }
         }
-        else MoeOffloadBox.Text = "0";
+        else MoeOffloadBox.SelectedIndex = 0;
 
         // CPU MoE toggle: --cpu-moe
         CpuMoeCheckbox.IsChecked = Regex.IsMatch(args, @"(?:^|\s)--cpu-moe\b");
@@ -538,8 +548,19 @@ public partial class MainWindow : Window
             var args = ArgsTextBox.Text;
             if (int.TryParse(ContextLengthBox.Text, out var ctx) && ctx > 0)
                 args = UpdateArgInString(args, "-c", ctx.ToString());
-            args = UpdateArgInString(args, "-ctk", GetContextQuant());
-            args = UpdateArgInString(args, "-ctv", GetContextQuant());
+
+            var quant = GetContextQuant();
+            if (quant == "default" || string.IsNullOrEmpty(quant))
+            {
+                args = Regex.Replace(args, @"(?:^|\s)-(?:ctk|ctv)\s+\S+", "").Trim();
+                args = Regex.Replace(args, @"\s+", " ").Trim();
+            }
+            else
+            {
+                args = UpdateArgInString(args, "-ctk", quant);
+                args = UpdateArgInString(args, "-ctv", quant);
+            }
+
             args = UpdateArgInString(args, "-ngl", OffloadLayersBox.Text);
             var cores = CpuCoresBox.Text;
             if (int.TryParse(cores, out _) || cores == "all" || cores == "auto")
@@ -568,23 +589,43 @@ public partial class MainWindow : Window
             if (int.TryParse(UBatchSizeBox.Text, out var ubSize) && ubSize > 0)
                 args = UpdateArgInString(args, "-ub", ubSize.ToString());
             
-            if (int.TryParse(MoeOffloadBox.Text, out var moeLayers) && moeLayers >= 0)
-            {
-                if (moeLayers == 0)
-                    args = Regex.Replace(args, @"(?:^|\s)--n-cpu-moe\s+\d+", "").Trim();
-                else
-                    args = UpdateArgInString(args, "--n-cpu-moe", moeLayers.ToString());
-            }
+            var isCurrentModelMoE = !string.IsNullOrEmpty(_config.ModelPath) && Models.ModelInfo.DetectIsMoE(_config.ModelPath);
 
-            if (CpuMoeCheckbox.IsChecked == true)
+            if (!isCurrentModelMoE)
             {
-                if (!Regex.IsMatch(args, @"(?:^|\s)--cpu-moe\b"))
-                    args = (args.TrimEnd() + " --cpu-moe").TrimStart();
+                // Dense 模型：彻底清除任何 MoE 参数，杜绝交叉污染
+                args = Regex.Replace(args, @"(?:^|\s)--n-cpu-moe\s+\d+", "").Trim();
+                args = Regex.Replace(args, @"(?:^|\s)--cpu-moe\b", "").Trim();
+                args = Regex.Replace(args, @"\s+", " ").Trim();
             }
             else
             {
-                args = Regex.Replace(args, @"(?:^|\s)--cpu-moe\b", "").Trim();
-                args = Regex.Replace(args, @"\s+", " ").Trim();
+                // MoE 模型：处理 MoE 卸载
+                var moeText = MoeOffloadBox.Text?.Trim() ?? "0";
+                if (moeText.Contains(' ')) moeText = moeText[..moeText.IndexOf(' ')].Trim();
+                if (int.TryParse(moeText, out var moeLayers) && moeLayers >= 0)
+                {
+                    if (moeLayers == 0)
+                    {
+                        args = Regex.Replace(args, @"(?:^|\s)--n-cpu-moe\s+\d+", "").Trim();
+                        args = Regex.Replace(args, @"\s+", " ").Trim();
+                    }
+                    else
+                    {
+                        args = UpdateArgInString(args, "--n-cpu-moe", moeLayers.ToString());
+                    }
+                }
+
+                if (CpuMoeCheckbox.IsChecked == true)
+                {
+                    if (!Regex.IsMatch(args, @"(?:^|\s)--cpu-moe\b"))
+                        args = (args.TrimEnd() + " --cpu-moe").TrimStart();
+                }
+                else
+                {
+                    args = Regex.Replace(args, @"(?:^|\s)--cpu-moe\b", "").Trim();
+                    args = Regex.Replace(args, @"\s+", " ").Trim();
+                }
             }
 
             if (VerboseLogBox.SelectedIndex == 1)
@@ -619,13 +660,14 @@ public partial class MainWindow : Window
 
     private string GetContextQuant()
     {
+        if (ContextQuantBox.SelectedIndex <= 0) return "default";
         if (ContextQuantBox.SelectedItem is ComboBoxItem item)
         {
             var content = item.Content.ToString()!;
             var idx = content.IndexOf(' ');
             return idx > 0 ? content[..idx] : content;
         }
-        return "q8_0";
+        return "default";
     }
 
     private static string UpdateArgInString(string args, string key, string value)
@@ -759,12 +801,12 @@ public partial class MainWindow : Window
     private void InfoButton_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not Button btn || btn.Tag is not string tag) return;
-        var (modelSize, hasCuda) = GetModelContext();
-        var info = GetParameterInfo(tag, modelSize, hasCuda);
+        var (modelSize, cuda) = GetModelContext();
+        var info = GetParameterInfo(tag, modelSize, cuda);
         MessageBox.Show(info.Text, info.Title, MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
-    private (long modelSize, bool hasCuda) GetModelContext()
+    private (long modelSize, CudaInfo cuda) GetModelContext()
     {
         long size = 0;
         if (!string.IsNullOrEmpty(_config.ModelPath) && File.Exists(_config.ModelPath))
@@ -772,10 +814,10 @@ public partial class MainWindow : Window
             try { size = new FileInfo(_config.ModelPath).Length; } catch { }
         }
         var cuda = CudaService.Detect();
-        return (size, cuda.Available);
+        return (size, cuda);
     }
 
-    private static (string Title, string Text) GetParameterInfo(string tag, long modelSize, bool hasCuda)
+    private static (string Title, string Text) GetParameterInfo(string tag, long modelSize, CudaInfo cuda)
     {
         var gb = modelSize / (double)(1L << 30);
         var ctxRec = gb switch
@@ -787,14 +829,19 @@ public partial class MainWindow : Window
             _ => "4096（推荐）"
         };
 
-        var nglRec = hasCuda
-            ? (gb <= 3.5 ? "all（全部卸载到 GPU）" : "auto（自动分配）")
+        var modelMb = modelSize / (1024.0 * 1024.0);
+        var vramMb = cuda.FreeVramMb > 0 ? cuda.FreeVramMb : cuda.TotalVramMb;
+
+        var nglRec = cuda.Available
+            ? (vramMb > 0 && modelMb <= vramMb ? "all（全部卸载到 GPU，速度最快）" : "auto（自动分配，交由 --fit on 调度）")
             : "0（无 GPU，仅 CPU）";
 
-        var cpuRec = Math.Min(8, Environment.ProcessorCount).ToString();
+        var recommendedCores = Math.Max(1, Environment.ProcessorCount <= 4 ? Environment.ProcessorCount : Environment.ProcessorCount - 2);
+        if (recommendedCores > 8) recommendedCores = 8;
+        var cpuRec = $"{recommendedCores} 核心（保留核心供系统、HTTP服务及 GPU 轮询，本机最大 {Environment.ProcessorCount} 核心）";
 
         var recs = modelSize > 0
-            ? $"\n\n当前模型: {gb:N1} GB\n━━━━━━━━━━━━━━━━━\n推荐值:"
+            ? $"\n\n当前模型: {gb:N2} GB\n━━━━━━━━━━━━━━━━━\n推荐值:"
             : "\n\n请先选择模型以获取推荐值。";
 
         return tag switch
@@ -803,32 +850,42 @@ public partial class MainWindow : Window
                 + $"\n{recs}\n{ctxRec}"),
 
             "context_quant" => ("K/V 缓存量化 (-ctk/-ctv)",
-                "对注意力缓存进行量化以节省显存。\n- q8_0: 8-bit 量化 (平衡)\n- q4_0: 4-bit 量化 (更省显存)\n- q4_1: 4-bit 量化 (略高精度)\n- f16: 半精度 (最高精度)"
-                + $"\n{recs}\nq8_0（推荐），f16 精度最高但显存占用最大"),
+                "对注意力缓存进行量化以节省显存。\n- 默认 (未量化/f16): 原生精度，速度最快\n- q8_0: 8-bit 量化 (显存吃紧时平衡)\n- q4_0: 4-bit 量化 (极大节省显存)\n- q4_1: 4-bit 量化\n\n💡 提示: 对于 Ling-3.0、DeepSeek 等采用 MLA 架构的模型，KV Cache 天然只有十几兆，完全无需量化。选择「默认」可消除反量化损耗。"
+                + $"\n{recs}\n默认 (未量化/f16)（推荐）"),
 
             "offload_layers" => ("卸载层数 (-ngl)", "将多少层 Transformer 卸载到 GPU 运行。\n- all: 全部卸载（最快）\n- auto: 自动分配\n- 0: 仅 CPU\n- 数字: 指定层数"
                 + $"\n{recs}\n{nglRec}"),
 
-            "cpu_cores" => ("CPU 核心数 (-t/-tb)", "用于推理的 CPU 线程数。通常设为物理核心数即可，过高会导致上下文切换开销。"
-                + $"\n{recs}\n{cpuRec} 核心（本机最大 {Environment.ProcessorCount} 核心）"),
+            "cpu_cores" => ("CPU 核心数 (-t/-tb)", "用于推理的 CPU 线程数。建议不要吃满物理核心，需留出核心供系统、HTTP 监听及 GPU 驱动轮询。"
+                + $"\n{recs}\n{cpuRec}"),
 
             "reasoning" => ("思考模式 (--reasoning)", "控制是否启用模型的思维链（Chain-of-Thought）能力。\n- 关闭: 直接回答，速度更快\n- 开启: 先生成思考过程再回答，质量更高但更慢"
                 + $"\n{recs}\n默认关闭，非推理模型开启无效"),
 
-            "flash_attention" => ("Flash Attention (-fa)", "启用 Flash Attention 优化计算速度并降低长上下文的显存占用。\n部分模型或量化格式可能不完全兼容，如遇报错请关闭。"
-                + $"\n{recs}\n默认关闭，需要时开启"),
+            "flash_attention" => ("Flash Attention (-fa)", "启用 Flash Attention 优化计算速度并降低长上下文的显存占用。\n在现代 NVIDIA 显卡上无论是 Dense 还是 MoE 模型均强烈推荐开启。"
+                + $"\n{recs}\n开启 (-fa)（推荐）"),
 
             "batch_size" => ("批处理大小 (-b)", "控制单次推理的最大 Token 数量。\n适当调低（如 512）能有效降低显存峰值占用，避免小显存设备 OOM 崩溃。"
-                + $"\n{recs}\n6G 显存推荐 512，显存充足推荐 2048"),
+                + $"\n{recs}\n6G 显存推荐 512~1024，显存充足推荐 2048"),
 
             "ubatch_size" => ("物理批大小 (-ub)", "内部计算推理的物理分块大小。\n建议设置为与 Batch Size 相同或更小（如 256/128），进一步减少长提示词（Prompt）处理阶段的显存压力。"
                 + $"\n{recs}\n6G 显存极低负载推荐 128~256，显存充足推荐 512"),
 
-            "n_cpu_moe" => ("MoE CPU 卸载 (--n-cpu-moe)", "专用于 MoE (混合专家) 模型的优化。\n将多少层不常激活的专家权重强制留在内存/CPU，而把 Attention 等公共核心层保留在 GPU。\n- 0: 混合自动分配\n- 数字: 强制保留在内存的专家层数"
-                + $"\n{recs}\n若运行 MoE 模型导致显存溢出卡顿，可尝试设置为 10~30"),
+            "n_cpu_moe" => ("MoE CPU 卸载 (--n-cpu-moe)", "专用于 MoE (混合专家) 模型的优化。\n将指定层数的专家权重强制保留在内存/CPU，而将公共核心层（Attention）保留在 GPU。\n\n"
+                + "- 0 (全GPU): 不强制将专家留在内存，所有专家全在 GPU 运行，配合 --fit 自动适应（速度最快！）\n"
+                + "- 数字: 强制将前 N 层的专家权重保留在内存中\n\n"
+                + "⚠️ 极重要性能提醒: 任何 MoE 专家放在 CPU 都会引起单 Token 多次 PCIe 跨总线频繁往返，速度大幅暴跌（如跌至 4 t/s）！"
+                + $"\n{recs}\n"
+                + (cuda.Available
+                    ? (vramMb > 0 && modelMb > 0
+                        ? (modelMb <= vramMb
+                            ? "0 (全GPU)（推荐：当前可用显存充足，全部专家在 GPU 运行以获得最高速度！）"
+                            : $"当前模型 ({gb:N2} GB) 超出可用显存约 {(int)(modelMb - vramMb)} MB。\n建议设为 0 (全GPU)，交由 --fit on 自动调度；若确实卡顿崩溃，仅微调 1~3 层。\n切勿设置 10~30，否则大量专家堆在 CPU 会导致性能彻底报废！建议换用 Q4 量化以全进显存。")
+                        : "0 (全GPU)（推荐），显存不足卡死时才微调 1~3 层")
+                    : "0（无 GPU）")),
 
-            "verbose_log" => ("详细调用日志 (-v / --verbose)", "控制是否开启详细的运行与接口调用日志。\n- 开启: 输出外部 API（如 /v1/chat/completions）调用请求、Prompt 预处理进度、Token 生成速度统计（t/s）、Slot 槽位分配及流式传输状态等详细信息\n- 关闭: 仅输出基础服务状态与错误信息"
-                + "\n\n推荐: 需要调试外部工具接入或排查请求耗时时开启"),
+            "verbose_log" => ("详细调用日志 (-v / --verbose)", "控制是否开启详细的运行与接口调用日志。\n- 开启: 输出外部 API 调用请求、Prompt 预处理进度、Token 生成速度统计（t/s）、Slot 槽位分配及流式传输状态等详细信息\n- 关闭: 仅输出基础服务状态与错误信息\n\n⚠️ 警告: 开启详细日志会高频写盘，可能引起推理卡顿，排查问题完毕后请务必关闭！"
+                + "\n\n推荐: 默认关闭；仅在调试外部工具接入时开启"),
 
             "reasoning_budget" => ("思考上限 (--reasoning-budget)", "控制推理模型（如 DeepSeek-R1、Qwen、Spark 等）单次回复的最大思考 Token 数量。\n\n- 无限制 (-1/默认): 模型自行决定思考何时结束。\n- 设置数值（如 2048）: 当思考达到上限时，llama-server 会强制注入闭合标记并结束思考，促使模型直接开始输出正文。\n- 优点: 防止长篇思考耗尽单次输出上限，彻底杜绝 OpenCode 等外部 Agent 客户端的 5 分钟超时中断问题。"
                 + "\n\n推荐值:\n通用对话建议 1024~2048；代码 Agent 任务建议 2048~4096"),

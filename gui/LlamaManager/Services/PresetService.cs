@@ -12,13 +12,10 @@ public static class PresetService
 
         var fileInfo = new FileInfo(modelPath);
         var size = fileInfo.Length;
-        var threads = Math.Min(8, Environment.ProcessorCount);
-        if (threads < 1) threads = 1;
+        var threads = Math.Max(1, Environment.ProcessorCount <= 4 ? Environment.ProcessorCount : Environment.ProcessorCount - 2);
+        if (threads > 8) threads = 8;
 
-        var filename = Path.GetFileNameWithoutExtension(modelPath);
-        var isMoE = System.Text.RegularExpressions.Regex.IsMatch(
-            filename,
-            @"(?i)(apex|A\d+(\.\d+)?B|\d+x\d+B|moe|mixtral|mixture\.of\.experts|dbrx|jamba|deepseek-v[23]|deepseek-r1(?!\-distill))");
+        var isMoE = Models.ModelInfo.DetectIsMoE(modelPath);
 
         if (isMoE)
             return GenerateMoEArgs(modelPath, port, threads, size);
@@ -30,7 +27,7 @@ public static class PresetService
     {
         var cuda = CudaService.Detect();
         var gpuArgs = cuda.Available
-            ? "-ngl auto --fit on --fit-target 256"
+            ? (size <= 5368709120L ? "-ngl all --fit on --fit-target 128" : "-ngl auto --fit on --fit-target 256")
             : "-ngl 0";
 
         var freeRAM = GetFreePhysicalMemory();
@@ -48,11 +45,11 @@ public static class PresetService
             "-ub 512",
             gpuArgs,
             "--cache-prompt",
-            "--flash-attn on",
+            cuda.Available ? "--flash-attn on" : "",
             "--jinja",
             "--reasoning on",
             "--reasoning-format deepseek"
-        };
+        }.Where(s => !string.IsNullOrEmpty(s)).ToList();
 
         if (useNoMmap)
         {
@@ -96,8 +93,8 @@ public static class PresetService
         var cuda = CudaService.Detect();
         var gpu = cuda.Available
             ? (size <= gb5
-                ? "-ngl all --fit on --fit-target 1024"
-                : "-ngl auto --fit on --fit-target 1024")
+                ? "-ngl all --fit on --fit-target 512"
+                : "-ngl auto --fit on --fit-target 512")
             : "-ngl 0";
 
         var parts = new List<string>
@@ -112,10 +109,11 @@ public static class PresetService
             $"-ub {ubatch}",
             gpu,
             "--cache-prompt",
+            cuda.Available ? "--flash-attn on" : "",
             "--jinja",
             "--reasoning on",
             "--reasoning-format deepseek"
-        };
+        }.Where(s => !string.IsNullOrEmpty(s)).ToList();
 
         return string.Join(" ", parts);
     }

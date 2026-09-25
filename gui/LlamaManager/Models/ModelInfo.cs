@@ -10,10 +10,16 @@ public class ModelInfo
 
     public string SizeFormatted => FormatBytes(SizeBytes);
 
-    public bool IsMoE =>
-        System.Text.RegularExpressions.Regex.IsMatch(
-            FileName,
-            @"(?i)(apex|A\d+(\.\d+)?B|\d+x\d+B|moe|mixtral|mixture\.of\.experts|dbrx|jamba|deepseek-v[23]|deepseek-r1(?!\-distill))");
+    public bool IsMoE => DetectIsMoE(FileName);
+
+    public static bool DetectIsMoE(string? name)
+    {
+        if (string.IsNullOrEmpty(name)) return false;
+        var fn = System.IO.Path.GetFileName(name);
+        return System.Text.RegularExpressions.Regex.IsMatch(
+            fn,
+            @"(?i)(\bmoe\b|[\-_]moe[\-_.]|mixture[\-_.]of[\-_.]experts|mixtral|dbrx|jamba|deepseek[\-_.]v[23]|deepseek[\-_.]r1(?![\-_.]distill)|ling[\-_.]3|bailing[\-_.]?moe|\bA\d+(\.\d+)?B\b|\b\d+x\d+B\b|glm[\-_.]?4[\-_.]moe|minicpm[\-_.]?moe|gemma[\-_.]?4[\-_.]\d+b[\-_.]a\d+b)");
+    }
 
     public string ModelTypeDisplay => IsMoE ? "MoE" : "Dense";
 
@@ -46,15 +52,8 @@ public class ModelInfo
     /// <summary>Recommended ubatch size (always 512).</summary>
     public int RecommendedUBatch => 512;
 
-    /// <summary>Whether full GPU offload is feasible.</summary>
-    public bool CanFullOffload
-    {
-        get
-        {
-            if (IsMoE) return false;
-            return SizeBytes <= 6L << 30;
-        }
-    }
+    /// <summary>Whether full GPU offload is feasible (within ~5GB VRAM limit on typical 6GB card).</summary>
+    public bool CanFullOffload => SizeBytes <= (long)(5.0 * 1024 * 1024 * 1024);
 
     /// <summary>Recommended -ngl value.</summary>
     public string RecommendedNgl => CanFullOffload ? "all" : "auto";
@@ -62,9 +61,9 @@ public class ModelInfo
     private static string FormatBytes(long bytes)
     {
         if (bytes >= 1L << 30)
-            return $"{bytes / (1L << 30):N2} GB";
+            return $"{(double)bytes / (1L << 30):N2} GB";
         if (bytes >= 1L << 20)
-            return $"{bytes / (1L << 20):N1} MB";
+            return $"{(double)bytes / (1L << 20):N1} MB";
         return $"{bytes:N0} B";
     }
 }
