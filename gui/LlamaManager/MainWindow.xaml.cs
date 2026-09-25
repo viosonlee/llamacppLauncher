@@ -142,17 +142,26 @@ public partial class MainWindow : Window
             running ??= ServerService.FindMainProcess(_config);
             if (running != null)
             {
-                StatusDot.Fill = new SolidColorBrush(Colors.Green);
-                StatusText.Text = $"运行中（PID {running.Id}）";
-                StartButton.IsEnabled = false;
-                StopButton.IsEnabled = true;
-
                 var port = ServerService.ParsePortFromArgs(_config.Args, _config.Port);
                 _ = Task.Run(async () =>
                 {
-                    var speedStr = await SpeedMonitorService.QuerySpeedAsync(port);
+                    var isReady = ServerService.TestApiReady(port);
+                    var speedStr = isReady ? await SpeedMonitorService.QuerySpeedAsync(port) : "";
                     _ = Dispatcher.BeginInvoke(() =>
                     {
+                        if (isReady)
+                        {
+                            StatusDot.Fill = new SolidColorBrush(Colors.Green);
+                            StatusText.Text = $"运行中（PID {running.Id}）";
+                        }
+                        else
+                        {
+                            StatusDot.Fill = new SolidColorBrush(Colors.Orange);
+                            StatusText.Text = $"正在加载模型…（PID {running.Id}）";
+                        }
+                        StartButton.IsEnabled = false;
+                        StopButton.IsEnabled = true;
+
                         if (LiveSpeedText != null)
                         {
                             LiveSpeedText.Text = speedStr;
@@ -946,6 +955,8 @@ public partial class MainWindow : Window
         }
 
         SetButtonsEnabled(false);
+        StatusDot.Fill = new SolidColorBrush(Colors.Orange);
+        StatusText.Text = "正在启动服务…";
 
         try
         {
@@ -970,6 +981,20 @@ public partial class MainWindow : Window
     {
         try
         {
+            var running = ServerService.GetManagedProcess(_config) ?? ServerService.FindMainProcess(_config);
+            if (running == null)
+            {
+                MessageBox.Show("服务尚未启动，请先点击【启动服务】。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var port = ServerService.ParsePortFromArgs(_config.Args, _config.Port);
+            if (!ServerService.TestApiReady(port))
+            {
+                MessageBox.Show("服务正在加载模型中（模型较大时约需数秒），尚未完全就绪，请稍候再打开网页。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
             SaveCurrentConfig();
             ServerService.OpenWebUi(_config);
         }
@@ -1086,7 +1111,7 @@ public partial class MainWindow : Window
     {
         StartButton.IsEnabled = enabled;
         StopButton.IsEnabled = enabled;
-        // OpenButton 始终保持可点击，方便用户在启动期间随时尝试打开浏览器
+        OpenButton.IsEnabled = enabled;
     }
 
     private void ClearLogButton_Click(object sender, RoutedEventArgs e)

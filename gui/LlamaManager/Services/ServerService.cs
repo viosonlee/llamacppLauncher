@@ -110,6 +110,14 @@ public static class ServerService
     {
         try
         {
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(1) };
+            var response = client.GetAsync($"http://127.0.0.1:{port}/health").Result;
+            if (response.IsSuccessStatusCode) return true;
+        }
+        catch { }
+
+        try
+        {
             using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
             var response = client.GetAsync($"http://127.0.0.1:{port}/v1/models").Result;
             return response.IsSuccessStatusCode;
@@ -204,14 +212,25 @@ public static class ServerService
                     if (File.Exists(ConfigService.GetMainStderrPath()))
                     {
                         var lines = File.ReadLines(ConfigService.GetMainStderrPath()).ToList();
-                        stderr = string.Join("\n", lines.TakeLast(40));
+                        var errLines = lines.Where(l =>
+                            l.Contains("error", StringComparison.OrdinalIgnoreCase) ||
+                            l.Contains("failed", StringComparison.OrdinalIgnoreCase) ||
+                            l.Contains("exception", StringComparison.OrdinalIgnoreCase) ||
+                            l.Contains("CUDA error", StringComparison.OrdinalIgnoreCase) ||
+                            l.Contains("out of memory", StringComparison.OrdinalIgnoreCase)
+                        ).TakeLast(8).ToList();
+
+                        if (errLines.Count > 0)
+                            stderr = string.Join("\n", errLines);
+                        else
+                            stderr = string.Join("\n", lines.TakeLast(10));
                     }
                 }
                 catch { }
 
                 config.LastPid = 0;
                 ConfigService.SaveConfig(config);
-                throw new InvalidOperationException($"llama-server 启动失败或提前退出。\n{stderr}");
+                throw new InvalidOperationException($"llama-server 提前退出（退出码 {process.ExitCode}）。\n{stderr}");
             }
 
             if (TestApiReady(port))
