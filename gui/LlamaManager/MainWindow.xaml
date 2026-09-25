@@ -26,8 +26,8 @@
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <Ellipse x:Name="StatusDot" Width="10" Height="10" Fill="{StaticResource ErrorBrush}" Margin="0,0,8,0"/>
-                    <TextBlock x:Name="StatusText" Text="已停止" FontSize="13" VerticalAlignment="Center"/>
+                    <Ellipse x:Name="StatusDot" Width="12" Height="12" Fill="{StaticResource ErrorBrush}" Margin="0,0,8,0"/>
+                    <TextBlock x:Name="StatusText" Text="已停止" FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center"/>
                     <TextBlock x:Name="LiveSpeedText" Text="" FontSize="12" Foreground="{StaticResource SuccessBrush}" FontWeight="SemiBold" Margin="14,0,0,0" VerticalAlignment="Center"/>
                 </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
@@ -407,24 +407,70 @@
             </TabItem>
         </TabControl>
 
-        <!-- Action Buttons -->
-        <GroupBox Grid.Row="2" Header="操作" Margin="0,0,0,6">
+        <!-- Action Buttons & Status -->
+        <GroupBox Grid.Row="2" Header="服务控制与运行状态" Margin="0,0,0,6">
             <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="*"/>
-                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
 
-                <Button Grid.Column="0" x:Name="StartButton"
-                        Content="▶ 启动并打开" Click="StartButton_Click"
-                        Margin="0,0,6,0" Padding="8,10"/>
-                <Button Grid.Column="1" x:Name="OpenButton"
-                        Content="🌐 打开 Web UI" Click="OpenButton_Click"
-                        Margin="3,0,3,0" Padding="8,10"/>
-                <Button Grid.Column="2" x:Name="StopButton"
-                        Content="■ 停止" Click="StopButton_Click"
-                        Margin="6,0,0,0" Padding="8,10"/>
+                <!-- Status Card inside Action Area -->
+                <Border Grid.Row="0" Background="{StaticResource SurfaceLightBrush}"
+                        BorderBrush="{StaticResource SecondaryBrush}" BorderThickness="1"
+                        CornerRadius="4" Padding="10,6" Margin="0,0,0,8">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <Ellipse x:Name="ActionStatusDot" Grid.Column="0" Width="10" Height="10"
+                                 Fill="{StaticResource ErrorBrush}" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" x:Name="ActionStatusText"
+                                   Text="服务已停止，点击【启动服务】开始运行"
+                                   FontSize="12" VerticalAlignment="Center" FontWeight="Medium"
+                                   Foreground="{StaticResource TextSecondaryBrush}"/>
+                        <TextBlock Grid.Column="2" x:Name="ActionEndpointText"
+                                   Text="未监听" FontSize="11" Foreground="{StaticResource TextSecondaryBrush}"
+                                   FontWeight="SemiBold" VerticalAlignment="Center"/>
+                    </Grid>
+                </Border>
+
+                <!-- Action Buttons -->
+                <Grid Grid.Row="1">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <Button Grid.Column="0" x:Name="StartButton"
+                            Content="▶ 启动服务" Click="StartButton_Click"
+                            Margin="0,0,4,0" Padding="8,8" FontSize="13" FontWeight="SemiBold"/>
+                    <Button Grid.Column="1" x:Name="StopButton"
+                            Content="■ 停止服务" Click="StopButton_Click"
+                            Margin="3,0,3,0" Padding="8,8" FontSize="13" IsEnabled="False"/>
+                    <Button Grid.Column="2" x:Name="OpenButton"
+                            Content="🌐 打开 Web UI" Click="OpenButton_Click"
+                            Margin="4,0,0,0" Padding="8,8" FontSize="13" IsEnabled="False"/>
+                </Grid>
+
+                <!-- Options Row: Auto-open Checkbox & API Status -->
+                <Grid Grid.Row="2" Margin="0,6,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <CheckBox Grid.Column="0" x:Name="AutoOpenBrowserCheckBox"
+                              Content="启动成功后自动打开 Web UI 前端 (多模型切换调试建议保持关闭)"
+                              FontSize="11" VerticalAlignment="Center"
+                              Checked="AutoOpenBrowserCheckBox_Changed" Unchecked="AutoOpenBrowserCheckBox_Changed"/>
+                    <TextBlock Grid.Column="1" x:Name="ApiStatusBadge"
+                               Text="API: 离线" FontSize="11"
+                               Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center"/>
+                </Grid>
             </Grid>
         </GroupBox>
 

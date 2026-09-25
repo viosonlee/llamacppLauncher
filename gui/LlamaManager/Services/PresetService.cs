@@ -53,9 +53,6 @@ public static class PresetService
             gpuArgs = "-ngl 0";
         }
 
-        var freeRAM = GetFreePhysicalMemory();
-        var useNoMmap = freeRAM - size > 2L * 1024 * 1024 * 1024 && size <= 4L * 1024 * 1024 * 1024;
-
         var parts = new List<string>
         {
             "--host 127.0.0.1",
@@ -74,12 +71,6 @@ public static class PresetService
             "--reasoning-format deepseek",
             "--reasoning-budget 2048"
         }.Where(s => !string.IsNullOrEmpty(s)).ToList();
-
-        if (useNoMmap)
-        {
-            parts.Add("--no-mmap");
-            parts.Add("--mlock");
-        }
 
         return string.Join(" ", parts);
     }

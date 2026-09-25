@@ -19,6 +19,7 @@ public partial class MainWindow : Window
     private bool _parsingArgs;
     private int _updateCount;
     private bool _embeddingStarting;
+    private bool _serverStarting;
     private string? _lastLogText;
 
     public MainWindow()
@@ -58,6 +59,7 @@ public partial class MainWindow : Window
             RefreshStatus();
             RefreshLog();
             ApplyConfig();
+            AutoOpenBrowserCheckBox.IsChecked = _config.AutoOpenBrowser;
         }
         catch (Exception ex)
         {
@@ -138,6 +140,8 @@ public partial class MainWindow : Window
     {
         try
         {
+            if (_serverStarting) return;
+
             var running = ServerService.GetManagedProcess(_config);
             running ??= ServerService.FindMainProcess(_config);
             if (running != null)
@@ -149,18 +153,44 @@ public partial class MainWindow : Window
                     var speedStr = isReady ? await SpeedMonitorService.QuerySpeedAsync(port) : "";
                     _ = Dispatcher.BeginInvoke(() =>
                     {
+                        if (_serverStarting) return;
+
                         if (isReady)
                         {
-                            StatusDot.Fill = new SolidColorBrush(Colors.Green);
-                            StatusText.Text = $"运行中（PID {running.Id}）";
+                            StatusDot.Fill = (Brush)FindResource("SuccessBrush");
+                            StatusText.Text = $"服务运行中 (PID {running.Id})";
+
+                            ActionStatusDot.Fill = (Brush)FindResource("SuccessBrush");
+                            ActionStatusText.Text = $"服务已就绪！API 接口正常响应 (PID {running.Id})";
+                            ActionStatusText.Foreground = (Brush)FindResource("TextPrimaryBrush");
+                            ActionEndpointText.Text = $"http://127.0.0.1:{port}";
+                            ApiStatusBadge.Text = "API: 在线就绪";
+                            ApiStatusBadge.Foreground = (Brush)FindResource("SuccessBrush");
+
+                            StartButton.Content = "🔄 重启服务";
+                            StartButton.IsEnabled = true;
+                            StopButton.Content = "■ 停止服务";
+                            StopButton.IsEnabled = true;
+                            OpenButton.IsEnabled = true;
                         }
                         else
                         {
-                            StatusDot.Fill = new SolidColorBrush(Colors.Orange);
+                            StatusDot.Fill = (Brush)FindResource("WarningBrush");
                             StatusText.Text = $"正在加载模型…（PID {running.Id}）";
+
+                            ActionStatusDot.Fill = (Brush)FindResource("WarningBrush");
+                            ActionStatusText.Text = $"模型加载与显存分配中 (PID {running.Id})，请稍候...";
+                            ActionStatusText.Foreground = (Brush)FindResource("WarningBrush");
+                            ActionEndpointText.Text = $":{port} (就绪中)";
+                            ApiStatusBadge.Text = "API: 加载中...";
+                            ApiStatusBadge.Foreground = (Brush)FindResource("WarningBrush");
+
+                            StartButton.Content = "⏳ 正在加载模型...";
+                            StartButton.IsEnabled = false;
+                            StopButton.Content = "■ 终止启动";
+                            StopButton.IsEnabled = true;
+                            OpenButton.IsEnabled = false;
                         }
-                        StartButton.IsEnabled = false;
-                        StopButton.IsEnabled = true;
 
                         if (LiveSpeedText != null)
                         {
@@ -179,12 +209,24 @@ public partial class MainWindow : Window
             }
             else
             {
-                StatusDot.Fill = new SolidColorBrush(Colors.Red);
+                StatusDot.Fill = (Brush)FindResource("ErrorBrush");
                 StatusText.Text = "已停止";
+
+                ActionStatusDot.Fill = (Brush)FindResource("ErrorBrush");
+                ActionStatusText.Text = "服务已停止，点击【启动服务】开始运行";
+                ActionStatusText.Foreground = (Brush)FindResource("TextSecondaryBrush");
+                ActionEndpointText.Text = "未监听";
+                ApiStatusBadge.Text = "API: 离线";
+                ApiStatusBadge.Foreground = (Brush)FindResource("TextSecondaryBrush");
+
+                StartButton.Content = "▶ 启动服务";
+                StartButton.IsEnabled = true;
+                StopButton.Content = "■ 停止服务";
+                StopButton.IsEnabled = false;
+                OpenButton.IsEnabled = false;
+
                 if (LiveSpeedText != null) LiveSpeedText.Text = "";
                 ProcessInfoText.Text = "进程: 无";
-                StartButton.IsEnabled = true;
-                StopButton.IsEnabled = false;
             }
         }
         catch { }
@@ -261,10 +303,19 @@ public partial class MainWindow : Window
             ModelsDirTextBox.Text = string.IsNullOrEmpty(_config.ModelsDirectory) 
                 ? Path.Combine(ConfigService.GetRoot(), "models") 
                 : _config.ModelsDirectory;
+            if (AutoOpenBrowserCheckBox != null)
+                AutoOpenBrowserCheckBox.IsChecked = _config.AutoOpenBrowser;
             ParseArgsToControls();
             UpdateSelectedModelText();
         }
         finally { _updateCount--; }
+    }
+
+    private void AutoOpenBrowserCheckBox_Changed(object sender, RoutedEventArgs e)
+    {
+        if (!_loaded) return;
+        _config.AutoOpenBrowser = AutoOpenBrowserCheckBox.IsChecked == true;
+        SaveCurrentConfig();
     }
 
     private void ModelsDirButton_Click(object sender, RoutedEventArgs e)
@@ -704,6 +755,8 @@ public partial class MainWindow : Window
             _config.Port = port;
         _config.Args = ArgsTextBox.Text?.Trim() ?? "";
         _config.EmbeddingPort = 8081;
+        if (AutoOpenBrowserCheckBox != null)
+            _config.AutoOpenBrowser = AutoOpenBrowserCheckBox.IsChecked == true;
         ConfigService.SaveConfig(_config);
     }
 
@@ -954,13 +1007,24 @@ public partial class MainWindow : Window
             LogService.Write("已停止旧服务，即将启动新实例…");
         }
 
-        SetButtonsEnabled(false);
-        StatusDot.Fill = new SolidColorBrush(Colors.Orange);
+        _serverStarting = true;
+        StartButton.Content = "⏳ 正在加载模型...";
+        StartButton.IsEnabled = false;
+        StopButton.Content = "■ 终止启动";
+        StopButton.IsEnabled = true;
+        OpenButton.IsEnabled = false;
+
+        StatusDot.Fill = (Brush)FindResource("WarningBrush");
         StatusText.Text = "正在启动服务…";
+        ActionStatusDot.Fill = (Brush)FindResource("WarningBrush");
+        ActionStatusText.Text = "正在启动服务进程与加载模型权重，请稍候...";
+        ActionEndpointText.Text = $"端口 {_config.Port}";
+        ApiStatusBadge.Text = "API: 正在启动...";
+        ApiStatusBadge.Foreground = (Brush)FindResource("WarningBrush");
 
         try
         {
-            await ServerService.StartAsync(_config, openBrowser: true, msg => Dispatcher.BeginInvoke(() =>
+            await ServerService.StartAsync(_config, openBrowser: _config.AutoOpenBrowser, msg => Dispatcher.BeginInvoke(() =>
             {
                 LogService.Write(msg);
                 RefreshLog();
@@ -971,10 +1035,13 @@ public partial class MainWindow : Window
             MessageBox.Show(ex.Message, "启动失败", MessageBoxButton.OK, MessageBoxImage.Error);
             LogService.Write($"错误：{ex.Message}");
         }
+        finally
+        {
+            _serverStarting = false;
+        }
 
         RefreshStatus();
         RefreshLog();
-        SetButtonsEnabled(true);
     }
 
     private void OpenButton_Click(object sender, RoutedEventArgs e)
@@ -1006,6 +1073,7 @@ public partial class MainWindow : Window
 
     private void StopButton_Click(object sender, RoutedEventArgs e)
     {
+        _serverStarting = false;
         try
         {
             SaveCurrentConfig();
@@ -1109,6 +1177,7 @@ public partial class MainWindow : Window
 
     private void SetButtonsEnabled(bool enabled)
     {
+        if (_serverStarting) return;
         StartButton.IsEnabled = enabled;
         StopButton.IsEnabled = enabled;
         OpenButton.IsEnabled = enabled;

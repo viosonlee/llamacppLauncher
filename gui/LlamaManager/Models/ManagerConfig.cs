@@ -19,6 +19,9 @@ public class ManagerConfig
     [JsonPropertyName("AutoStartEnabled")]
     public bool AutoStartEnabled { get; set; }
 
+    [JsonPropertyName("AutoOpenBrowser")]
+    public bool AutoOpenBrowser { get; set; } = false;
+
     [JsonPropertyName("LastPid")]
     public int LastPid { get; set; }
 
