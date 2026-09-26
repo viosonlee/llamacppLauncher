@@ -130,12 +130,20 @@ public static class ServerService
 
     public static async Task<bool> StartAsync(Models.ManagerConfig config, bool openBrowser = false, Action<string>? log = null)
     {
+        if (string.IsNullOrEmpty(config.ModelPath) || !File.Exists(config.ModelPath))
+            throw new InvalidOperationException("未选择有效模型。");
+
+        if (ConfigService.IsPrismModel(config.ModelPath) && !ConfigService.HasPrismServer())
+        {
+            throw new FileNotFoundException(
+                "检测到当前选中的模型为 Bonsai / PTQ 三值量化模型，需要 Prism 专属引擎支持。\n" +
+                $"但未在以下路径找到专属引擎：\n{ConfigService.GetPrismServerPath()}\n\n" +
+                "请下载 Prism 版 llama.cpp 并放置在 engines\\prism 目录中。");
+        }
+
         var serverPath = ConfigService.GetLlamaServerPath(config.ModelPath);
         if (!File.Exists(serverPath))
             throw new FileNotFoundException($"未找到 llama-server.exe：{serverPath}");
-
-        if (string.IsNullOrEmpty(config.ModelPath) || !File.Exists(config.ModelPath))
-            throw new InvalidOperationException("未选择有效模型。");
 
         if (string.IsNullOrEmpty(config.Args))
             config.Args = PresetService.GeneratePresetArgs(config.ModelPath, config.Port);

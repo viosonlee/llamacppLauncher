@@ -47,6 +47,7 @@ public static class ConfigService
     public static string GetLlamaCppRoot() => LlamaCppRoot;
     public static string GetRoot() => LlamaCppRoot;
     public static string GetPrismServerPath() => Path.Combine(LlamaCppRoot, "engines", "prism", "llama-server.exe");
+    public static bool HasPrismServer() => File.Exists(GetPrismServerPath());
 
     public static bool IsPrismModel(string? modelPath)
     {
