@@ -202,7 +202,8 @@ public partial class MainWindow : Window
                         if (ProcessInfoText != null)
                         {
                             var extra = string.IsNullOrEmpty(speedStr) ? "" : $" | {speedStr}";
-                            ProcessInfoText.Text = $"进程: PID {running.Id} | 端口 {port}{extra}";
+                            var engineLabel = ConfigService.IsPrismModel(_config.ModelPath) ? " [Prism引擎]" : " [官方引擎]";
+                            ProcessInfoText.Text = $"进程: PID {running.Id}{engineLabel} | 端口 {port}{extra}";
                         }
                     });
                 });

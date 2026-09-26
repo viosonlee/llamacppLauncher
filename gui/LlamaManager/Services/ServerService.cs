@@ -32,7 +32,7 @@ public static class ServerService
             if (process.ProcessName != "llama-server")
                 return null;
 
-            var expected = Path.GetFullPath(ConfigService.GetLlamaServerPath());
+            var expected = Path.GetFullPath(ConfigService.GetLlamaServerPath(config.ModelPath));
             if (!string.IsNullOrEmpty(process.MainModule?.FileName))
             {
                 var actual = Path.GetFullPath(process.MainModule.FileName);
@@ -62,7 +62,7 @@ public static class ServerService
     /// <summary>Discover main server by scanning llama-server processes matching our path and port 8080.</summary>
     public static Process? FindMainProcess(Models.ManagerConfig config)
     {
-        var expectedPath = Path.GetFullPath(ConfigService.GetLlamaServerPath());
+        var expectedPath = Path.GetFullPath(ConfigService.GetLlamaServerPath(config.ModelPath));
         var candidates = Process.GetProcessesByName("llama-server");
         foreach (var p in candidates)
         {
@@ -130,7 +130,7 @@ public static class ServerService
 
     public static async Task<bool> StartAsync(Models.ManagerConfig config, bool openBrowser = false, Action<string>? log = null)
     {
-        var serverPath = ConfigService.GetLlamaServerPath();
+        var serverPath = ConfigService.GetLlamaServerPath(config.ModelPath);
         if (!File.Exists(serverPath))
             throw new FileNotFoundException($"未找到 llama-server.exe：{serverPath}");
 
@@ -156,14 +156,20 @@ public static class ServerService
 
         var quotedModel = $"\"{config.ModelPath.Replace("\"", "\\\"")}\"";
         var argumentLine = $"-m {quotedModel} {config.Args}";
+        var serverName = Path.GetFileName(serverPath);
+        var isPrism = ConfigService.IsPrismModel(config.ModelPath);
 
-        log?.Invoke($"正在启动 llama-server.exe {argumentLine}");
+        log?.Invoke(isPrism
+            ? $"正在启动 Prism 专属版服务 ({serverName}) {argumentLine}"
+            : $"正在启动 llama-server.exe {argumentLine}");
+
+        var workingDir = Path.GetDirectoryName(serverPath) ?? ConfigService.GetLlamaCppRoot();
 
         var psi = new ProcessStartInfo
         {
             FileName = serverPath,
             Arguments = argumentLine,
-            WorkingDirectory = ConfigService.GetLlamaCppRoot(),
+            WorkingDirectory = workingDir,
             WindowStyle = ProcessWindowStyle.Hidden,
             CreateNoWindow = true,
             RedirectStandardOutput = true,

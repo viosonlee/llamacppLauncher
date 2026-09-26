@@ -46,8 +46,25 @@ public static class ConfigService
     public static string GetManagerRoot() => ManagerRoot;
     public static string GetLlamaCppRoot() => LlamaCppRoot;
     public static string GetRoot() => LlamaCppRoot;
-    public static string GetAppDir() => ManagerRoot;
-    public static string GetLlamaServerPath() => Path.Combine(LlamaCppRoot, "llama-server.exe");
+    public static string GetPrismServerPath() => Path.Combine(LlamaCppRoot, "engines", "prism", "llama-server.exe");
+
+    public static bool IsPrismModel(string? modelPath)
+    {
+        if (string.IsNullOrEmpty(modelPath)) return false;
+        var name = Path.GetFileName(modelPath);
+        return System.Text.RegularExpressions.Regex.IsMatch(name, @"bonsai|ptq|ternary", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    }
+
+    public static string GetLlamaServerPath(string? modelPath = null)
+    {
+        if (IsPrismModel(modelPath))
+        {
+            var prismPath = GetPrismServerPath();
+            if (File.Exists(prismPath))
+                return prismPath;
+        }
+        return Path.Combine(LlamaCppRoot, "llama-server.exe");
+    }
     public static string GetLogPath() => Path.Combine(LogsDir, "llama-manager.log");
     public static string GetMainStdoutPath() => Path.Combine(LogsDir, "llama-server-main.stdout.log");
     public static string GetMainStderrPath() => Path.Combine(LogsDir, "llama-server-main.stderr.log");

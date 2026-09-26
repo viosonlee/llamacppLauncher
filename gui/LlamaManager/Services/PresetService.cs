@@ -15,12 +15,43 @@ public static class PresetService
         var threads = Math.Max(1, Environment.ProcessorCount <= 4 ? Environment.ProcessorCount : Environment.ProcessorCount - 2);
         if (threads > 8) threads = 8;
 
+        if (ConfigService.IsPrismModel(modelPath))
+            return GeneratePrismArgs(port, threads);
+
         var isMoE = Models.ModelInfo.DetectIsMoE(modelPath);
 
         if (isMoE)
             return GenerateMoEArgs(modelPath, port, threads, size);
 
         return GenerateStandardArgs(port, threads, size);
+    }
+
+    private static string GeneratePrismArgs(int port, int threads)
+    {
+        var cuda = CudaService.Detect();
+        var gpuArgs = cuda.Available ? "-ngl 48 --fit off" : "-ngl 0";
+        var parts = new List<string>
+        {
+            "--host 127.0.0.1",
+            $"--port {port}",
+            $"-t {threads}",
+            $"-tb {threads}",
+            "-c 16384",
+            "-np 1",
+            "-b 2048",
+            "-ub 512",
+            gpuArgs,
+            "--cache-prompt",
+            cuda.Available ? "--flash-attn on" : "",
+            "--jinja",
+            "--reasoning on",
+            "--reasoning-format deepseek",
+            "-ctk q4_0",
+            "-ctv q4_0",
+            "-v"
+        }.Where(s => !string.IsNullOrEmpty(s)).ToList();
+
+        return string.Join(" ", parts);
     }
 
     private static string GenerateMoEArgs(string modelPath, int port, int threads, long size)
