@@ -10,12 +10,24 @@ public class ModelInfo
 
     public string SizeFormatted => FormatBytes(SizeBytes);
 
-    public bool IsMoE => DetectIsMoE(FileName);
+    public bool IsMoE => DetectIsMoE(string.IsNullOrEmpty(FullName) ? FileName : FullName);
 
-    public static bool DetectIsMoE(string? name)
+    /// <summary>
+    /// Dense/MoE 判定：优先读取 GGUF 元数据（general.architecture + expert_count），
+    /// 读取失败时回退到文件名启发式。
+    /// </summary>
+    public static bool DetectIsMoE(string? path)
     {
-        if (string.IsNullOrEmpty(name)) return false;
-        var fn = System.IO.Path.GetFileName(name);
+        if (string.IsNullOrEmpty(path)) return false;
+
+        if (System.IO.Path.HasExtension(path) && System.IO.File.Exists(path))
+        {
+            var meta = Services.GgufService.TryDetectIsMoe(path);
+            if (meta.HasValue) return meta.Value;
+        }
+
+        var fn = System.IO.Path.GetFileName(path);
+        if (string.IsNullOrEmpty(fn)) return false;
         return System.Text.RegularExpressions.Regex.IsMatch(
             fn,
             @"(?i)(\bmoe\b|[\-_]moe[\-_.]|mixture[\-_.]of[\-_.]experts|mixtral|dbrx|jamba|deepseek[\-_.]v[23]|deepseek[\-_.]r1(?![\-_.]distill)|ling[\-_.]3|bailing[\-_.]?moe|\bA\d+(\.\d+)?B\b|\b\d+x\d+B\b|glm[\-_.]?4[\-_.]moe|minicpm[\-_.]?moe|gemma[\-_.]?4[\-_.]\d+b[\-_.]a\d+b)");
