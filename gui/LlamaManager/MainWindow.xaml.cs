@@ -110,6 +110,25 @@ public partial class MainWindow : Window
                     .ToList();
 
                 _models.AddRange(ggufFiles);
+
+                // 模型文件被移动/改名后，按签名自动找回原预设
+                var rebound = ConfigService.RebindOrphanPresets(
+                    _config, _models.Select(m => m.FullName), save: true);
+                if (rebound > 0)
+                    LogService.Write($"已自动恢复 {rebound} 条模型预设（检测到模型文件移动或改名）。");
+
+                // 上次选择的模型路径已失效时，按文件名回迁
+                if (!string.IsNullOrEmpty(_config.ModelPath) && !File.Exists(_config.ModelPath))
+                {
+                    var lostName = Path.GetFileName(_config.ModelPath);
+                    var remapped = _models.FirstOrDefault(m =>
+                        string.Equals(m.FileName, lostName, StringComparison.OrdinalIgnoreCase));
+                    if (remapped != null)
+                    {
+                        _config.ModelPath = remapped.FullName;
+                        LogService.Write($"上次选择的模型已移动，已定位到新路径: {remapped.RelativePath}");
+                    }
+                }
             }
             catch (Exception ex)
             {

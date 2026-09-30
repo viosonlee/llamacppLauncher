@@ -60,4 +60,9 @@ public class ModelPreset
 
     [JsonPropertyName("LastUsed")]
     public string LastUsed { get; set; } = string.Empty;
+
+    /// <summary>文件签名（长度 + 头尾 hash），用于在路径变更后自动找回预设。</summary>
+    [JsonPropertyName("Signature")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Signature { get; set; }
 }
