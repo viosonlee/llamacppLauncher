@@ -126,6 +126,7 @@
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
@@ -147,15 +148,15 @@
                                 Tag="context_length"/>
                     </Grid>
 
-                    <!-- Context Quantization -->
+                    <!-- K Quantization -->
                     <Grid Grid.Row="0" Grid.Column="1" Margin="6,0,0,6">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="110"/>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="30"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="K/V 量化级别" FontSize="12" VerticalAlignment="Center"/>
-                        <ComboBox x:Name="ContextQuantBox" Grid.Column="1" FontSize="12" Height="26"
+                        <TextBlock Grid.Column="0" Text="K 量化 (-ctk)" FontSize="12" VerticalAlignment="Center"/>
+                        <ComboBox x:Name="ContextQuantKBox" Grid.Column="1" FontSize="12" Height="26"
                                   SelectedIndex="0" SelectionChanged="ContextQuant_SelectionChanged">
                             <ComboBoxItem Content="默认 (未量化/f16)"/>
                             <ComboBoxItem Content="q8_0 (8-bit)"/>
@@ -188,8 +189,29 @@
                                 Tag="offload_layers"/>
                     </Grid>
 
-                    <!-- CPU Cores -->
+                    <!-- V Quantization -->
                     <Grid Grid.Row="1" Grid.Column="1" Margin="6,0,0,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="110"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="30"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="V 量化 (-ctv)" FontSize="12" VerticalAlignment="Center"/>
+                        <ComboBox x:Name="ContextQuantVBox" Grid.Column="1" FontSize="12" Height="26"
+                                  SelectedIndex="0" SelectionChanged="ContextQuant_SelectionChanged">
+                            <ComboBoxItem Content="默认 (未量化/f16)"/>
+                            <ComboBoxItem Content="q8_0 (8-bit)"/>
+                            <ComboBoxItem Content="q4_0 (4-bit)"/>
+                            <ComboBoxItem Content="q4_1 (4-bit)"/>
+                            <ComboBoxItem Content="f16"/>
+                        </ComboBox>
+                        <Button Grid.Column="2" Content="?" FontSize="11" Width="24" Height="22"
+                                Padding="0" Margin="4,0,0,0" Click="InfoButton_Click"
+                                Tag="context_quant_v"/>
+                    </Grid>
+
+                    <!-- CPU Cores -->
+                    <Grid Grid.Row="2" Grid.Column="1" Margin="6,0,0,6">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="110"/>
                             <ColumnDefinition Width="*"/>
@@ -222,7 +244,7 @@
                     </Grid>
 
                     <!-- Flash Attention -->
-                    <Grid Grid.Row="2" Grid.Column="1" Margin="6,0,0,6">
+                    <Grid Grid.Row="4" Grid.Column="1" Margin="6,0,0,6">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="110"/>
                             <ColumnDefinition Width="*"/>
@@ -296,7 +318,7 @@
                     </Grid>
 
                     <!-- Reasoning Budget -->
-                    <Grid Grid.Row="4" Grid.Column="1" Margin="6,0,0,6">
+                    <Grid Grid.Row="5" Grid.Column="1" Margin="6,0,0,6">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="110"/>
                             <ColumnDefinition Width="*"/>
@@ -318,7 +340,7 @@
                     </Grid>
 
                     <!-- MoE Section (auto-hide for dense models) -->
-                    <Border x:Name="MoeSection" Grid.Row="5" Grid.ColumnSpan="2" BorderThickness="1,0,0,0"
+                    <Border x:Name="MoeSection" Grid.Row="6" Grid.ColumnSpan="2" BorderThickness="1,0,0,0"
                             BorderBrush="{StaticResource TextSecondaryBrush}" Padding="8,6,0,4" Margin="0,4,0,0"
                             ToolTip="以下设置仅对MoE（混合专家）模型生效">
                         <Grid>

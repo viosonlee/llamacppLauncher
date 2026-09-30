@@ -393,20 +393,13 @@ public partial class MainWindow : Window
         var m = Regex.Match(args, @"(?:^|\s)-c\s+(\d+)");
         ContextLengthBox.Text = m.Success ? m.Groups[1].Value : "8192";
 
-        // Context Quant: -ctk q8_0 -ctv q8_0
+        // Context Quant: -ctk q8_0 / -ctv q4_0 (K、V 可独立配置；缺省 -ctv 时沿用 -ctk)
         m = Regex.Match(args, @"(?:^|\s)-ctk\s+(\S+)");
-        if (m.Success)
-        {
-            var val = m.Groups[1].Value;
-            var found = false;
-            for (int i = 1; i < ContextQuantBox.Items.Count; i++)
-            {
-                if (ContextQuantBox.Items[i] is ComboBoxItem item && item.Content?.ToString() is string content && content.StartsWith(val, StringComparison.OrdinalIgnoreCase))
-                { ContextQuantBox.SelectedIndex = i; found = true; break; }
-            }
-            if (!found) ContextQuantBox.SelectedIndex = 0;
-        }
-        else ContextQuantBox.SelectedIndex = 0;
+        var ctk = m.Success ? m.Groups[1].Value : null;
+        var m2 = Regex.Match(args, @"(?:^|\s)-ctv\s+(\S+)");
+        var ctv = m2.Success ? m2.Groups[1].Value : ctk;
+        SetContextQuantBox(ContextQuantKBox, ctk);
+        SetContextQuantBox(ContextQuantVBox, ctv);
 
         // Offload Layers: -ngl NNN/all/auto
         m = Regex.Match(args, @"(?:^|\s)-ngl\s+(\S+)");
@@ -611,17 +604,8 @@ public partial class MainWindow : Window
             if (int.TryParse(ContextLengthBox.Text, out var ctx) && ctx > 0)
                 args = UpdateArgInString(args, "-c", ctx.ToString());
 
-            var quant = GetContextQuant();
-            if (quant == "default" || string.IsNullOrEmpty(quant))
-            {
-                args = Regex.Replace(args, @"(?:^|\s)-(?:ctk|ctv)\s+\S+", "").Trim();
-                args = Regex.Replace(args, @"\s+", " ").Trim();
-            }
-            else
-            {
-                args = UpdateArgInString(args, "-ctk", quant);
-                args = UpdateArgInString(args, "-ctv", quant);
-            }
+            args = ApplyContextQuant(args, "-ctk", GetContextQuant(ContextQuantKBox));
+            args = ApplyContextQuant(args, "-ctv", GetContextQuant(ContextQuantVBox));
 
             args = UpdateArgInString(args, "-ngl", OffloadLayersBox.Text);
             var cores = CpuCoresBox.Text;
@@ -720,16 +704,46 @@ public partial class MainWindow : Window
         finally { _parsingArgs = false; }
     }
 
-    private string GetContextQuant()
+    private static string GetContextQuant(ComboBox box)
     {
-        if (ContextQuantBox.SelectedIndex <= 0) return "default";
-        if (ContextQuantBox.SelectedItem is ComboBoxItem item)
+        if (box == null || box.SelectedIndex <= 0) return "default";
+        if (box.SelectedItem is ComboBoxItem item)
         {
             var content = item.Content.ToString()!;
             var idx = content.IndexOf(' ');
             return idx > 0 ? content[..idx] : content;
         }
         return "default";
+    }
+
+    private static void SetContextQuantBox(ComboBox box, string? value)
+    {
+        if (box == null) return;
+        if (string.IsNullOrEmpty(value))
+        {
+            box.SelectedIndex = 0;
+            return;
+        }
+        for (int i = 1; i < box.Items.Count; i++)
+        {
+            if (box.Items[i] is ComboBoxItem item && item.Content?.ToString() is string content
+                && content.StartsWith(value, StringComparison.OrdinalIgnoreCase))
+            {
+                box.SelectedIndex = i;
+                return;
+            }
+        }
+        box.SelectedIndex = 0;
+    }
+
+    private static string ApplyContextQuant(string args, string key, string quant)
+    {
+        if (string.IsNullOrEmpty(quant) || quant == "default")
+        {
+            args = Regex.Replace(args, $@"(?:^|\s){Regex.Escape(key)}\s+\S+", "");
+            return Regex.Replace(args, @"\s+", " ").Trim();
+        }
+        return UpdateArgInString(args, key, quant);
     }
 
     private static string UpdateArgInString(string args, string key, string value)
@@ -913,8 +927,12 @@ public partial class MainWindow : Window
             "context_length" => ("上下文长度 (-c)", "模型一次能处理的 Token 数量。数值越大，长文本能力越强，但显存/内存占用也越高。"
                 + $"\n{recs}\n{ctxRec}"),
 
-            "context_quant" => ("K/V 缓存量化 (-ctk/-ctv)",
-                "对注意力缓存进行量化以节省显存。\n- 默认 (未量化/f16): 原生精度，速度最快\n- q8_0: 8-bit 量化 (显存吃紧时平衡)\n- q4_0: 4-bit 量化 (极大节省显存)\n- q4_1: 4-bit 量化\n\n💡 提示: 对于 Ling-3.0、DeepSeek 等采用 MLA 架构的模型，KV Cache 天然只有十几兆，完全无需量化。选择「默认」可消除反量化损耗。"
+            "context_quant" => ("Key 缓存量化 (-ctk)",
+                "对注意力缓存的 Key 部分单独量化，以节省显存。K 与 V 可分别设置不同级别，自由组合。\n- 默认 (未量化/f16): 原生精度，速度最快\n- q8_0: 8-bit 量化 (显存吃紧时平衡)\n- q4_0: 4-bit 量化 (极大节省显存)\n- q4_1: 4-bit 量化\n\n💡 提示: 对于 Ling-3.0、DeepSeek 等采用 MLA 架构的模型，KV Cache 天然只有十几兆，完全无需量化。选择「默认」可消除反量化损耗。"
+                + $"\n{recs}\n默认 (未量化/f16)（推荐）"),
+
+            "context_quant_v" => ("Value 缓存量化 (-ctv)",
+                "对注意力缓存的 Value 部分单独量化，与 K 量化相互独立，可组合出如 K=q8_0 + V=q4_0 等搭配。\n- 默认 (未量化/f16): 原生精度，速度最快\n- q8_0: 8-bit 量化 (显存吃紧时平衡)\n- q4_0: 4-bit 量化 (极大节省显存)\n- q4_1: 4-bit 量化\n\n💡 提示: 通常 K 对精度更敏感，可让 K 保持较高精度 (q8_0)、V 用更低精度 (q4_0) 来兼顾质量与显存。"
                 + $"\n{recs}\n默认 (未量化/f16)（推荐）"),
 
             "offload_layers" => ("卸载层数 (-ngl)", "将多少层 Transformer 卸载到 GPU 运行。\n- all: 全部卸载（最快）\n- auto: 自动分配\n- 0: 仅 CPU\n- 数字: 指定层数"
