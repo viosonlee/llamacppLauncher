@@ -1,0 +1,151 @@
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Net.Http;
+using System.Text;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
+
+namespace LlamaManager.Services;
+
+/// <summary>
+/// 通过 /v1/chat/completions 流式请求实测推理速度：
+/// 首 Token 延迟 (TTFT) 与解码吞吐 (tok/s)。
+/// </summary>
+public static class SpeedTestService
+{
+    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(600) };
+
+    private const string TestPrompt =
+        "Explain how a C# async producer-consumer pipeline using System.Threading.Channels " +
+        "works. Include practical implementation details and potential performance pitfalls.";
+
+    public sealed class Result
+    {
+        public string Model { get; set; } = "";
+        public int PromptTokens { get; set; }
+        public int CompletionTokens { get; set; }
+        public int TotalTokens { get; set; }
+        public int StreamEvents { get; set; }
+        public double? TtftSeconds { get; set; }
+        public double? DecodeTps { get; set; }
+        public double TotalSeconds { get; set; }
+        public string? Error { get; set; }
+        public bool Success => Error == null;
+    }
+
+    public static async Task<Result> RunAsync(int port, CancellationToken ct = default)
+    {
+        var result = new Result();
+        var stopwatch = Stopwatch.StartNew();
+
+        try
+        {
+            // 1) 取当前服务的模型 id
+            using (var resp = await Http.GetAsync($"http://127.0.0.1:{port}/v1/models", ct))
+            {
+                resp.EnsureSuccessStatusCode();
+                using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
+                if (doc.RootElement.TryGetProperty("data", out var data)
+                    && data.ValueKind == JsonValueKind.Array && data.GetArrayLength() > 0)
+                {
+                    result.Model = data[0].GetProperty("id").GetString() ?? "";
+                }
+            }
+
+            if (string.IsNullOrEmpty(result.Model))
+            {
+                result.Error = "服务未返回模型 ID";
+                return result;
+            }
+
+            // 2) 流式生成固定长度的回复
+            var payload = JsonSerializer.Serialize(new
+            {
+                model = result.Model,
+                messages = new[] { new { role = "user", content = TestPrompt } },
+                max_tokens = 256,
+                temperature = 0,
+                stream = true,
+                stream_options = new { include_usage = true },
+                ignore_eos = true,
+                chat_template_kwargs = new { enable_thinking = false }
+            });
+
+            using var req = new HttpRequestMessage(HttpMethod.Post, $"http://127.0.0.1:{port}/v1/chat/completions")
+            {
+                Content = new StringContent(payload, Encoding.UTF8, "application/json")
+            };
+
+            using var chatResp = await Http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
+            chatResp.EnsureSuccessStatusCode();
+
+            await using var stream = await chatResp.Content.ReadAsStreamAsync(ct);
+            using var reader = new StreamReader(stream);
+
+            double? firstTokenAt = null;
+            double lastTokenAt = 0;
+            string? line;
+
+            while ((line = await reader.ReadLineAsync(ct)) != null)
+            {
+                if (!line.StartsWith("data:", StringComparison.Ordinal)) continue;
+                var data = line[5..].Trim();
+                if (data.Length == 0) continue;
+                if (data == "[DONE]") break;
+
+                var now = stopwatch.Elapsed.TotalSeconds;
+
+                using var chunk = JsonDocument.Parse(data);
+                var root = chunk.RootElement;
+
+                if (root.TryGetProperty("usage", out var usage) && usage.ValueKind == JsonValueKind.Object)
+                {
+                    result.PromptTokens = GetInt(usage, "prompt_tokens");
+                    result.CompletionTokens = GetInt(usage, "completion_tokens");
+                    result.TotalTokens = GetInt(usage, "total_tokens");
+                }
+
+                if (!root.TryGetProperty("choices", out var choices) || choices.ValueKind != JsonValueKind.Array)
+                    continue;
+
+                foreach (var choice in choices.EnumerateArray())
+                {
+                    if (!choice.TryGetProperty("delta", out var delta)) continue;
+                    var text = GetString(delta, "content") ?? GetString(delta, "reasoning_content") ?? "";
+                    if (text.Length == 0) continue;
+
+                    firstTokenAt ??= now;
+                    lastTokenAt = now;
+                    result.StreamEvents++;
+                }
+            }
+
+            result.TotalSeconds = stopwatch.Elapsed.TotalSeconds;
+            result.TtftSeconds = firstTokenAt;
+
+            var completionTokens = result.CompletionTokens > 0 ? result.CompletionTokens : result.StreamEvents;
+            if (firstTokenAt.HasValue && lastTokenAt > firstTokenAt.Value && completionTokens > 1)
+                result.DecodeTps = (completionTokens - 1) / (lastTokenAt - firstTokenAt.Value);
+
+            return result;
+        }
+        catch (OperationCanceledException)
+        {
+            result.Error = "测速已取消";
+            return result;
+        }
+        catch (Exception ex)
+        {
+            result.Error = ex.Message;
+            return result;
+        }
+    }
+
+    private static int GetInt(JsonElement obj, string name) =>
+        obj.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var i) ? i : 0;
+
+    private static string? GetString(JsonElement obj, string name) =>
+        obj.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+}

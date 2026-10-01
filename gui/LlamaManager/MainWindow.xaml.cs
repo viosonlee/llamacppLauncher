@@ -20,6 +20,7 @@ public partial class MainWindow : Window
     private int _updateCount;
     private bool _embeddingStarting;
     private bool _serverStarting;
+    private bool _speedTesting;
     private string? _lastLogText;
 
     public MainWindow()
@@ -191,6 +192,7 @@ public partial class MainWindow : Window
                             StopButton.Content = "■ 停止服务";
                             StopButton.IsEnabled = true;
                             OpenButton.IsEnabled = true;
+                            SpeedTestButton.IsEnabled = !_speedTesting;
                         }
                         else
                         {
@@ -209,6 +211,7 @@ public partial class MainWindow : Window
                             StopButton.Content = "■ 终止启动";
                             StopButton.IsEnabled = true;
                             OpenButton.IsEnabled = false;
+                            SpeedTestButton.IsEnabled = false;
                         }
 
                         if (LiveSpeedText != null)
@@ -245,6 +248,7 @@ public partial class MainWindow : Window
                 StopButton.Content = "■ 停止服务";
                 StopButton.IsEnabled = false;
                 OpenButton.IsEnabled = false;
+                SpeedTestButton.IsEnabled = false;
 
                 if (LiveSpeedText != null) LiveSpeedText.Text = "";
                 ProcessInfoText.Text = "进程: 无";
@@ -1110,6 +1114,75 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void SpeedTestButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (_speedTesting) return;
+
+            var running = ServerService.GetManagedProcess(_config) ?? ServerService.FindMainProcess(_config);
+            if (running == null)
+            {
+                MessageBox.Show("服务尚未启动，请先点击【启动服务】。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var port = ServerService.ParsePortFromArgs(_config.Args, _config.Port);
+            if (!ServerService.TestApiReady(port))
+            {
+                MessageBox.Show("服务正在加载模型中，尚未完全就绪，请稍候再测速。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            _speedTesting = true;
+            SpeedTestButton.IsEnabled = false;
+            SpeedTestButton.Content = "⏳ 测速中...";
+            LogService.Write($"开始测速 (端口 {port})：固定生成 256 tokens，测量首Token延迟与解码速度...");
+            RefreshLog();
+
+            var result = await SpeedTestService.RunAsync(port);
+
+            if (!result.Success)
+            {
+                LogService.Write($"测速失败: {result.Error}");
+                MessageBox.Show($"测速失败：{result.Error}", "测速", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            else
+            {
+                var ttft = result.TtftSeconds?.ToString("F3") ?? "N/A";
+                var decode = result.DecodeTps?.ToString("F2") ?? "N/A";
+
+                LogService.Write("=== 测速结果 ===");
+                LogService.Write($"模型              : {result.Model}");
+                LogService.Write($"Prompt tokens     : {result.PromptTokens}");
+                LogService.Write($"Completion tokens : {result.CompletionTokens}");
+                LogService.Write($"TTFT              : {ttft} s");
+                LogService.Write($"解码速度          : {decode} tok/s");
+                LogService.Write($"总耗时            : {result.TotalSeconds:F3} s");
+                LogService.Write($"流事件            : {result.StreamEvents}");
+
+                MessageBox.Show(
+                    $"模型: {result.Model}\n\n" +
+                    $"首 Token 延迟 (TTFT): {ttft} s\n" +
+                    $"解码速度: {decode} tok/s\n" +
+                    $"生成 tokens: {result.CompletionTokens} (提示 {result.PromptTokens})\n" +
+                    $"总耗时: {result.TotalSeconds:F3} s",
+                    "测速结果", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(ex.Message, "测速失败", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            _speedTesting = false;
+            SpeedTestButton.Content = "⚡ 测速";
+            RefreshLog();
+            RefreshStatus();
+        }
+    }
+
     private void StopButton_Click(object sender, RoutedEventArgs e)
     {
         _serverStarting = false;
@@ -1220,6 +1293,7 @@ public partial class MainWindow : Window
         StartButton.IsEnabled = enabled;
         StopButton.IsEnabled = enabled;
         OpenButton.IsEnabled = enabled;
+        SpeedTestButton.IsEnabled = enabled && !_speedTesting;
     }
 
     private void ClearLogButton_Click(object sender, RoutedEventArgs e)

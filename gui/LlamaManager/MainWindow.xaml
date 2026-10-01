@@ -466,6 +466,7 @@
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
 
                     <Button Grid.Column="0" x:Name="StartButton"
@@ -476,7 +477,11 @@
                             Margin="3,0,3,0" Padding="8,8" FontSize="13" IsEnabled="False"/>
                     <Button Grid.Column="2" x:Name="OpenButton"
                             Content="🌐 打开 Web UI" Click="OpenButton_Click"
-                            Margin="4,0,0,0" Padding="8,8" FontSize="13" IsEnabled="False"/>
+                            Margin="3,0,3,0" Padding="8,8" FontSize="13" IsEnabled="False"/>
+                    <Button Grid.Column="3" x:Name="SpeedTestButton"
+                            Content="⚡ 测速" Click="SpeedTestButton_Click"
+                            Margin="4,0,0,0" Padding="8,8" FontSize="13" IsEnabled="False"
+                            ToolTip="实测推理速度：首Token延迟(TTFT) 与解码速度(tok/s)"/>
                 </Grid>
 
                 <!-- Options Row: Auto-open Checkbox & API Status -->
