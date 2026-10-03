@@ -1,147 +1,82 @@
-using System.Diagnostics;
 using System.IO;
-using System.Management;
 using Microsoft.Win32;
+using LlamaManager.Models;
 
 namespace LlamaManager.Services;
 
 public static class AutostartService
 {
-    private const string TaskName = "LlamaCppModelServer";
-    private const string RunValueName = "LlamaCppModelServer";
-    private static readonly string StartupFilePath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.Startup),
-        "LlamaCppModelServer.cmd");
+    private const string Name = "LlamaCppModelServer";
+    private const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
+    private static readonly string StartupFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Startup), Name + ".cmd");
+    private static readonly string Schtasks = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "schtasks.exe");
+    private static readonly SemaphoreSlim Gate = new(1, 1);
+    private static (DateTime At, bool Enabled, string Text)? Cached;
 
-    public static bool IsEnabled() => HasRunEntry() || HasStartupFile() || HasScheduledTask();
-
-    public static bool IsPrimaryEnabled() => HasRunEntry() || HasStartupFile();
-
-    public static string GetStatusText()
+    public static async Task<(bool Enabled, string Text)> GetStatusAsync()
     {
+        await Gate.WaitAsync();
         try
         {
-            var runEntry = HasRunEntry();
-            var startupFile = HasStartupFile();
-            var task = HasScheduledTask();
-
-            if (runEntry && startupFile)
-                return task ? "已开启（注册表 + 启动文件 + 计划任务）" : "已开启（注册表 + 启动文件）";
-            if (runEntry)
-                return task ? "已开启（注册表 + 计划任务）" : "已开启（注册表）";
-            if (startupFile)
-                return task ? "已开启（启动文件 + 计划任务）" : "已开启（启动文件）";
-            if (task)
-                return "已开启（计划任务）";
-            return "已关闭";
+            if (Cached is { } cached && DateTime.UtcNow - cached.At < TimeSpan.FromSeconds(30)) return (cached.Enabled, cached.Text);
+            using var key = Registry.CurrentUser.OpenSubKey(RunKey);
+            var run = key?.GetValue(Name) is string { Length: > 0 };
+            var legacy = File.Exists(StartupFile) || await HasLegacyTaskAsync();
+            var text = legacy ? "已开启（有旧注册，重新开启可迁移）" : run ? "已开启（登录后启动）" : "已关闭";
+            Cached = (DateTime.UtcNow, run || legacy, text);
+            return (run || legacy, text);
         }
-        catch
+        catch (Exception ex) when (ex is IOException or OperationCanceledException or UnauthorizedAccessException)
         {
-            return "检测失败";
+            var enabled = Cached?.Enabled ?? false;
+            var text = "检测失败：" + ex.Message;
+            Cached = (DateTime.UtcNow, enabled, text);
+            return (enabled, text);
         }
+        finally { Gate.Release(); }
     }
 
-    public static void Enable(Models.ManagerConfig config)
+    public static string GetExecutablePath()
     {
-        if (string.IsNullOrEmpty(config.ModelPath) || !File.Exists(config.ModelPath))
-            throw new InvalidOperationException("开启自启动前请先选择有效模型。");
-
-        if (string.IsNullOrEmpty(config.Args))
-            config.Args = PresetService.GeneratePresetArgs(config.ModelPath, config.Port);
-
-        var psExe = FindPowerShellExe();
-        var scriptPath = FindScriptPath();
-
-        var runArgs = $"-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"{scriptPath}\" -Service";
-        var runCommand = $"\"{psExe}\" {runArgs}";
-
-        SetRunEntry(runCommand);
-        SetStartupFile(psExe, scriptPath);
-
-        config.AutoStartEnabled = IsPrimaryEnabled();
-        ConfigService.SaveConfig(config);
+        var current = Environment.ProcessPath;
+        if (current != null && Path.GetFileName(current).Equals("LlamaManager.exe", StringComparison.OrdinalIgnoreCase)) return current;
+        var published = Path.Combine(ConfigService.GetManagerRoot(), "dist", "LlamaManager.exe");
+        if (File.Exists(published)) return published;
+        throw new FileNotFoundException("请先发布应用到 dist 目录。", published);
     }
 
-    public static void Disable(Models.ManagerConfig config)
+    public static async Task EnableAsync(ManagerConfig config)
     {
-        RemoveRunEntry();
-        RemoveStartupFile();
-
-        config.AutoStartEnabled = IsPrimaryEnabled();
-        ConfigService.SaveConfig(config);
+        if (!File.Exists(config.ModelPath)) throw new FileNotFoundException("开启自启动前请先选择有效模型。");
+        var executable = GetExecutablePath();
+        using var key = Registry.CurrentUser.CreateSubKey(RunKey, writable: true);
+        key.SetValue(Name, LauncherArguments.Quote(executable) + " --service", RegistryValueKind.String);
+        await RemoveLegacyAsync();
+        config.AutoStartEnabled = true;
+        ConfigService.SaveAutostartSetting(true);
+        Cached = null;
     }
 
-    private static string FindScriptPath()
+    public static async Task DisableAsync(ManagerConfig config)
     {
-        return Path.Combine(ConfigService.GetManagerRoot(), "llama-manager.ps1");
+        await RemoveLegacyAsync();
+        using var key = Registry.CurrentUser.OpenSubKey(RunKey, writable: true);
+        key?.DeleteValue(Name, throwOnMissingValue: false);
+        config.AutoStartEnabled = false;
+        ConfigService.SaveAutostartSetting(false);
+        Cached = null;
     }
 
-    private static bool HasRunEntry()
+    private static async Task<bool> HasLegacyTaskAsync()
     {
-        try
-        {
-            using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", false);
-            var value = key?.GetValue(RunValueName);
-            return value != null && !string.IsNullOrEmpty(value.ToString());
-        }
-        catch { return false; }
+        try { await ProcessProbe.RunAsync(Schtasks, $"/Query /TN {Name} /FO CSV", TimeSpan.FromSeconds(3)); return true; }
+        catch (IOException) { return false; } // schtasks exits nonzero when the task does not exist
     }
 
-    private static void SetRunEntry(string command)
+    private static async Task RemoveLegacyAsync()
     {
-        using var key = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run");
-        key?.SetValue(RunValueName, command, RegistryValueKind.String);
-    }
-
-    private static void RemoveRunEntry()
-    {
-        try
-        {
-            using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", true);
-            key?.DeleteValue(RunValueName, false);
-        }
-        catch { }
-    }
-
-    private static bool HasStartupFile() => File.Exists(StartupFilePath);
-
-    private static void SetStartupFile(string psExe, string scriptPath)
-    {
-        var content = $"@echo off\r\nstart \"\" /min \"{psExe}\" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"{scriptPath}\" -Service";
-        File.WriteAllText(StartupFilePath, content, System.Text.Encoding.ASCII);
-    }
-
-    private static void RemoveStartupFile()
-    {
-        try { File.Delete(StartupFilePath); } catch { }
-    }
-
-    private static bool HasScheduledTask()
-    {
-        try
-        {
-            using var searcher = new ManagementObjectSearcher(
-                $"SELECT * FROM Win32_ScheduledTask WHERE Name = '{TaskName}'");
-            return searcher.Get().Count > 0;
-        }
-        catch { return false; }
-    }
-
-    private static string FindPowerShellExe()
-    {
-        var pathEnv = Environment.GetEnvironmentVariable("PATH") ?? "";
-        foreach (var dir in pathEnv.Split(';'))
-        {
-            if (string.IsNullOrEmpty(dir)) continue;
-            var fullPath = Path.Combine(dir.Trim(), "pwsh.exe");
-            if (File.Exists(fullPath)) return fullPath;
-        }
-        foreach (var dir in pathEnv.Split(';'))
-        {
-            if (string.IsNullOrEmpty(dir)) continue;
-            var fullPath = Path.Combine(dir.Trim(), "powershell.exe");
-            if (File.Exists(fullPath)) return fullPath;
-        }
-        return "powershell.exe";
+        // Only the exact legacy entries created by this launcher are migrated.
+        if (await HasLegacyTaskAsync()) await ProcessProbe.RunAsync(Schtasks, $"/Delete /TN {Name} /F", TimeSpan.FromSeconds(5));
+        if (File.Exists(StartupFile)) File.Delete(StartupFile);
     }
 }

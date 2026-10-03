@@ -1,5 +1,4 @@
 using System.IO;
-using System.Management;
 
 namespace LlamaManager.Services;
 
@@ -7,175 +6,41 @@ public static class PresetService
 {
     public static string GeneratePresetArgs(string modelPath, int port = 8080)
     {
-        if (!File.Exists(modelPath))
-            throw new FileNotFoundException($"未找到模型文件：{modelPath}");
-
-        var fileInfo = new FileInfo(modelPath);
-        var size = fileInfo.Length;
-        var threads = Math.Max(1, Environment.ProcessorCount <= 4 ? Environment.ProcessorCount : Environment.ProcessorCount - 2);
-        if (threads > 8) threads = 8;
-
-        if (ConfigService.IsPrismModel(modelPath))
-            return GeneratePrismArgs(port, threads);
-
-        var isMoE = Models.ModelInfo.DetectIsMoE(modelPath);
-
-        if (isMoE)
-            return GenerateMoEArgs(modelPath, port, threads, size);
-
-        return GenerateStandardArgs(port, threads, size);
+        var file = new FileInfo(modelPath);
+        if (!file.Exists) throw new FileNotFoundException("未找到模型文件。", modelPath);
+        // Device memory is a point-in-time measurement; refresh only for an explicit new preset.
+        CudaService.Invalidate();
+        return Plan(GgufService.TryRead(modelPath), file.Length, CudaService.Detect(modelPath), port);
     }
 
-    private static string GeneratePrismArgs(int port, int threads)
+    /// <summary>Conservative starting point. Fit, when supported, makes the final allocation decision.</summary>
+    public static string Plan(GgufMetadata? metadata, long bytes, CudaInfo device, int port = 8080)
     {
-        var cuda = CudaService.Detect();
-        var gpuArgs = cuda.Available ? "-ngl 48 --fit off" : "-ngl 0";
-        var parts = new List<string>
+        if (port is < 1 or > 65535) throw new ArgumentOutOfRangeException(nameof(port));
+        var threads = Math.Clamp(Environment.ProcessorCount - 2, 1, 8);
+        var context = metadata?.ContextLength > 0 ? Math.Min(4096, metadata.ContextLength) : 4096;
+        var layers = metadata?.LayerCount ?? 0;
+        var gpuLayers = 0;
+        if (device.Available)
         {
-            "--host 127.0.0.1",
-            $"--port {port}",
-            $"-t {threads}",
-            $"-tb {threads}",
-            "-c 16384",
-            "-np 1",
-            "-b 2048",
-            "-ub 512",
-            gpuArgs,
-            "--cache-prompt",
-            cuda.Available ? "--flash-attn on" : "",
-            "--jinja",
-            "--reasoning on",
-            "--reasoning-format deepseek",
-            "-ctk q4_0",
-            "-ctv q4_0",
-            "-v"
-        }.Where(s => !string.IsNullOrEmpty(s)).ToList();
-
-        return string.Join(" ", parts);
-    }
-
-    private static string GenerateMoEArgs(string modelPath, int port, int threads, long size)
-    {
-        var cuda = CudaService.Detect();
-        string gpuArgs;
-        if (cuda.Available)
-        {
-            var freeMb = cuda.FreeVramMb > 0 ? cuda.FreeVramMb : 5000;
-            var modelMb = (int)(size / (1024 * 1024));
-
-            // MoE 模型绝对不要使用 --fit on，因为 128 专家会触发多轮试探性全量显存分配，导致启动卡顿 30~60 秒！
-            // 采用直接指定 -ngl 并加上 --fit off，5 秒内闪电秒启且推理速度提升 10 倍以上：
-            if (modelMb <= freeMb - 400)
+            if (device.SupportsFit) gpuLayers = 999; // fit reduces layers/context as needed
+            else if (layers > 0 && device.FreeVramMb > 0)
             {
-                // 模型完全可以装入显存
-                gpuArgs = "-ngl all --fit off";
-            }
-            else
-            {
-                // 模型略超显存（如 Ling-3.0 5.37GB 在 6G 显卡），留出 400MB 空间计算可用层数
-                var usableMb = Math.Max(500, freeMb - 400);
-                var estimatedTotalLayers = 24; // Ling-3.0 等常见微型 MoE 为 24 层
-                var layersToOffload = Math.Clamp((int)Math.Round((double)usableMb / modelMb * estimatedTotalLayers), 1, 99);
-                gpuArgs = $"-ngl {layersToOffload} --fit off";
+                var headSize = metadata!.AttentionHeads > 0 ? metadata.EmbeddingLength / metadata.AttentionHeads : 128;
+                var kvHeads = metadata.KvHeads > 0 ? metadata.KvHeads : Math.Max(1, metadata.AttentionHeads);
+                var key = metadata.KeyLength > 0 ? metadata.KeyLength : headSize;
+                var value = metadata.ValueLength > 0 ? metadata.ValueLength : headSize;
+                // F16 KV + compute/display reserve. Hybrid architectures may need less; overestimate deliberately.
+                var kvMb = (double)context * layers * kvHeads * (key + value) * 2 / (1024 * 1024);
+                var available = Math.Max(0, device.FreeVramMb - 768 - kvMb);
+                var modelMb = Math.Max(1, bytes / (1024d * 1024));
+                gpuLayers = Math.Clamp((int)Math.Floor(available / modelMb * layers), 0, layers);
+                if (available >= modelMb * 1.1) gpuLayers = layers + 1;
             }
         }
-        else
-        {
-            gpuArgs = "-ngl 0";
-        }
-
-        var parts = new List<string>
-        {
-            "--host 127.0.0.1",
-            $"--port {port}",
-            $"-t {threads}",
-            $"-tb {threads}",
-            "-c 4096",
-            "-np 1",
-            "-b 2048",
-            "-ub 512",
-            gpuArgs,
-            "--cache-prompt",
-            cuda.Available ? "--flash-attn on" : "",
-            "--jinja",
-            "--reasoning on",
-            "--reasoning-format deepseek",
-            "--reasoning-budget 2048"
-        }.Where(s => !string.IsNullOrEmpty(s)).ToList();
-
-        return string.Join(" ", parts);
-    }
-
-    private static string GenerateStandardArgs(int port, int threads, long size)
-    {
-        int ctx, batch, ubatch;
-
-        long gb1 = 1024L * 1024 * 1024;
-        long gb3_5 = (long)(3.5 * 1024 * 1024 * 1024);
-        long gb5 = 5L * 1024 * 1024 * 1024;
-        long gb6 = 6L * 1024 * 1024 * 1024;
-
-        if (size <= gb1)
-        {
-            ctx = 40960; batch = 2048; ubatch = 512;
-        }
-        else if (size <= gb3_5)
-        {
-            ctx = 20480; batch = 2048; ubatch = 512;
-        }
-        else if (size <= gb5)
-        {
-            ctx = 10240; batch = 1024; ubatch = 512;
-        }
-        else if (size <= gb6)
-        {
-            ctx = 8192; batch = 1024; ubatch = 512;
-        }
-        else
-        {
-            ctx = 4096; batch = 512; ubatch = 256;
-        }
-
-        var cuda = CudaService.Detect();
-        var gpu = cuda.Available
-            ? (size <= gb5
-                ? "-ngl all --fit off"
-                : "-ngl auto --fit off")
-            : "-ngl 0";
-
-        var parts = new List<string>
-        {
-            "--host 127.0.0.1",
-            $"--port {port}",
-            $"-t {threads}",
-            $"-tb {threads}",
-            $"-c {ctx}",
-            "-np 1",
-            $"-b {batch}",
-            $"-ub {ubatch}",
-            gpu,
-            "--cache-prompt",
-            cuda.Available ? "--flash-attn on" : "",
-            "--jinja",
-            "--reasoning on",
-            "--reasoning-format deepseek"
-        }.Where(s => !string.IsNullOrEmpty(s)).ToList();
-
-        return string.Join(" ", parts);
-    }
-
-    private static long GetFreePhysicalMemory()
-    {
-        try
-        {
-            using var searcher = new System.Management.ManagementObjectSearcher(
-                "SELECT FreePhysicalMemory FROM Win32_OperatingSystem");
-            foreach (var obj in searcher.Get())
-            {
-                return Convert.ToInt64(obj["FreePhysicalMemory"]) * 1024;
-            }
-        }
-        catch { }
-        return 8L * 1024 * 1024 * 1024; // default 8GB
+        var args = $"--host 127.0.0.1 --port {port} -t {threads} -tb {threads} -c {context} -np 1 -b 512 -ub 128 -ngl {gpuLayers}";
+        if (device.Available && device.SupportsFit) args += " --fit on";
+        if (device.SupportsFlash) args += " -fa auto";
+        return args + " --jinja";
     }
 }

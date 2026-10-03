@@ -1,138 +1,79 @@
 using System.IO;
-using System.Text;
+using System.Text.RegularExpressions;
+using LlamaManager.Models;
 
 namespace LlamaManager.Services;
 
 public static class LogService
 {
+    private static readonly object Gate = new();
+    private static readonly Dictionary<string, IncrementalLogReader> Readers = new(StringComparer.OrdinalIgnoreCase);
     public static void Write(string message)
     {
-        try
+        lock (Gate)
         {
-            var line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} {message}";
-            File.AppendAllText(ConfigService.GetLogPath(), line + Environment.NewLine);
+            try { File.AppendAllText(ConfigService.GetLogPath(), $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} {message}{Environment.NewLine}"); }
+            catch (IOException) { /* A log error must not hide the original operation error. */ }
         }
-        catch
+    }
+
+    public static List<string> ReadFileTail(string path, int count = 500)
+    {
+        lock (Gate)
         {
-            // Silently ignore log write failures
+            if (!Readers.TryGetValue(path, out var reader)) Readers[path] = reader = new IncrementalLogReader();
+            try { return reader.Read(path).TakeLast(count).ToList(); }
+            catch (IOException) { return []; }
         }
     }
 
     public static List<string> ReadRecent(int count = 500)
     {
         var result = new List<string>();
-        AppendTail(result, ConfigService.GetLogPath(), count, "管理器");
-        AppendTail(result, ConfigService.GetMainStdoutPath(), count, "主服务输出");
-        AppendTail(result, ConfigService.GetMainStderrPath(), count, "主服务日志");
-        AppendTail(result, ConfigService.GetEmbeddingStdoutPath(), count, "嵌入服务输出");
-        AppendTail(result, ConfigService.GetEmbeddingStderrPath(), count, "嵌入服务日志");
+        var files = new[]
+        {
+            (ConfigService.GetLogPath(), "管理器"),
+            (ConfigService.GetMainStdoutPath(), "主服务输出"),
+            (ConfigService.GetMainStderrPath(), "主服务日志"),
+            (ConfigService.GetEmbeddingStdoutPath(), "嵌入服务输出"),
+            (ConfigService.GetEmbeddingStderrPath(), "嵌入服务日志")
+        };
+        foreach (var (path, title) in files)
+        {
+            var lines = ReadFileTail(path, Math.Max(1, count / files.Length));
+            if (lines.Count == 0) continue;
+            result.Add($"──── {title} ────");
+            result.AddRange(lines);
+        }
         return result;
     }
 
-    private static void AppendTail(List<string> result, string path, int maxLines, string title)
+    private static ServerSession? _gpuSession;
+    private static string _gpuSummary = "";
+
+    public static string GetGpuSummary(ServerSession session)
     {
-        if (!File.Exists(path))
-            return;
-
-        try
+        lock (Gate)
         {
-            var lines = ReadTailLines(path, maxLines);
-            if (lines.Count == 0)
-                return;
-
-            if (result.Count > 0)
-                result.Add($"──── {title} ────");
-            result.AddRange(lines);
-        }
-        catch
-        {
+            if (_gpuSession != session) { _gpuSession = session; _gpuSummary = ""; }
+            var parsed = ParseGpuSummary(ReadFileTail(ConfigService.GetMainStdoutPath()).Concat(ReadFileTail(ConfigService.GetMainStderrPath())));
+            if (parsed.Length > 0) _gpuSummary = parsed;
+            return _gpuSummary;
         }
     }
 
-    private static List<string> ReadTailLines(string path, int maxLines)
+    public static string ParseGpuSummary(IEnumerable<string> lines)
     {
-        var lines = new List<string>();
-        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-        var length = fs.Length;
-        if (length == 0)
-            return lines;
-
-        const int maxBytes = 1024 * 1024;
-        var bytesToRead = Math.Min(length, (long)maxBytes);
-        fs.Seek(length - bytesToRead, SeekOrigin.Begin);
-
-        using var reader = new StreamReader(fs, Encoding.UTF8, detectEncodingFromByteOrderMarks: true,
-            bufferSize: 4096, leaveOpen: true);
-        var content = reader.ReadToEnd();
-        var rawLines = content.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-
-        var start = bytesToRead < length ? 1 : 0;
-        for (int i = start; i < rawLines.Length; i++)
+        string offload = "", gpu = "", cpu = "";
+        foreach (var line in lines)
         {
-            var cleaned = StripAnsi(rawLines[i]);
-            if (!IsNoiseLog(cleaned))
-                lines.Add(cleaned);
+            var match = Regex.Match(line, @"offloaded\s+(\d+/\d+)\s+layers");
+            if (match.Success) offload = $"卸载 {match.Groups[1].Value} 层";
+            match = Regex.Match(line, @"CUDA\d+\s+model buffer size\s*=\s*([\d.]+)\s*MiB");
+            if (match.Success) gpu = $"GPU 权重 {match.Groups[1].Value} MiB";
+            match = Regex.Match(line, @"CPU(?:_Mapped)?\s+model buffer size\s*=\s*([\d.]+)\s*MiB");
+            if (match.Success) cpu = $"CPU 权重 {match.Groups[1].Value} MiB";
         }
-
-        return lines.Skip(Math.Max(0, lines.Count - maxLines)).ToList();
-    }
-
-    private static bool IsNoiseLog(string line)
-    {
-        if (line.Contains("CUDA Graph id") && line.Contains("reused")) return true;
-        if (line.Contains("set_adapters_lora")) return true;
-        if (line.Contains("adapters_lora_are_same")) return true;
-        if (line.Contains("set_embeddings:")) return true;
-        if (line.Contains("res          send: task id")) return true;
-        if (line.Contains("res          send: sending result")) return true;
-        if (line.Contains("que    start_loop:")) return true;
-        if (line.Contains("que          post: new task")) return true;
-        if (line.Contains("srv  update_slots: posting NEXT_RESPONSE")) return true;
-        if (line.Contains("slot handle_last_:")) return true;
-        if (line.Contains("streamed chunk: data: {\"choices\"")) return true;
-        return false;
-    }
-
-    public static string GetSpeedSummary()
-    {
-        try
-        {
-            var path = ConfigService.GetMainStderrPath();
-            if (!File.Exists(path)) return "";
-
-            var lines = ReadTailLines(path, 150);
-            if (lines.Count == 0) return "";
-
-            // 1. Check for recent completion timing
-            for (int i = lines.Count - 1; i >= 0; i--)
-            {
-                var line = lines[i];
-                var mEval = System.Text.RegularExpressions.Regex.Match(line, @"eval time\s*=\s*[\d\.]+\s*ms\s*/\s*\d+\s*tokens\s*\([^\)]*?([\d\.]+)\s*tokens per second\)");
-                if (mEval.Success)
-                    return $" | ⚡ 上次生成速度: {mEval.Groups[1].Value} t/s";
-
-                var mPrefill = System.Text.RegularExpressions.Regex.Match(line, @"prompt processing.*?([\d\.]+)\s*tokens per second");
-                if (mPrefill.Success)
-                    return $" | ⚡ 提示词处理中: {mPrefill.Groups[1].Value} t/s";
-
-                var mDecoded = System.Text.RegularExpressions.Regex.Match(line, @"slot process_toke.*?n_decoded\s*=\s*(\d+)");
-                if (mDecoded.Success)
-                    return $" | ⚡ 正在生成 Token: 已生成 {mDecoded.Groups[1].Value} tok";
-            }
-        }
-        catch { }
-        return "";
-    }
-
-    private static string StripAnsi(string line)
-    {
-        try
-        {
-            return System.Text.RegularExpressions.Regex.Replace(line, @"\x1b\[[0-9;?]*[A-Za-z]", "");
-        }
-        catch
-        {
-            return line;
-        }
+        return string.Join(" · ", new[] { offload, gpu, cpu }.Where(s => s.Length > 0));
     }
 }

@@ -4,6 +4,8 @@ namespace LlamaManager.Models;
 
 public class ManagerConfig
 {
+    public ServerSession? RunningServer { get; set; }
+    public ServerSession? RunningEmbedding { get; set; }
     [JsonPropertyName("ModelPath")]
     public string ModelPath { get; set; } = string.Empty;
 

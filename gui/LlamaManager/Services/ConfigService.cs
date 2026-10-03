@@ -1,5 +1,4 @@
 using System.IO;
-using System.Text.Json;
 using LlamaManager.Models;
 
 namespace LlamaManager.Services;
@@ -10,13 +9,16 @@ public static class ConfigService
     private static readonly string LlamaCppRoot;
     private static readonly string LogsDir;
     private static readonly string ConfigPath;
+    private static readonly ConfigStore Store;
+    public static string? RecoveryWarning => Store.RecoveryWarning;
 
     static ConfigService()
     {
         var exeDir = AppDomain.CurrentDomain.BaseDirectory
             .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 
-        ManagerRoot = FindParentWithFile(exeDir, "llama-manager.ps1", maxDepth: 8) ?? exeDir;
+        ManagerRoot = Environment.GetEnvironmentVariable("LLAMA_MANAGER_ROOT") is { Length: > 0 } root
+            ? Path.GetFullPath(root) : FindParentWithFile(exeDir, "llama-manager.ps1", maxDepth: 8) ?? exeDir;
 
         LlamaCppRoot = FindParentWithFile(ManagerRoot, "llama-server.exe", maxDepth: 4)
                     ?? FindParentWithFile(exeDir, "llama-server.exe", maxDepth: 4)
@@ -26,6 +28,7 @@ public static class ConfigService
         Directory.CreateDirectory(LogsDir);
 
         ConfigPath = Path.Combine(ManagerRoot, "llama-manager.config.json");
+        Store = new ConfigStore(ConfigPath);
     }
 
     private static string? FindParentWithFile(string startDir, string targetFile, int maxDepth)
@@ -52,6 +55,7 @@ public static class ConfigService
     public static bool IsPrismModel(string? modelPath)
     {
         if (string.IsNullOrEmpty(modelPath)) return false;
+        if (GgufService.TryRead(modelPath) is { } metadata) return metadata.RequiresPrism;
         var name = Path.GetFileName(modelPath);
         return System.Text.RegularExpressions.Regex.IsMatch(name, @"bonsai|ptq|ternary", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
     }
@@ -72,41 +76,69 @@ public static class ConfigService
     public static string GetEmbeddingStdoutPath() => Path.Combine(LogsDir, "llama-server-embedding.stdout.log");
     public static string GetEmbeddingStderrPath() => Path.Combine(LogsDir, "llama-server-embedding.stderr.log");
 
-    public static ManagerConfig ReadConfig()
-    {
-        if (!File.Exists(ConfigPath))
-            return new ManagerConfig { CreatedAt = DateTime.Now.ToString("o") };
+    public static ManagerConfig ReadConfig() => Store.Read();
 
-        try
-        {
-            var json = File.ReadAllText(ConfigPath);
-            var config = JsonSerializer.Deserialize<ManagerConfig>(json);
-            config ??= new ManagerConfig();
-            config.ModelPresets ??= [];
-            return config;
-        }
-        catch
-        {
-            return new ManagerConfig();
-        }
-    }
-
+    // Settings transactions deliberately preserve the independently persisted running sessions.
     public static void SaveConfig(ManagerConfig config)
     {
-        try
+        Store.Update(latest =>
         {
-            if (string.IsNullOrEmpty(config.CreatedAt))
-                config.CreatedAt = DateTime.Now.ToString("o");
-            config.UpdatedAt = DateTime.Now.ToString("o");
-
-            // Save current model's preset
-            SaveModelPreset(config, config.ModelPath, config.Args, config.Port);
-
-            var json = JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true });
-            File.WriteAllText(ConfigPath, json);
-        }
-        catch { }
+            latest.ModelPath = config.ModelPath;
+            latest.ModelsDirectory = config.ModelsDirectory;
+            latest.Args = config.Args;
+            latest.Port = config.Port;
+            latest.ModelPresets = config.ModelPresets;
+            latest.AutoOpenBrowser = config.AutoOpenBrowser;
+            latest.EmbeddingModelPath = config.EmbeddingModelPath;
+            latest.EmbeddingPort = config.EmbeddingPort;
+            if (string.IsNullOrEmpty(latest.CreatedAt)) latest.CreatedAt = DateTime.Now.ToString("o");
+            latest.UpdatedAt = DateTime.Now.ToString("o");
+        });
     }
+
+    public static void SaveSession(ManagerConfig config, ServerSession? session, bool embedding = false)
+    {
+        void Assign(ManagerConfig target)
+        {
+            var started = session == null ? "" : new DateTime(session.StartTimeUtcTicks, DateTimeKind.Utc).ToString("o");
+            if (embedding)
+            {
+                target.RunningEmbedding = session;
+                target.EmbeddingLastPid = session?.ProcessId ?? 0;
+                target.EmbeddingLastStartedAt = started;
+            }
+            else
+            {
+                target.RunningServer = session;
+                target.LastPid = session?.ProcessId ?? 0;
+                target.LastStartedAt = started;
+            }
+        }
+        Store.Update(Assign);
+        Assign(config);
+    }
+
+    public static bool MigrateSession(ManagerConfig config, ServerSession session)
+    {
+        var migrated = false;
+        Store.Update(latest =>
+        {
+            var current = session.Embedding ? latest.RunningEmbedding : latest.RunningServer;
+            var pid = session.Embedding ? latest.EmbeddingLastPid : latest.LastPid;
+            if (current != null || pid != session.ProcessId) return;
+            if (session.Embedding) latest.RunningEmbedding = session;
+            else latest.RunningServer = session;
+            migrated = true;
+        });
+        if (migrated)
+        {
+            if (session.Embedding) config.RunningEmbedding = session;
+            else config.RunningServer = session;
+        }
+        return migrated;
+    }
+
+    public static void SaveAutostartSetting(bool enabled) => Store.Update(latest => latest.AutoStartEnabled = enabled);
 
     public static ModelPreset? GetModelPreset(ManagerConfig config, string modelPath)
     {
@@ -116,7 +148,7 @@ public static class ConfigService
             return preset;
 
         // 路径未命中：尝试把孤儿预设（原文件已移动/改名）重绑定到该模型
-        if (RebindOrphanPresets(config, [modelPath], save: true) > 0
+        if (RebindOrphanPresets(config, [modelPath], save: false) > 0
             && config.ModelPresets.TryGetValue(key, out preset))
             return preset;
 
@@ -175,6 +207,9 @@ public static class ConfigService
             foreach (var kv in orphans)
             {
                 if (!config.ModelPresets.ContainsKey(kv.Key)) continue; // 已被其他模型占用（已迁走）
+                if (string.IsNullOrEmpty(kv.Value.Signature) &&
+                    models.Count(m => string.Equals(Path.GetFileName(m), Path.GetFileName(kv.Key), StringComparison.OrdinalIgnoreCase)) != 1)
+                    continue;
                 var score = ScoreOrphan(kv.Key, kv.Value, model, sig);
                 if (score > bestScore
                     || (score == bestScore && score > 0
@@ -191,6 +226,7 @@ public static class ConfigService
             config.ModelPresets.Remove(bestKey);
             bestPreset.Signature = FileSignature.Compute(model) ?? bestPreset.Signature;
             config.ModelPresets[targetKey] = bestPreset;
+            if (PathIdentity.Equals(config.ModelPath, bestKey)) config.ModelPath = model;
             moved++;
             LogService.Write($"检测到模型文件变更，已恢复预设: {Path.GetFileName(model)}");
         }
@@ -212,13 +248,15 @@ public static class ConfigService
 
         if ((moved > 0 || upgraded > 0) && save)
         {
-            try { SaveConfig(config); } catch { }
+            SaveConfig(config);
         }
         return moved;
     }
 
     private static int ScoreOrphan(string orphanKey, ModelPreset preset, string modelPath, string? signature)
     {
+        if (!string.IsNullOrEmpty(preset.Signature) && signature != null &&
+            !string.Equals(preset.Signature, signature, StringComparison.Ordinal)) return -1;
         var nameScore = 0;
         if (!string.IsNullOrEmpty(preset.Signature)
             && signature != null

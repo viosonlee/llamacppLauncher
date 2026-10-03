@@ -6,7 +6,7 @@ namespace LlamaManager.Services;
 
 /// <summary>
 /// 便宜的文件签名：长度 + 头/尾各 1MB 的 SHA256。
-/// 比全文件 hash 快几个数量级（大文件约 &lt;50ms），足以在移动、改名、换盘符后识别同一个文件。
+/// 用于快速匹配移动后的文件；不是全文件完整性校验。
 /// </summary>
 public static class FileSignature
 {
@@ -57,7 +57,7 @@ public static class FileSignature
         while (remaining > 0)
         {
             var read = fs.Read(buf, 0, (int)Math.Min(buf.Length, remaining));
-            if (read <= 0) break;
+            if (read <= 0) throw new EndOfStreamException("签名计算过程中模型文件被截断。");
             sha.TransformBlock(buf, 0, read, null, 0);
             remaining -= read;
         }

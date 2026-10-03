@@ -28,6 +28,7 @@ public static class SpeedTestService
         public int CompletionTokens { get; set; }
         public int TotalTokens { get; set; }
         public int StreamEvents { get; set; }
+        public bool HasUsage { get; set; }
         public double? TtftSeconds { get; set; }
         public double? DecodeTps { get; set; }
         public double TotalSeconds { get; set; }
@@ -38,7 +39,7 @@ public static class SpeedTestService
     public static async Task<Result> RunAsync(int port, CancellationToken ct = default)
     {
         var result = new Result();
-        var stopwatch = Stopwatch.StartNew();
+        var stopwatch = new Stopwatch();
 
         try
         {
@@ -78,6 +79,7 @@ public static class SpeedTestService
                 Content = new StringContent(payload, Encoding.UTF8, "application/json")
             };
 
+            stopwatch.Start();
             using var chatResp = await Http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
             chatResp.EnsureSuccessStatusCode();
 
@@ -102,6 +104,7 @@ public static class SpeedTestService
 
                 if (root.TryGetProperty("usage", out var usage) && usage.ValueKind == JsonValueKind.Object)
                 {
+                    result.HasUsage = usage.TryGetProperty("completion_tokens", out _);
                     result.PromptTokens = GetInt(usage, "prompt_tokens");
                     result.CompletionTokens = GetInt(usage, "completion_tokens");
                     result.TotalTokens = GetInt(usage, "total_tokens");
@@ -113,7 +116,7 @@ public static class SpeedTestService
                 foreach (var choice in choices.EnumerateArray())
                 {
                     if (!choice.TryGetProperty("delta", out var delta)) continue;
-                    var text = GetString(delta, "content") ?? GetString(delta, "reasoning_content") ?? "";
+                    var text = (GetString(delta, "content") ?? "") + (GetString(delta, "reasoning_content") ?? "");
                     if (text.Length == 0) continue;
 
                     firstTokenAt ??= now;
@@ -125,9 +128,10 @@ public static class SpeedTestService
             result.TotalSeconds = stopwatch.Elapsed.TotalSeconds;
             result.TtftSeconds = firstTokenAt;
 
-            var completionTokens = result.CompletionTokens > 0 ? result.CompletionTokens : result.StreamEvents;
-            if (firstTokenAt.HasValue && lastTokenAt > firstTokenAt.Value && completionTokens > 1)
-                result.DecodeTps = (completionTokens - 1) / (lastTokenAt - firstTokenAt.Value);
+            // SSE events can contain several tokens. Only report throughput from server token counts.
+            if (result.HasUsage && firstTokenAt.HasValue && lastTokenAt > firstTokenAt.Value && result.CompletionTokens > 1)
+                result.DecodeTps = (result.CompletionTokens - 1) / (lastTokenAt - firstTokenAt.Value);
+            if (!firstTokenAt.HasValue) result.Error = "服务未返回生成内容。";
 
             return result;
         }

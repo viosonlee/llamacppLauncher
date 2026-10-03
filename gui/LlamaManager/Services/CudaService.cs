@@ -1,72 +1,57 @@
-using System.Diagnostics;
+using System.Collections.Concurrent;
 using System.IO;
 using System.Text.RegularExpressions;
 
 namespace LlamaManager.Services;
 
-public class CudaInfo
+public sealed record CudaInfo
 {
-    public bool Available { get; set; }
-    public string Text { get; set; } = string.Empty;
-    public int TotalVramMb { get; set; }
-    public int FreeVramMb { get; set; }
-
-    public void Deconstruct(out bool available, out string text)
-    {
-        available = Available;
-        text = Text;
-    }
+    public bool Available { get; init; }
+    public string Text { get; init; } = "";
+    public int TotalVramMb { get; init; }
+    public int FreeVramMb { get; init; }
+    public bool SupportsFit { get; init; }
+    public bool SupportsFlash { get; init; }
+    public DateTime DetectedAtUtc { get; init; } = DateTime.UtcNow;
 }
 
 public static class CudaService
 {
-    public static CudaInfo Detect()
-    {
-        var serverPath = ConfigService.GetLlamaServerPath();
-        if (!File.Exists(serverPath))
-            return new CudaInfo { Available = false, Text = "未找到 llama-server.exe。" };
+    private static readonly ConcurrentDictionary<string, Lazy<Task<CudaInfo>>> Cache = new();
 
+    public static void Invalidate() => Cache.Clear();
+
+    public static Task<CudaInfo> DetectAsync(string? modelPath = null)
+    {
+        var engine = ConfigService.GetLlamaServerPath(modelPath);
+        var file = new FileInfo(engine);
+        var key = PathIdentity.Normalize(engine) + "|" + (file.Exists ? file.LastWriteTimeUtc.Ticks : 0);
+        return Cache.GetOrAdd(key, _ => new Lazy<Task<CudaInfo>>(() => ProbeAsync(engine))).Value;
+    }
+
+    // Used only in the background preset builder and command-line path.
+    public static CudaInfo Detect(string? modelPath = null) => DetectAsync(modelPath).GetAwaiter().GetResult();
+
+    private static async Task<CudaInfo> ProbeAsync(string engine)
+    {
         try
         {
-            var psi = new ProcessStartInfo
-            {
-                FileName = serverPath,
-                Arguments = "--list-devices",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-
-            using var process = Process.Start(psi);
-            if (process == null)
-                return new CudaInfo { Available = false, Text = "无法启动 llama-server.exe。" };
-
-            var output = process.StandardOutput.ReadToEnd();
-            process.WaitForExit(5000);
-
-            var text = output.Trim();
-            var available = Regex.IsMatch(text, @"CUDA\d+:");
-
-            int totalVram = 0, freeVram = 0;
-            var match = Regex.Match(text, @"CUDA\d+:\s*(?<name>[^\(]+)\s*\((?<total>\d+)\s*MiB,\s*(?<free>\d+)\s*MiB\s+free\)", RegexOptions.IgnoreCase);
-            if (match.Success)
-            {
-                _ = int.TryParse(match.Groups["total"].Value, out totalVram);
-                _ = int.TryParse(match.Groups["free"].Value, out freeVram);
-            }
-
-            return new CudaInfo
-            {
-                Available = available,
-                Text = string.IsNullOrEmpty(text) ? "无 CUDA 设备信息。" : text,
-                TotalVramMb = totalVram,
-                FreeVramMb = freeVram
-            };
+            var output = await ProcessProbe.RunAsync(engine, "--list-devices", TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+            var help = await ProcessProbe.RunAsync(engine, "--help", TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+            return Parse(output) with { SupportsFit = help.Contains("--fit "), SupportsFlash = help.Contains("--flash-attn") };
         }
-        catch (Exception ex)
+        catch (Exception ex) { return new CudaInfo { Text = "检测失败：" + ex.Message }; }
+    }
+
+    public static CudaInfo Parse(string text)
+    {
+        var match = Regex.Match(text, @"CUDA\d+:\s*[^\r\n(]+\((?<total>\d+)\s*MiB,\s*(?<free>\d+)\s*MiB\s+free\)", RegexOptions.IgnoreCase);
+        return new CudaInfo
         {
-            return new CudaInfo { Available = false, Text = ex.Message };
-        }
+            Available = Regex.IsMatch(text, @"CUDA\d+:"),
+            Text = string.IsNullOrWhiteSpace(text) ? "无 CUDA 设备信息。" : text.Trim(),
+            TotalVramMb = match.Success ? int.Parse(match.Groups["total"].Value) : 0,
+            FreeVramMb = match.Success ? int.Parse(match.Groups["free"].Value) : 0
+        };
     }
 }

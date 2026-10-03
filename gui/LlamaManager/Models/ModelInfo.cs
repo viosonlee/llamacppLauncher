@@ -44,32 +44,6 @@ public class ModelInfo
         _ => "XL (>12GB)"
     };
 
-    /// <summary>Recommended context length based on model size.</summary>
-    public int RecommendedContext => SizeBytes switch
-    {
-        < 2L << 30 => 40960,
-        < 6L << 30 => 20480,
-        < 12L << 30 => 10240,
-        _ => 8192
-    };
-
-    /// <summary>Recommended batch size.</summary>
-    public int RecommendedBatch => SizeBytes switch
-    {
-        < 2L << 30 => 2048,
-        < 6L << 30 => 1536,
-        _ => 1024
-    };
-
-    /// <summary>Recommended ubatch size (always 512).</summary>
-    public int RecommendedUBatch => 512;
-
-    /// <summary>Whether full GPU offload is feasible (within ~5GB VRAM limit on typical 6GB card).</summary>
-    public bool CanFullOffload => SizeBytes <= (long)(5.0 * 1024 * 1024 * 1024);
-
-    /// <summary>Recommended -ngl value.</summary>
-    public string RecommendedNgl => CanFullOffload ? "all" : "auto";
-
     private static string FormatBytes(long bytes)
     {
         if (bytes >= 1L << 30)

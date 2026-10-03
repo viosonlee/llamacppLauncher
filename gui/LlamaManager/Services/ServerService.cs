@@ -1,551 +1,232 @@
 using System.Diagnostics;
 using System.IO;
-using System.Linq;
 using System.Management;
 using System.Net.Http;
-using System.Text.RegularExpressions;
+using LlamaManager.Models;
 
 namespace LlamaManager.Services;
 
 public static class ServerService
 {
-    private static readonly object _logLock = new object();
-    private const string EmbeddingArgs = "--host 127.0.0.1 --port 8081 --embedding -ngl 0 -c 8192 -b 4096";
-    private const string BgeM3Filename = "bge-m3-q8_0.gguf";
-    private const int EmbeddingPort = 8081;
+    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(2) };
 
-    // ─── Main Model Server ───
-
-    public static bool IsRunning(Models.ManagerConfig config)
+    // Lock only the spawn/persist or stop/persist transaction, never the readiness wait.
+    private static async Task<FileStream> LockLifecycle(bool embedding, CancellationToken ct)
     {
-        return GetManagedProcess(config) != null;
+        var path = Path.Combine(ConfigService.GetManagerRoot(), "logs", embedding ? "embedding.lock" : "server.lock");
+        var deadline = DateTime.UtcNow.AddSeconds(15);
+        while (true)
+        {
+            ct.ThrowIfCancellationRequested();
+            try { return new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
+            catch (IOException) when (DateTime.UtcNow < deadline) { await Task.Delay(100, ct).ConfigureAwait(false); }
+        }
     }
 
-    public static Process? GetManagedProcess(Models.ManagerConfig config)
+    public static bool IsRunning(ManagerConfig config)
     {
-        if (config.LastPid <= 0)
-            return null;
+        using var process = GetManagedProcess(config);
+        return process != null;
+    }
 
+    public static Process? GetManagedProcess(ManagerConfig config) => GetProcess(config, false);
+    public static Process? GetEmbeddingProcess(ManagerConfig config) => GetProcess(config, true);
+    public static Process? FindMainProcess(ManagerConfig config) => GetManagedProcess(config);
+    public static Process? FindEmbeddingProcess(ManagerConfig config) => GetEmbeddingProcess(config);
+
+    private static Process? GetProcess(ManagerConfig config, bool embedding)
+    {
+        var latest = ConfigService.ReadConfig();
+        if (embedding) { config.RunningEmbedding = latest.RunningEmbedding; config.EmbeddingLastPid = latest.EmbeddingLastPid; }
+        else { config.RunningServer = latest.RunningServer; config.LastPid = latest.LastPid; }
+        var session = embedding ? latest.RunningEmbedding : latest.RunningServer;
+        if (session != null) return ValidateProcess(session);
+        // Migrate only the recorded PID. Never adopt arbitrary processes merely sharing a port.
+        return RecoverLegacy(config, latest, embedding);
+    }
+
+    public static Process? ValidateProcess(ServerSession session)
+    {
+        Process? process = null;
         try
         {
-            var process = Process.GetProcessById(config.LastPid);
-            if (process.ProcessName != "llama-server")
-                return null;
-
-            var expected = Path.GetFullPath(ConfigService.GetLlamaServerPath(config.ModelPath));
-            if (!string.IsNullOrEmpty(process.MainModule?.FileName))
-            {
-                var actual = Path.GetFullPath(process.MainModule.FileName);
-                if (!actual.Equals(expected, StringComparison.OrdinalIgnoreCase))
-                    return null;
-            }
-
-            var cmdLine = GetProcessCommandLine(process.Id);
-            if (string.IsNullOrEmpty(cmdLine))
-                return null;
-
-            var port = ParsePortFromArgs(config.Args, config.Port);
-            if (!Regex.IsMatch(cmdLine, $@"(?:^|\s)--port\s+{port}\b"))
-                return null;
-
-            if (cmdLine.Contains("--embedding", StringComparison.OrdinalIgnoreCase))
-                return null;
-
-            return process;
+            process = Process.GetProcessById(session.ProcessId);
+            if (!process.HasExited && process.StartTime.ToUniversalTime().Ticks == session.StartTimeUtcTicks &&
+                PathIdentity.Equals(process.MainModule?.FileName, session.EnginePath))
+                return process;
         }
-        catch
-        {
-            return null;
-        }
-    }
-
-    /// <summary>Discover main server by scanning llama-server processes matching our path and port 8080.</summary>
-    public static Process? FindMainProcess(Models.ManagerConfig config)
-    {
-        var expectedPath = Path.GetFullPath(ConfigService.GetLlamaServerPath(config.ModelPath));
-        var candidates = Process.GetProcessesByName("llama-server");
-        foreach (var p in candidates)
-        {
-            try
-            {
-                if (!Path.GetFullPath(p.MainModule?.FileName ?? "").Equals(expectedPath, StringComparison.OrdinalIgnoreCase))
-                    continue;
-
-                var cmdLine = GetProcessCommandLine(p.Id);
-                if (cmdLine == null)
-                    continue;
-
-                // Must match port from config args, not any port
-                var port = ParsePortFromArgs(config.Args, config.Port);
-                if (!Regex.IsMatch(cmdLine, $@"(?:^|\s)--port\s+{port}\b"))
-                    continue;
-
-                if (cmdLine.Contains("--embedding", StringComparison.OrdinalIgnoreCase))
-                    continue;
-
-                config.LastPid = p.Id;
-                ConfigService.SaveConfig(config);
-                return p;
-            }
-            catch { }
-        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) { }
+        process?.Dispose();
         return null;
     }
 
-    public static bool TestPortInUse(int port)
+    private static Process? RecoverLegacy(ManagerConfig config, ManagerConfig latest, bool embedding)
     {
+        var pid = embedding ? latest.EmbeddingLastPid : latest.LastPid;
+        var started = embedding ? latest.EmbeddingLastStartedAt : latest.LastStartedAt;
+        if (pid <= 0 || !DateTime.TryParse(started, out var recorded)) return null;
+        Process? process = null;
         try
         {
-            var listeners = System.Net.NetworkInformation.IPGlobalProperties.GetIPGlobalProperties()
-                .GetActiveTcpListeners();
-            return listeners.Any(l => l.Port == port);
+            process = Process.GetProcessById(pid);
+            var engine = process.MainModule?.FileName ?? "";
+            var expected = ConfigService.GetLlamaServerPath();
+            if (!PathIdentity.Equals(engine, expected) && !PathIdentity.Equals(engine, ConfigService.GetPrismServerPath())) return null;
+            // Older configs stored wall-clock launch time rather than the OS process creation timestamp.
+            if (Math.Abs((process.StartTime.ToUniversalTime() - recorded.ToUniversalTime()).TotalSeconds) > 10) return null;
+            using var search = new ManagementObjectSearcher($"SELECT CommandLine FROM Win32_Process WHERE ProcessId = {pid}");
+            using var rows = search.Get();
+            foreach (ManagementObject row in rows)
+            {
+                using (row)
+                {
+                    var args = new LauncherArguments(row["CommandLine"]?.ToString());
+                    var model = args.Get("-m");
+                    if (string.IsNullOrEmpty(model) || args.Has("--embedding") != embedding) continue;
+                    var session = new ServerSession
+                    {
+                        ProcessId = pid, StartTimeUtcTicks = process.StartTime.ToUniversalTime().Ticks,
+                        EnginePath = engine, ModelPath = model, Args = string.Join(" ", args.Values.Skip(1).Select(LauncherArguments.Quote)),
+                        Port = args.GetPort(embedding ? 8081 : 8080), Embedding = embedding
+                    };
+                    if (!ConfigService.MigrateSession(config, session)) return null;
+                    var result = process;
+                    process = null;
+                    return result;
+                }
+            }
         }
-        catch
-        {
-            return false;
-        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception or ManagementException) { }
+        finally { process?.Dispose(); }
+        return null;
     }
 
-    public static bool TestApiReady(int port)
+    public static bool TestPortInUse(int port) =>
+        System.Net.NetworkInformation.IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpListeners().Any(l => l.Port == port);
+
+    public static async Task<bool> TestApiReadyAsync(int port, CancellationToken ct = default)
     {
         try
         {
-            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(1) };
-            var response = client.GetAsync($"http://127.0.0.1:{port}/health").Result;
-            if (response.IsSuccessStatusCode) return true;
-        }
-        catch { }
-
-        try
-        {
-            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
-            var response = client.GetAsync($"http://127.0.0.1:{port}/v1/models").Result;
+            using var response = await Http.GetAsync($"http://127.0.0.1:{port}/health", ct).ConfigureAwait(false);
             return response.IsSuccessStatusCode;
         }
-        catch
-        {
-            return false;
-        }
+        catch (HttpRequestException) { return false; }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return false; }
     }
 
-    public static async Task<bool> StartAsync(Models.ManagerConfig config, bool openBrowser = false, Action<string>? log = null)
-    {
-        if (string.IsNullOrEmpty(config.ModelPath) || !File.Exists(config.ModelPath))
-            throw new InvalidOperationException("未选择有效模型。");
+    public static int GetRunningPort(ManagerConfig config) => config.RunningServer?.Port ?? ParsePortFromArgs(config.Args, config.Port);
+    public static int ParsePortFromArgs(string args, int fallback = 8080) => new LauncherArguments(args).GetPort(fallback);
 
-        if (ConfigService.IsPrismModel(config.ModelPath) && !ConfigService.HasPrismServer())
+    public static Task<bool> StartAsync(ManagerConfig config, bool openBrowser = false, Action<string>? log = null, CancellationToken ct = default)
+        => StartCoreAsync(config, false, openBrowser, log, ct);
+
+    public static Task<bool> StartEmbeddingAsync(ManagerConfig config, Action<string>? log = null, CancellationToken ct = default)
+        => StartCoreAsync(config, true, false, log, ct);
+
+    private static async Task<bool> StartCoreAsync(ManagerConfig config, bool embedding, bool openBrowser, Action<string>? log, CancellationToken ct)
+    {
+        // Snapshot before the first await: editing the form cannot change this launch.
+        var model = embedding ? config.EmbeddingModelPath : config.ModelPath;
+        var fallbackPort = embedding ? config.EmbeddingPort : config.Port;
+        if (embedding && string.IsNullOrEmpty(model)) model = Path.Combine(ConfigService.GetRoot(), "models", "bge-m3-q8_0.gguf");
+        if (!File.Exists(model)) throw new FileNotFoundException("未选择有效模型。", model);
+        if (ConfigService.IsPrismModel(model) && !ConfigService.HasPrismServer())
+            throw new FileNotFoundException("该模型需要 Prism 引擎。", ConfigService.GetPrismServerPath());
+        var engine = ConfigService.GetLlamaServerPath(model);
+        if (!File.Exists(engine)) throw new FileNotFoundException("未找到 llama-server.exe。", engine);
+        var args = embedding ? $"--host 127.0.0.1 --port {fallbackPort} --embedding -ngl 0 -c 8192 -b 512" : config.Args;
+        if (string.IsNullOrWhiteSpace(args))
+            args = await Task.Run(() => PresetService.GeneratePresetArgs(model, fallbackPort), ct).ConfigureAwait(false);
+        var parsed = new LauncherArguments(args);
+        if (parsed.Has("-m")) throw new ArgumentException("请通过模型列表选择模型，启动参数中不能重复指定 -m。");
+        if (parsed.Has("--embedding") != embedding) throw new ArgumentException("主服务不能使用 --embedding 参数。");
+        var port = parsed.GetPort(fallbackPort);
+        args = new LauncherArguments(parsed.Set("--port", port.ToString())).Set("-m", model);
+        ServerSession session;
+        Process process;
+        using (await LockLifecycle(embedding, ct).ConfigureAwait(false))
         {
-            throw new FileNotFoundException(
-                "检测到当前选中的模型为 Bonsai / PTQ 三值量化模型，需要 Prism 专属引擎支持。\n" +
-                $"但未在以下路径找到专属引擎：\n{ConfigService.GetPrismServerPath()}\n\n" +
-                "请下载 Prism 版 llama.cpp 并放置在 engines\\prism 目录中。");
+            var existing = GetProcess(config, embedding);
+            if (existing != null)
+            {
+                process = existing;
+                session = (embedding ? config.RunningEmbedding : config.RunningServer)!;
+                log?.Invoke($"服务已运行：{Path.GetFileName(session.ModelPath)}，PID {session.ProcessId}，端口 {session.Port}。");
+            }
+            else
+            {
+                if (TestPortInUse(port)) throw new InvalidOperationException($"端口 {port} 已被占用。");
+                log?.Invoke($"启动 {engine} {args}");
+                process = DetachedProcess.Start(engine, args,
+                    embedding ? ConfigService.GetEmbeddingStdoutPath() : ConfigService.GetMainStdoutPath(),
+                    embedding ? ConfigService.GetEmbeddingStderrPath() : ConfigService.GetMainStderrPath());
+                session = new ServerSession
+                {
+                    ProcessId = process.Id, StartTimeUtcTicks = process.StartTime.ToUniversalTime().Ticks,
+                    EnginePath = engine, ModelPath = model, Args = args, Port = port, Embedding = embedding
+                };
+                try { ConfigService.SaveSession(config, session, embedding); }
+                catch { if (!process.HasExited) process.Kill(true); process.Dispose(); throw; }
+            }
         }
 
-        var serverPath = ConfigService.GetLlamaServerPath(config.ModelPath);
-        if (!File.Exists(serverPath))
-            throw new FileNotFoundException($"未找到 llama-server.exe：{serverPath}");
-
-        if (string.IsNullOrEmpty(config.Args))
-            config.Args = PresetService.GeneratePresetArgs(config.ModelPath, config.Port);
-
-        var running = GetManagedProcess(config);
-        running ??= FindMainProcess(config);
-        if (running != null)
+        using (process)
         {
-            log?.Invoke($"服务已经在运行，PID {running.Id}。");
-            if (openBrowser)
-                OpenWebUi(config);
+            var deadline = DateTime.UtcNow.AddSeconds(90);
+            while (DateTime.UtcNow < deadline)
+            {
+                ct.ThrowIfCancellationRequested();
+                var latest = ConfigService.ReadConfig();
+                if ((embedding ? latest.RunningEmbedding : latest.RunningServer) != session)
+                    throw new OperationCanceledException("此次启动已停止或被替换。");
+                if (process.HasExited)
+                {
+                    var tail = LogService.ReadFileTail(embedding ? ConfigService.GetEmbeddingStderrPath() : ConfigService.GetMainStderrPath(), 12);
+                    throw new InvalidOperationException($"服务提前退出（{process.ExitCode}）。\n" + string.Join("\n", tail));
+                }
+                if (await TestApiReadyAsync(session.Port, ct).ConfigureAwait(false))
+                {
+                    // A concurrent stop must not produce a late "ready" update.
+                    ct.ThrowIfCancellationRequested();
+                    if (process.HasExited) throw new OperationCanceledException("服务已停止。");
+                    log?.Invoke($"服务已就绪，PID {session.ProcessId}，端口 {session.Port}。");
+                    if (openBrowser) OpenWebUi(config);
+                    return true;
+                }
+                await Task.Delay(500, ct).ConfigureAwait(false);
+            }
+        }
+        log?.Invoke("90 秒内 API 尚未就绪，进程仍在加载；可查看日志或停止服务。");
+        return false;
+    }
+
+    public static Task<bool> StopAsync(ManagerConfig config, Action<string>? log = null) => StopCoreAsync(config, false, log);
+    public static Task<bool> StopEmbeddingAsync(ManagerConfig config, Action<string>? log = null) => StopCoreAsync(config, true, log);
+
+    private static async Task<bool> StopCoreAsync(ManagerConfig config, bool embedding, Action<string>? log)
+    {
+        using (await LockLifecycle(embedding, CancellationToken.None).ConfigureAwait(false))
+        {
+            using var process = GetProcess(config, embedding);
+            if (process == null)
+            {
+                ConfigService.SaveSession(config, null, embedding);
+                log?.Invoke("当前没有由本工具管理的服务。");
+                return false;
+            }
+            log?.Invoke($"正在停止服务，PID {process.Id}。");
+            process.Kill(entireProcessTree: true);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
+            ConfigService.SaveSession(config, null, embedding);
             return true;
         }
-
-        var port = ParsePortFromArgs(config.Args, config.Port);
-        if (TestPortInUse(port))
-            throw new InvalidOperationException($"端口 {port} 已被占用。");
-
-        var quotedModel = $"\"{config.ModelPath.Replace("\"", "\\\"")}\"";
-        var argumentLine = $"-m {quotedModel} {config.Args}";
-        var serverName = Path.GetFileName(serverPath);
-        var isPrism = ConfigService.IsPrismModel(config.ModelPath);
-
-        log?.Invoke(isPrism
-            ? $"正在启动 Prism 专属版服务 ({serverName}) {argumentLine}"
-            : $"正在启动 llama-server.exe {argumentLine}");
-
-        var workingDir = Path.GetDirectoryName(serverPath) ?? ConfigService.GetLlamaCppRoot();
-
-        var psi = new ProcessStartInfo
-        {
-            FileName = serverPath,
-            Arguments = argumentLine,
-            WorkingDirectory = workingDir,
-            WindowStyle = ProcessWindowStyle.Hidden,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true
-        };
-
-        var process = Process.Start(psi);
-        if (process == null)
-            throw new InvalidOperationException("无法启动 llama-server 进程。");
-
-        var stderrPath = ConfigService.GetMainStderrPath();
-        var stdoutPath = ConfigService.GetMainStdoutPath();
-        try { File.WriteAllText(stderrPath, ""); } catch { }
-        try { File.WriteAllText(stdoutPath, ""); } catch { }
-
-        process.ErrorDataReceived += (s, e) => {
-            if (e.Data != null) {
-                lock (_logLock) {
-                    try { File.AppendAllText(stderrPath, e.Data + Environment.NewLine); } catch { }
-                }
-            }
-        };
-        process.OutputDataReceived += (s, e) => {
-            if (e.Data != null) {
-                lock (_logLock) {
-                    try { File.AppendAllText(stdoutPath, e.Data + Environment.NewLine); } catch { }
-                }
-            }
-        };
-        process.BeginErrorReadLine();
-        process.BeginOutputReadLine();
-
-        config.LastPid = process.Id;
-        config.LastStartedAt = DateTime.Now.ToString("o");
-        config.Port = port;
-        ConfigService.SaveConfig(config);
-
-        var deadline = DateTime.Now.AddSeconds(90);
-        while (DateTime.Now < deadline)
-        {
-            if (process.HasExited)
-            {
-                var stderr = "";
-                try
-                {
-                    if (File.Exists(ConfigService.GetMainStderrPath()))
-                    {
-                        var lines = File.ReadLines(ConfigService.GetMainStderrPath()).ToList();
-                        var errLines = lines.Where(l =>
-                            l.Contains("error", StringComparison.OrdinalIgnoreCase) ||
-                            l.Contains("failed", StringComparison.OrdinalIgnoreCase) ||
-                            l.Contains("exception", StringComparison.OrdinalIgnoreCase) ||
-                            l.Contains("CUDA error", StringComparison.OrdinalIgnoreCase) ||
-                            l.Contains("out of memory", StringComparison.OrdinalIgnoreCase)
-                        ).TakeLast(8).ToList();
-
-                        if (errLines.Count > 0)
-                            stderr = string.Join("\n", errLines);
-                        else
-                            stderr = string.Join("\n", lines.TakeLast(10));
-                    }
-                }
-                catch { }
-
-                config.LastPid = 0;
-                ConfigService.SaveConfig(config);
-                throw new InvalidOperationException($"llama-server 提前退出（退出码 {process.ExitCode}）。\n{stderr}");
-            }
-
-            if (TestApiReady(port))
-            {
-                log?.Invoke($"服务已启动，PID {process.Id}，端口 {port}。");
-                if (openBrowser)
-                    OpenWebUi(config);
-                return true;
-            }
-
-            await Task.Delay(2000);
-        }
-
-        log?.Invoke($"服务进程已启动，PID {process.Id}，但 90 秒内 API 未就绪。");
-        return true;
     }
 
-    public static bool Stop(Models.ManagerConfig config, Action<string>? log = null)
+    public static void OpenWebUi(ManagerConfig config)
     {
-        var process = GetManagedProcess(config);
-        process ??= FindMainProcess(config);
-        if (process == null)
-        {
-            log?.Invoke("当前没有由本工具管理的 llama-server 进程在运行。");
-            config.LastPid = 0;
-            ConfigService.SaveConfig(config);
-            return false;
-        }
-
-        log?.Invoke($"正在停止 llama-server，PID {process.Id}。");
-        StopProcessTree(process.Id);
-        Thread.Sleep(1000);
-        config.LastPid = 0;
-        ConfigService.SaveConfig(config);
-        return true;
-    }
-
-    // ─── Embedding Server ───
-
-    public static Process? GetEmbeddingProcess(Models.ManagerConfig config)
-    {
-        if (config.EmbeddingLastPid <= 0)
-            return null;
-
-        try
-        {
-            var process = Process.GetProcessById(config.EmbeddingLastPid);
-            if (process.ProcessName != "llama-server")
-                return null;
-
-            var expected = Path.GetFullPath(ConfigService.GetLlamaServerPath());
-            if (!string.IsNullOrEmpty(process.MainModule?.FileName))
-            {
-                var actual = Path.GetFullPath(process.MainModule.FileName);
-                if (!actual.Equals(expected, StringComparison.OrdinalIgnoreCase))
-                    return null;
-            }
-
-            var cmdLine = GetProcessCommandLine(process.Id);
-            if (string.IsNullOrEmpty(cmdLine))
-                return null;
-
-            if (!cmdLine.Contains("--embedding", StringComparison.OrdinalIgnoreCase))
-                return null;
-            if (!Regex.IsMatch(cmdLine, @"(?:^|\s)--port\s+8081\b"))
-                return null;
-            if (!cmdLine.Contains(BgeM3Filename, StringComparison.OrdinalIgnoreCase))
-                return null;
-
-            return process;
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    /// <summary>Discover embedding server by scanning llama-server processes with --embedding flag on port 8081.</summary>
-    public static Process? FindEmbeddingProcess(Models.ManagerConfig config)
-    {
-        var expectedPath = Path.GetFullPath(ConfigService.GetLlamaServerPath());
-        var candidates = Process.GetProcessesByName("llama-server");
-        foreach (var p in candidates)
-        {
-            try
-            {
-                if (!Path.GetFullPath(p.MainModule?.FileName ?? "").Equals(expectedPath, StringComparison.OrdinalIgnoreCase))
-                    continue;
-
-                var cmdLine = GetProcessCommandLine(p.Id);
-                if (cmdLine == null)
-                    continue;
-
-                if (!cmdLine.Contains("--embedding", StringComparison.OrdinalIgnoreCase))
-                    continue;
-
-                if (!Regex.IsMatch(cmdLine, @"(?:^|\s)--port\s+8081\b"))
-                    continue;
-
-                if (!cmdLine.Contains(BgeM3Filename, StringComparison.OrdinalIgnoreCase))
-                    continue;
-
-                config.EmbeddingLastPid = p.Id;
-                config.EmbeddingLastStartedAt = DateTime.Now.ToString("o");
-                ConfigService.SaveConfig(config);
-                return p;
-            }
-            catch { }
-        }
-        return null;
-    }
-
-    public static async Task<bool> StartEmbeddingAsync(Models.ManagerConfig config, Action<string>? log = null)
-    {
-        var serverPath = ConfigService.GetLlamaServerPath();
-        if (!File.Exists(serverPath))
-            throw new FileNotFoundException($"未找到 llama-server.exe：{serverPath}");
-
-        var modelPath = string.IsNullOrEmpty(config.EmbeddingModelPath)
-            ? Path.Combine(ConfigService.GetLlamaCppRoot(), "models", BgeM3Filename)
-            : config.EmbeddingModelPath;
-
-        if (!File.Exists(modelPath))
-            throw new FileNotFoundException($"嵌入模型未找到：{modelPath}");
-
-        var running = GetEmbeddingProcess(config);
-        running ??= FindEmbeddingProcess(config);
-        if (running != null)
-        {
-            log?.Invoke($"嵌入服务已经在运行，PID {running.Id}。");
-            return true;
-        }
-
-        if (TestPortInUse(EmbeddingPort))
-            throw new InvalidOperationException($"端口 {EmbeddingPort} 已被占用。");
-
-        const int port = EmbeddingPort;
-        var quotedModel = $"\"{modelPath.Replace("\"", "\\\"")}\"";
-        var argumentLine = $"-m {quotedModel} {EmbeddingArgs}";
-
-        log?.Invoke($"正在启动嵌入服务：llama-server.exe {argumentLine}");
-
-        var psi = new ProcessStartInfo
-        {
-            FileName = serverPath,
-            Arguments = argumentLine,
-            WorkingDirectory = ConfigService.GetLlamaCppRoot(),
-            WindowStyle = ProcessWindowStyle.Hidden,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true
-        };
-
-        var process = Process.Start(psi);
-        if (process == null)
-            throw new InvalidOperationException("无法启动嵌入服务进程。");
-
-        var stderrPath = ConfigService.GetEmbeddingStderrPath();
-        var stdoutPath = ConfigService.GetEmbeddingStdoutPath();
-        try { File.WriteAllText(stderrPath, ""); } catch { }
-        try { File.WriteAllText(stdoutPath, ""); } catch { }
-
-        process.ErrorDataReceived += (s, e) => {
-            if (e.Data != null) {
-                lock (_logLock) {
-                    try { File.AppendAllText(stderrPath, e.Data + Environment.NewLine); } catch { }
-                }
-            }
-        };
-        process.OutputDataReceived += (s, e) => {
-            if (e.Data != null) {
-                lock (_logLock) {
-                    try { File.AppendAllText(stdoutPath, e.Data + Environment.NewLine); } catch { }
-                }
-            }
-        };
-        process.BeginErrorReadLine();
-        process.BeginOutputReadLine();
-
-        config.EmbeddingLastPid = process.Id;
-        config.EmbeddingLastStartedAt = DateTime.Now.ToString("o");
-        ConfigService.SaveConfig(config);
-
-        var deadline = DateTime.Now.AddSeconds(90);
-        while (DateTime.Now < deadline)
-        {
-            if (process.HasExited)
-            {
-                var stderr = "";
-                try
-                {
-                    if (File.Exists(ConfigService.GetEmbeddingStderrPath()))
-                    {
-                        var lines = File.ReadLines(ConfigService.GetEmbeddingStderrPath()).ToList();
-                        stderr = string.Join("\n", lines.TakeLast(40));
-                    }
-                }
-                catch { }
-
-                config.EmbeddingLastPid = 0;
-                ConfigService.SaveConfig(config);
-                throw new InvalidOperationException($"嵌入服务启动失败或提前退出。\n{stderr}");
-            }
-
-            if (TestApiReady(port))
-            {
-                log?.Invoke($"嵌入服务已启动，PID {process.Id}，端口 {port}。");
-                return true;
-            }
-
-            await Task.Delay(2000);
-        }
-
-        log?.Invoke($"嵌入服务进程已启动，PID {process.Id}，但 90 秒内 API 未就绪。");
-        return true;
-    }
-
-    public static bool StopEmbedding(Models.ManagerConfig config, Action<string>? log = null)
-    {
-        var process = GetEmbeddingProcess(config);
-        process ??= FindEmbeddingProcess(config);
-        if (process == null)
-        {
-            log?.Invoke("当前没有运行的嵌入服务。");
-            config.EmbeddingLastPid = 0;
-            ConfigService.SaveConfig(config);
-            return false;
-        }
-
-        log?.Invoke($"正在停止嵌入服务，PID {process.Id}。");
-        StopProcessTree(process.Id);
-        Thread.Sleep(1000);
-        config.EmbeddingLastPid = 0;
-        ConfigService.SaveConfig(config);
-        return true;
-    }
-
-    public static void OpenWebUi(Models.ManagerConfig config)
-    {
-        var port = ParsePortFromArgs(config.Args, config.Port);
-        var url = $"http://127.0.0.1:{port}";
-        LogService.Write($"正在打开 Web UI：{url}");
-        try
-        {
-            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
-        }
-        catch
-        {
-            try
-            {
-                Process.Start(new ProcessStartInfo("cmd", $"/c start {url}") { CreateNoWindow = true });
-            }
-            catch (Exception ex)
-            {
-                throw new InvalidOperationException($"无法打开浏览器，请手动访问 {url}\n错误: {ex.Message}");
-            }
-        }
-    }
-
-    public static int ParsePortFromArgs(string args, int fallback = 8080)
-    {
-        var match = Regex.Match(args, @"(?:^|\s)--port\s+(\d+)");
-        if (match.Success)
-            return int.Parse(match.Groups[1].Value);
-        return fallback;
-    }
-
-    private static void StopProcessTree(int processId)
-    {
-        try
-        {
-            using var searcher = new System.Management.ManagementObjectSearcher(
-                $"SELECT ProcessId FROM Win32_Process WHERE ParentProcessId = {processId}");
-            foreach (var obj in searcher.Get())
-            {
-                var childPid = Convert.ToInt32(obj["ProcessId"]);
-                StopProcessTree(childPid);
-            }
-        }
-        catch { }
-
-        try
-        {
-            var process = Process.GetProcessById(processId);
-            process.Kill(true);
-        }
-        catch { }
-    }
-
-    private static string? GetProcessCommandLine(int processId)
-    {
-        try
-        {
-            using var searcher = new ManagementObjectSearcher(
-                $"SELECT CommandLine FROM Win32_Process WHERE ProcessId = {processId}");
-            foreach (var obj in searcher.Get())
-            {
-                return obj["CommandLine"]?.ToString();
-            }
-        }
-        catch { }
-        return null;
+        var url = $"http://127.0.0.1:{GetRunningPort(config)}";
+        Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
     }
 }

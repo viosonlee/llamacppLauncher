@@ -9,7 +9,7 @@
     <AssemblyName>LlamaManager</AssemblyName>
     <RootNamespace>LlamaManager</RootNamespace>
 
-    <!-- Publish as self-contained single file to avoid requiring users to install .NET 10 -->
+    <!-- Self-contained publish includes the .NET 8 desktop runtime. -->
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SelfContained>true</SelfContained>
     <PublishSingleFile>true</PublishSingleFile>
@@ -17,7 +17,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="System.Management" Version="8.*" />
+    <PackageReference Include="System.Management" Version="8.0.0" />
   </ItemGroup>
 
 </Project>

@@ -1,3 +1,5 @@
+using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows;
 using LlamaManager.Services;
 
@@ -5,30 +7,55 @@ namespace LlamaManager;
 
 public partial class App : Application
 {
-    protected override void OnStartup(StartupEventArgs e)
+    private FileStream? _instanceLock;
+
+    protected override async void OnStartup(StartupEventArgs e)
     {
-        AppDomain.CurrentDomain.UnhandledException += (s, args) =>
-        {
-            var ex = args.ExceptionObject as Exception;
-            var msg = $"未处理异常：{ex?.Message}\n\n堆栈：{ex?.StackTrace}";
-            LogService.Write($"致命错误：{ex}");
-            MessageBox.Show(msg, "LlamaManager 错误", MessageBoxButton.OK, MessageBoxImage.Error);
-        };
-
-        DispatcherUnhandledException += (s, args) =>
-        {
-            LogService.Write($"UI 异常：{args.Exception}");
-            args.Handled = true;
-            MessageBox.Show($"UI 错误：{args.Exception.Message}", "LlamaManager 错误",
-                MessageBoxButton.OK, MessageBoxImage.Error);
-        };
-
-        Dispatcher.UnhandledException += (s, args) =>
-        {
-            LogService.Write($"调度器异常：{args.Exception}");
-            args.Handled = true;
-        };
-
         base.OnStartup(e);
+        ShutdownMode = ShutdownMode.OnExplicitShutdown;
+        if (e.Args.Length > 0)
+        {
+            AttachConsole(unchecked((uint)-1));
+            using var stdout = new StreamWriter(Console.OpenStandardOutput()) { AutoFlush = true };
+            try { Shutdown(await CommandLineService.RunAsync(e.Args, stdout)); }
+            catch (Exception ex)
+            {
+                LogService.Write("命令失败：" + ex.Message);
+                await stdout.WriteLineAsync("错误：" + ex.Message);
+                Shutdown(1);
+            }
+            return;
+        }
+
+        try
+        {
+            var path = Path.Combine(ConfigService.GetManagerRoot(), "logs", "gui.lock");
+            _instanceLock = new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        }
+        catch (IOException)
+        {
+            MessageBox.Show("此目录的启动器已打开，请使用已有窗口。", "LlamaManager");
+            Shutdown();
+            return;
+        }
+        DispatcherUnhandledException += (_, args) =>
+        {
+            LogService.Write("UI 异常：" + args.Exception);
+            args.Handled = true;
+            MessageBox.Show(args.Exception.Message, "LlamaManager 错误", MessageBoxButton.OK, MessageBoxImage.Error);
+        };
+        ShutdownMode = ShutdownMode.OnMainWindowClose;
+        MainWindow = new MainWindow();
+        MainWindow.Show();
     }
+
+    protected override void OnExit(ExitEventArgs e)
+    {
+        _instanceLock?.Dispose();
+        base.OnExit(e);
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool AttachConsole(uint processId);
 }

@@ -38,7 +38,7 @@
         </Border>
 
         <!-- Main Tabs -->
-        <TabControl Grid.Row="1" Margin="0,0,0,6" Background="Transparent" BorderThickness="1" BorderBrush="{StaticResource AccentBrush}">
+        <TabControl x:Name="ConfigurationTabs" Grid.Row="1" Margin="0,0,0,6" Background="Transparent" BorderThickness="1" BorderBrush="{StaticResource AccentBrush}">
             <!-- Model Selection Tab -->
             <TabItem Header="模型选择">
                 <Grid Margin="12,8">
@@ -66,7 +66,7 @@
                         <Button Grid.Column="2" Content="选择文件夹..." Click="ModelsDirButton_Click"
                                 Margin="6,0,0,0" Padding="8,4" FontSize="11"/>
                         <Button Grid.Column="3" Content="刷新" Click="RefreshModelsButton_Click"
-                                Margin="4,0,0,0" Padding="8,4" FontSize="11" ToolTip="重新扫描该目录及所有子目录"/>
+                                Margin="4,0,0,0" Padding="8,4" FontSize="11" ToolTip="重新扫描模型并刷新所选引擎的设备检测"/>
                         <Button Grid.Column="4" Content="单文件..." Click="BrowseButton_Click"
                                 Margin="4,0,0,0" Padding="8,4" FontSize="11" ToolTip="选择任意单独的 GGUF 文件"/>
                     </Grid>
@@ -112,7 +112,7 @@
                     
                     <TextBlock Grid.Row="3" x:Name="ModelInfoText"
                                FontSize="10" Foreground="{StaticResource TextSecondaryBrush}"
-                               Margin="0,2,0,0" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
+                               Margin="0,2,0,0" TextWrapping="Wrap" MaxHeight="65" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
                 </Grid>
             </TabItem>
 
@@ -235,8 +235,10 @@
                         <TextBlock Grid.Column="0" Text="思考模式" FontSize="12" VerticalAlignment="Center"/>
                         <ComboBox x:Name="ReasoningBox" Grid.Column="1" FontSize="12" Height="26"
                                   SelectedIndex="0" SelectionChanged="Reasoning_SelectionChanged">
-                            <ComboBoxItem Content="关闭 (--reasoning off)"/>
-                            <ComboBoxItem Content="开启 (--reasoning on)"/>
+                            <ComboBoxItem Content="默认"/>
+                            <ComboBoxItem Content="off (关闭)"/>
+                            <ComboBoxItem Content="on (开启)"/>
+                            <ComboBoxItem Content="auto"/>
                         </ComboBox>
                         <Button Grid.Column="2" Content="?" FontSize="11" Width="24" Height="22"
                                 Padding="0" Margin="4,0,0,0" Click="InfoButton_Click"
@@ -253,8 +255,10 @@
                         <TextBlock Grid.Column="0" Text="Flash Attention" FontSize="12" VerticalAlignment="Center"/>
                         <ComboBox x:Name="FlashAttentionBox" Grid.Column="1" FontSize="12" Height="26"
                                   SelectedIndex="0" SelectionChanged="FlashAttention_SelectionChanged">
-                            <ComboBoxItem Content="关闭 (默认)"/>
-                            <ComboBoxItem Content="开启 (-fa)"/>
+                            <ComboBoxItem Content="默认"/>
+                            <ComboBoxItem Content="off (关闭)"/>
+                            <ComboBoxItem Content="on (开启)"/>
+                            <ComboBoxItem Content="auto"/>
                         </ComboBox>
                         <Button Grid.Column="2" Content="?" FontSize="11" Width="24" Height="22"
                                 Padding="0" Margin="4,0,0,0" Click="InfoButton_Click"
@@ -326,11 +330,13 @@
                         </Grid.ColumnDefinitions>
                         <TextBlock Grid.Column="0" Text="思考上限 (tokens)" FontSize="12" VerticalAlignment="Center"/>
                         <ComboBox x:Name="ReasoningBudgetBox" Grid.Column="1" FontSize="12" Height="26"
-                                  IsEditable="True" Text="无限制" SelectionChanged="ReasoningBudget_SelectionChanged"
+                                  IsEditable="True" Text="默认" SelectionChanged="ReasoningBudget_SelectionChanged"
                                   LostFocus="ReasoningBudget_LostFocus">
-                            <ComboBoxItem Content="无限制"/>
+                            <ComboBoxItem Content="默认"/>
+                            <ComboBoxItem Content="-1 (无限制)"/>
+                            <ComboBoxItem Content="0 (零预算)"/>
                             <ComboBoxItem Content="1024"/>
-                            <ComboBoxItem Content="2048 (推荐)"/>
+                            <ComboBoxItem Content="2048"/>
                             <ComboBoxItem Content="4096"/>
                             <ComboBoxItem Content="8192"/>
                         </ComboBox>
@@ -362,19 +368,17 @@
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Grid.Column="0" Text="MoE卸载 (--n-cpu-moe)" FontSize="11" VerticalAlignment="Center"/>
                                 <ComboBox x:Name="MoeOffloadBox" Grid.Column="1" FontSize="12" Height="26"
-                                          IsEditable="True" Text="0 (全GPU)" SelectionChanged="MoeOffload_SelectionChanged"
+                                          IsEditable="True" Text="默认" SelectionChanged="MoeOffload_SelectionChanged"
                                           LostFocus="MoeOffload_LostFocus">
-                                    <ComboBoxItem Content="0 (全GPU)"/>
-                                    <ComboBoxItem Content="1"/>
-                                    <ComboBoxItem Content="2 (微量卸载)"/>
-                                    <ComboBoxItem Content="3"/>
-                                    <ComboBoxItem Content="4"/>
-                                    <ComboBoxItem Content="8"/>
-                                    <ComboBoxItem Content="12"/>
-                                    <ComboBoxItem Content="16"/>
-                                    <ComboBoxItem Content="20 (大MoE)"/>
-                                    <ComboBoxItem Content="30 (特大MoE)"/>
-                                </ComboBox>
+                            <ComboBoxItem Content="默认"/>
+                            <ComboBoxItem Content="0 (不强制)"/>
+                            <ComboBoxItem Content="1"/>
+                            <ComboBoxItem Content="2"/>
+                            <ComboBoxItem Content="4"/>
+                            <ComboBoxItem Content="8"/>
+                            <ComboBoxItem Content="16"/>
+                            <ComboBoxItem Content="32"/>
+                        </ComboBox>
                                 <Button Grid.Column="2" Content="?" FontSize="11" Width="24" Height="22"
                                         Padding="0" Margin="4,0,0,0" Click="InfoButton_Click" Tag="n_cpu_moe"/>
                             </Grid>
