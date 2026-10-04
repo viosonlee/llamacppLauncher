@@ -14,7 +14,7 @@ public sealed class IncrementalLogReader
     private string _partial = "";
     public long BytesRead { get; private set; }
 
-    public IReadOnlyList<string> Read(string path, int capacity = 500)
+    public IReadOnlyList<string> Read(string path, int capacity = 500, Func<string, bool>? filter = null)
     {
         if (!File.Exists(path)) { Reset(); return []; }
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
@@ -49,7 +49,7 @@ public sealed class IncrementalLogReader
         for (var i = skipped ? 1 : 0; i < pieces.Length - 1; i++)
         {
             var line = Regex.Replace(pieces[i].TrimEnd('\r'), @"\x1b\[[0-9;?]*[A-Za-z]", "");
-            if (line.Length > 0) _lines.Enqueue(line);
+            if (line.Length > 0 && (filter == null || filter(line))) _lines.Enqueue(line);
         }
         while (_lines.Count > capacity) _lines.Dequeue();
         return _lines.ToArray();

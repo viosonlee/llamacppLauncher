@@ -227,6 +227,41 @@ internal static class Program
                 Check(SpeedMonitorService.Parse("[{\"is_processing\":true,\"next_token\":[{\"n_decoded\":24}]}]").Contains("24"), "array schema");
                 Equal("", SpeedMonitorService.Parse("[{\"is_processing\":false,\"timings\":{\"predicted_per_second\":999}}]"));
             }));
+            await Test("speed monitor: samples decode rate, rebaselines after gaps, reports kinds", () => Run(() =>
+            {
+                var monitor = new SpeedMonitorService();
+                var session = new ServerSession { Port = 8080 };
+                var t0 = TimeSpan.FromSeconds(1000);
+                string Slot(int decoded, int task = 7) =>
+                    $"{{\"id\":0,\"is_processing\":true,\"id_task\":{task},\"n_decoded\":{decoded}}}";
+                var first = monitor.Observe(session, "[" + Slot(100) + "]", [], t0);
+                Check(first.Kind == SpeedKind.Generating && first.Text.Contains("100") && first.Text.Contains("采样中"), "first poll shows count without rate, got: " + first.Text);
+                var second = monitor.Observe(session, "[" + Slot(300) + "]", [], t0 + TimeSpan.FromSeconds(2));
+                Check(second.Text.Contains("约 100.00 tok/s"), "sampled rate over 2s, got: " + second.Text);
+                Equal("", monitor.Observe(session, null, [], t0 + TimeSpan.FromSeconds(4)).Text);
+                var rebaselined = monitor.Observe(session, "[" + Slot(500) + "]", [], t0 + TimeSpan.FromSeconds(6));
+                Check(rebaselined.Text.Contains("采样中"), "must rebaseline after a gap instead of diluting, got: " + rebaselined.Text);
+                var recovered = monitor.Observe(session, "[" + Slot(700) + "]", [], t0 + TimeSpan.FromSeconds(8));
+                Check(recovered.Text.Contains("约 100.00 tok/s"), "rate resumes after rebaseline, got: " + recovered.Text);
+                var prompt = monitor.Observe(session, "[{\"id\":0,\"is_processing\":true,\"id_task\":8,\"n_decoded\":0,\"n_prompt_tokens\":1000,\"n_prompt_tokens_processed\":400}]", [], t0 + TimeSpan.FromSeconds(10));
+                Check(prompt.Kind == SpeedKind.Prompt && prompt.Text.Contains("400"), "prompt progress, got: " + prompt.Text);
+                var done = monitor.Observe(session, "[]", ["I slot print_timing: id 0 | task 8 | eval time = 1000.00 ms / 50 tokens ( 20.00 ms per token, 50.00 tokens per second)"], t0 + TimeSpan.FromSeconds(12));
+                Check(done.Kind == SpeedKind.Completed && done.Text.Contains("上次速度") && done.Text.Contains("50.00 tok/s"), "completed timing, got: " + done.Text);
+            }));
+            await Test("lifecycle: server start truncates the shared stderr log", async () =>
+            {
+                var log = ConfigService.GetMainStderrPath();
+                File.WriteAllText(log, "STALE-MARKER\n");
+                var config = Config(Fixtures.FreePort()); ConfigService.SaveConfig(config);
+                Check(await ServerService.StartAsync(config), "fake server failed");
+                try
+                {
+                    using var stream = new FileStream(log, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                    using var reader = new StreamReader(stream);
+                    Check(!(await reader.ReadToEndAsync()).Contains("STALE-MARKER"), "stale log survived restart");
+                }
+                finally { Check(await ServerService.StopAsync(config), "could not stop fake server"); }
+            });
             await Test("WPF parameter controls preserve original semantics", UiRegression.RunAsync);
             await Test("session: PID reuse guard", () => Run(() =>
             {

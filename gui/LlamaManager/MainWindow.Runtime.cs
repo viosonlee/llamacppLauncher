@@ -26,7 +26,7 @@ public partial class MainWindow
             var cudaTask = CudaService.DetectAsync(selectedModel);
             var autostartTask = AutostartService.GetStatusAsync();
             await Task.WhenAll(readyTask, embeddingReadyTask, cudaTask, autostartTask);
-            var speed = readyTask.Result ? await _speedMonitor.QuerySpeedAsync(session!.Port, _lifetime.Token) : "";
+            var status = readyTask.Result ? await _speedMonitor.QuerySpeedAsync(session!, _lifetime.Token) : new SpeedStatus("等待模型就绪…", SpeedKind.Idle);
             if (_lifetime.IsCancellationRequested || version != _statusVersion) return;
             // External CLI start/stop can change identity while HTTP checks are in flight.
             var latest = ConfigService.ReadConfig();
@@ -49,7 +49,8 @@ public partial class MainWindow
             StopButton.IsEnabled = !_serverStopping && (running || _serverStarting);
             OpenButton.IsEnabled = ready && !busy;
             SpeedTestButton.IsEnabled = _speedTesting || ready && !busy;
-            LiveSpeedText.Text = running ? speed : "";
+            LiveSpeedText.Text = running ? status.Text : "";
+            LiveSpeedText.Foreground = (Brush)FindResource(status.IsActive ? "AccentBrush" : "SuccessBrush");
             ProcessInfoText.Text = running
                 ? $"{Path.GetFileName(Path.GetDirectoryName(session!.EnginePath))} · PID {session.ProcessId} · {LogService.GetGpuSummary(session)}" : "进程: 无";
             var cuda = cudaTask.Result;

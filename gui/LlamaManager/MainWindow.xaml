@@ -21,6 +21,10 @@
         <!-- Status Bar -->
         <Border Grid.Row="0" Background="{StaticResource SurfaceBrush}" CornerRadius="6" Padding="14,10" Margin="0,0,0,10">
             <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
@@ -28,8 +32,11 @@
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                     <Ellipse x:Name="StatusDot" Width="12" Height="12" Fill="{StaticResource ErrorBrush}" Margin="0,0,8,0"/>
                     <TextBlock x:Name="StatusText" Text="已停止" FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center"/>
-                    <TextBlock x:Name="LiveSpeedText" Text="" FontSize="12" Foreground="{StaticResource SuccessBrush}" FontWeight="SemiBold" Margin="14,0,0,0" VerticalAlignment="Center"/>
                 </StackPanel>
+                <TextBlock x:Name="LiveSpeedText" Grid.Row="1" Grid.ColumnSpan="2" Text=""
+                           FontSize="14" Foreground="{StaticResource SuccessBrush}" FontWeight="SemiBold"
+                           Margin="0,6,0,0" TextTrimming="CharacterEllipsis"
+                           ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                     <TextBlock x:Name="CudaText" Text="CUDA: 检测中..." FontSize="12" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,16,0"/>
                     <TextBlock x:Name="PortText" Text=":8080" FontSize="12" Foreground="{StaticResource TextSecondaryBrush}"/>
