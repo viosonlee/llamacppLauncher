@@ -32,6 +32,12 @@ internal static class Program
     {
         if (args.FirstOrDefault() == "--check-published")
             return await PublishedSmoke.RunAsync(args[1]);
+        if (args.FirstOrDefault() == "--read-live-speed")
+        {
+            var session = ConfigService.ReadConfig().RunningServer ?? throw new InvalidOperationException("没有记录的运行实例。");
+            Console.WriteLine((await new SpeedMonitorService().QuerySpeedAsync(session)).Text);
+            return 0;
+        }
         if (args.FirstOrDefault() == "--check-strata")
         {
             if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("LLAMA_MANAGER_ROOT")))
@@ -369,6 +375,45 @@ internal static class Program
                 Check(SpeedMonitorService.Parse("[{\"is_processing\":true,\"next_token\":{\"n_decoded\":42}}]").Contains("42"), "object schema");
                 Check(SpeedMonitorService.Parse("[{\"is_processing\":true,\"next_token\":[{\"n_decoded\":24}]}]").Contains("24"), "array schema");
                 Equal("", SpeedMonitorService.Parse("[{\"is_processing\":false,\"timings\":{\"predicted_per_second\":999}}]"));
+            }));
+            await Test("speed monitor: counter sampling and request/session reset", () => Run(() =>
+            {
+                var monitor = new SpeedMonitorService();
+                var session = new ServerSession { ProcessId = 1, StartTimeUtcTicks = 100 };
+                string Snapshot(int task, int count) => $"[{{\"id\":0,\"id_task\":{task},\"is_processing\":true,\"next_token\":[{{\"n_decoded\":{count}}}]}}]";
+                Check(monitor.Observe(session, Snapshot(6, 10), [], TimeSpan.Zero).Text.Contains("采样"), "first sample fabricated speed");
+                Check(monitor.Observe(session, Snapshot(6, 50), [], TimeSpan.FromSeconds(2)).Text.Contains("20.00 tok/s"), "counter delta speed missing");
+                Check(monitor.Observe(session, Snapshot(7, 100), [], TimeSpan.FromSeconds(4)).Text.Contains("采样"), "new request reused previous counter");
+                Equal(SpeedStatus.Empty, monitor.Observe(session with { ProcessId = 2 }, "[]", [], TimeSpan.FromSeconds(6)));
+            }));
+            await Test("speed monitor: decode log retained when idle or API unavailable, prompt speed excluded", () => Run(() =>
+            {
+                var monitor = new SpeedMonitorService();
+                var session = new ServerSession { ProcessId = 1 };
+                const string decode = "0.21.829.709 I slot print_timing: id 0 | task 6 | eval time = 10950.98 ms / 256 tokens (42.95 ms per token, 23.29 tokens per second)";
+                const string prompt = "0.21.829.706 I slot print_timing: id 0 | task 6 | prompt eval time = 319.06 ms / 39 tokens (8.18 ms per token, 122.23 tokens per second)";
+                Equal(null, SpeedMonitorService.ParseDecodeTiming(prompt));
+                Check(monitor.Observe(session, "[{\"is_processing\":false}]", [prompt, decode], TimeSpan.Zero).Text.Contains("上次速度：23.29 tok/s"), "idle completion disappeared");
+                Check(monitor.Observe(session, null, [], TimeSpan.FromSeconds(2)).Text.Contains("23.29"), "API outage hid completed speed");
+                Check(monitor.Observe(session, "bad json", [], TimeSpan.FromSeconds(4)).Text.Contains("23.29"), "malformed snapshot hid completed speed");
+            }));
+            await Test("speed monitor: API rates and prompt progress", () => Run(() =>
+            {
+                var monitor = new SpeedMonitorService();
+                var session = new ServerSession();
+                var active = "[{\"is_processing\":true,\"n_decoded\":42,\"timings\":{\"predicted_per_second\":12.5}}]";
+                Check(monitor.Observe(session, active, [], TimeSpan.Zero).Text.Contains("12.50 tok/s"), "server rate missing");
+                var prompt = "[{\"is_processing\":true,\"n_prompt_tokens\":100,\"n_prompt_tokens_processed\":20,\"n_prompt_tokens_cache\":30}]";
+                Check(monitor.Observe(session, prompt, [], TimeSpan.FromSeconds(2)).Text.Contains("50/100"), "prompt progress missing");
+            }));
+            await Test("speed logs: polling noise cannot evict the last completion", () => Run(() =>
+            {
+                var path = Path.Combine(_root, "speed-log.log");
+                File.WriteAllText(path, "eval time = 1000 ms / 20 tokens (50 ms per token, 20.00 tokens per second)\n" + string.Concat(Enumerable.Repeat("GET /slots noise\n", 1000)));
+                var reader = new IncrementalLogReader();
+                Equal(1, reader.Read(path, 20, line => SpeedMonitorService.ParseDecodeTiming(line) != null).Count);
+                File.AppendAllText(path, string.Concat(Enumerable.Repeat("GET /slots noise\n", 2000)));
+                Equal(1, reader.Read(path, 20, line => SpeedMonitorService.ParseDecodeTiming(line) != null).Count);
             }));
             await Test("speed monitor: samples decode rate, rebaselines after gaps, reports kinds", () => Run(() =>
             {

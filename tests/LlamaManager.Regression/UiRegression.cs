@@ -108,6 +108,7 @@ internal static class UiRegression
                 var tabs = (TabControl)window.FindName("ConfigurationTabs");
                 var content = (FrameworkElement)window.Content;
                 ((TextBlock)window.FindName("SelectedModelText")).Text = "Sakura-Micro-Bonsai-2-GSQ-RCO.gguf";
+                ((TextBlock)window.FindName("LiveSpeedText")).Text = "上次速度：23.29 tok/s · 256 tokens";
                 ((TextBlock)window.FindName("ModelInfoText")).Text = "qwen3 · 64 层 · 原生上下文 32768\n含 TQ1_0 张量；部分引擎的 CUDA 后端不支持此类型，可能回退 CPU。请以加载日志中的 GPU 权重为准。";
                 var logTab = tabs.Items.Count - 1;
                 Program.Check(tabs.Items.Count == 4, $"expected 4 nav pages, found {tabs.Items.Count}");
