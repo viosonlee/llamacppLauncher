@@ -19,7 +19,8 @@ public sealed class LauncherArguments
         ["-v", "--verbose", "--log-verbose"], ["--fit", "-fit"],
         ["--fit-target", "-fitt"], ["--embedding", "--embeddings"],
         ["-p", "--prompt"], ["-f", "--file"], ["--system-prompt"],
-        ["--log-file"], ["--device", "-dev"], ["-np", "--parallel"]
+        ["--log-file"], ["--device", "-dev"], ["-np", "--parallel"],
+        ["-md", "--model-draft", "--spec-draft-model"], ["--spec-type"]
     ];
     private static readonly HashSet<string> Flags = ["--cpu-moe", "-v", "--embedding"];
     private readonly string _source;

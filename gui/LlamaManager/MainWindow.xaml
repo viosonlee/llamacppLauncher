@@ -134,6 +134,8 @@
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
@@ -328,6 +330,28 @@
                                 Tag="verbose_log"/>
                     </Grid>
 
+                    <!-- Speculative Decoding Type -->
+                    <Grid Grid.Row="5" Grid.Column="0" Margin="0,0,6,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="110"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="30"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="投机解码" FontSize="12" VerticalAlignment="Center"/>
+                        <ComboBox x:Name="SpecTypeBox" Grid.Column="1" FontSize="12" Height="26"
+                                  SelectedIndex="0" SelectionChanged="SpecType_SelectionChanged">
+                            <ComboBoxItem Content="默认 (不传)"/>
+                            <ComboBoxItem Content="draft-mtp"/>
+                            <ComboBoxItem Content="draft-simple"/>
+                            <ComboBoxItem Content="draft-eagle3"/>
+                            <ComboBoxItem Content="ngram-mod"/>
+                            <ComboBoxItem Content="none"/>
+                        </ComboBox>
+                        <Button Grid.Column="2" Content="?" FontSize="11" Width="24" Height="22"
+                                Padding="0" Margin="4,0,0,0" Click="InfoButton_Click"
+                                Tag="spec_type"/>
+                    </Grid>
+
                     <!-- Reasoning Budget -->
                     <Grid Grid.Row="5" Grid.Column="1" Margin="6,0,0,6">
                         <Grid.ColumnDefinitions>
@@ -352,8 +376,38 @@
                                 Tag="reasoning_budget"/>
                     </Grid>
 
+                    <!-- Speculative Draft Model -->
+                    <Grid Grid.Row="6" Grid.ColumnSpan="2" Margin="0,0,0,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="110"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="30"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="草稿模型 (-md)" FontSize="12" VerticalAlignment="Center"/>
+                        <TextBox x:Name="DraftModelBox" Grid.Column="1" FontSize="12" Height="26"
+                                 VerticalContentAlignment="Center"
+                                 ToolTip="投机解码草稿模型路径；与上方投机解码选项配合使用"
+                                 TextChanged="DraftModel_TextChanged" LostFocus="DraftModel_LostFocus"/>
+                        <Button Grid.Column="2" Content="浏览..." FontSize="11" Height="26"
+                                Padding="8,0" Margin="6,0,0,0" Click="DraftModelBrowse_Click"/>
+                        <Button Grid.Column="3" Content="?" FontSize="11" Width="24" Height="22"
+                                Padding="0" Margin="4,0,0,0" Click="InfoButton_Click"
+                                Tag="draft_model"/>
+                    </Grid>
+
+                    <!-- Built-in MTP (auto-detected from GGUF metadata) -->
+                    <Border x:Name="MtpSection" Grid.Row="8" Grid.ColumnSpan="2" BorderThickness="1,0,0,0"
+                            BorderBrush="{StaticResource TextSecondaryBrush}" Padding="8,6,0,4" Margin="0,4,0,0"
+                            Visibility="Collapsed"
+                            ToolTip="该模型的 GGUF 内置 MTP（多 Token 预测）头；开启后使用 draft-mtp 投机解码，无需单独草稿文件">
+                        <CheckBox x:Name="MtpCheckbox" Content="启用内置 MTP 投机解码 (--spec-type draft-mtp)"
+                                  FontSize="11" VerticalAlignment="Center"
+                                  Checked="MtpCheckbox_Changed" Unchecked="MtpCheckbox_Changed"/>
+                    </Border>
+
                     <!-- MoE Section (auto-hide for dense models) -->
-                    <Border x:Name="MoeSection" Grid.Row="6" Grid.ColumnSpan="2" BorderThickness="1,0,0,0"
+                    <Border x:Name="MoeSection" Grid.Row="7" Grid.ColumnSpan="2" BorderThickness="1,0,0,0"
                             BorderBrush="{StaticResource TextSecondaryBrush}" Padding="8,6,0,4" Margin="0,4,0,0"
                             ToolTip="以下设置仅对MoE（混合专家）模型生效">
                         <Grid>

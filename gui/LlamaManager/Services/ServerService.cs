@@ -142,6 +142,9 @@ public static class ServerService
         if (parsed.Has("-m")) throw new ArgumentException("请通过模型列表选择模型，启动参数中不能重复指定 -m。");
         if (parsed.Has("--embedding") != embedding) throw new ArgumentException("主服务不能使用 --embedding 参数。");
         var port = parsed.GetPort(fallbackPort);
+        var draft = parsed.Get("-md");
+        if (!string.IsNullOrEmpty(draft) && !File.Exists(draft))
+            throw new FileNotFoundException("未找到投机解码草稿模型 (-md)。", draft);
         args = new LauncherArguments(parsed.Set("--port", port.ToString())).Set("-m", model);
         ServerSession session;
         Process process;

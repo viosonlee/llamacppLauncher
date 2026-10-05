@@ -13,13 +13,13 @@ internal static class Fixtures
         return ((IPEndPoint)listener.LocalEndpoint).Port;
     }
 
-    public static byte[] Gguf(bool prism = false, uint type = 0, bool moe = true, int layers = 64, int context = 8192)
+    public static byte[] Gguf(bool prism = false, uint type = 0, bool moe = true, int layers = 64, int context = 8192, bool mtp = false)
     {
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true);
         void String(string value) { var bytes = Encoding.UTF8.GetBytes(value); writer.Write((ulong)bytes.Length); writer.Write(bytes); }
         void Number(string key, uint value) { String(key); writer.Write(4u); writer.Write(value); }
-        writer.Write(0x46554747u); writer.Write(3u); writer.Write(1UL); writer.Write(prism ? 7UL : 6UL);
+        writer.Write(0x46554747u); writer.Write(3u); writer.Write(1UL); writer.Write((ulong)((prism ? 7 : 6) + (mtp ? 1 : 0)));
         String("general.architecture"); writer.Write(8u); String("qwen3");
         // Architecture fields deliberately follow tokenizer metadata: KV ordering is not specified.
         String("tokenizer.ggml.tokens"); writer.Write(9u); writer.Write(8u); writer.Write(2UL); String("hello"); String("世界");
@@ -28,6 +28,7 @@ internal static class Fixtures
         Number("qwen3.expert_count", moe ? 8u : 0u);
         Number("qwen3.attention.head_count_kv", 8);
         if (prism) { String("prism.hadamard.block_size"); writer.Write(4u); writer.Write(128u); }
+        if (mtp) Number("qwen3.nextn_predict_layers", 1);
         String("blk.0.weight"); writer.Write(2u); writer.Write(256UL); writer.Write(256UL); writer.Write(type); writer.Write(0UL);
         return stream.ToArray(); // No weight data: the reader must stop at tensor descriptors.
     }

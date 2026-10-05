@@ -159,6 +159,10 @@ internal static class Program
                 var misleading = Path.Combine(_root, "bonsai-dense.gguf");
                 File.WriteAllBytes(misleading, Fixtures.Gguf(moe: false));
                 Check(!ConfigService.IsPrismModel(misleading), "filename overrode valid metadata");
+                using var mtpStream = new MemoryStream(Fixtures.Gguf(moe: false, mtp: true));
+                Check(GgufService.Read(mtpStream).HasMtp, "bundled MTP head not detected");
+                using var plainStream = new MemoryStream(Fixtures.Gguf(moe: false));
+                Check(!GgufService.Read(plainStream).HasMtp, "plain model flagged as MTP");
             }));
             await Test("GGUF: truncated and invalid data are bounded; changed files invalidate cache", () => Run(() =>
             {

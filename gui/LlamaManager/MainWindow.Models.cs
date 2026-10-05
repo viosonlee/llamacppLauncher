@@ -50,6 +50,7 @@ public partial class MainWindow
         SelectedModelText.Text = Path.GetFileName(_config.ModelPath);
         var metadata = GgufService.TryRead(_config.ModelPath);
         MoeSection.Visibility = ModelInfo.DetectIsMoE(_config.ModelPath) ? Visibility.Visible : Visibility.Collapsed;
+        MtpSection.Visibility = metadata is { HasMtp: true } ? Visibility.Visible : Visibility.Collapsed;
         ModelInfoText.Text = metadata == null ? "无法读取 GGUF 元数据，请检查文件。" :
             $"{metadata.Architecture} · {metadata.LayerCount} 层 · 原生上下文 {metadata.ContextLength}\n{metadata.CompatibilityNote}";
     }
@@ -65,6 +66,7 @@ public partial class MainWindow
             SaveCurrentConfig(); // commit previous model's edits before changing identity
             var preset = ConfigService.GetModelPreset(_config, path);
             var args = preset?.Args ?? await Task.Run(() => PresetService.GeneratePresetArgs(path, _config.Port));
+            args = EnsureBundledMtp(path, args);
             if (_lifetime.IsCancellationRequested) return;
             _config.ModelPath = path;
             _config.Args = args;
@@ -104,7 +106,7 @@ public partial class MainWindow
             SaveCurrentConfig();
             var path = _config.ModelPath;
             var port = _config.Port;
-            var args = await Task.Run(() => PresetService.GeneratePresetArgs(path, port));
+            var args = EnsureBundledMtp(path, await Task.Run(() => PresetService.GeneratePresetArgs(path, port)));
             if (_lifetime.IsCancellationRequested) return;
             _config.Args = args;
             ApplyConfig();

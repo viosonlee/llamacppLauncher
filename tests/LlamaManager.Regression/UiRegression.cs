@@ -41,8 +41,20 @@ internal static class UiRegression
                 Box("ReasoningBudgetBox").SelectedIndex = 3;
                 window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
                 Program.Equal("1024", new LauncherArguments(args.Text).Get("--reasoning-budget"));
+                args.Text = "--spec-type draft-mtp -md \"C:/models/mtp-head-q4_0.gguf\"";
+                Program.Check(Box("SpecTypeBox").SelectedItem is ComboBoxItem mtp && mtp.Content.ToString() == "draft-mtp", "spec type parsed to control");
+                Program.Equal("C:/models/mtp-head-q4_0.gguf", ((TextBox)window.FindName("DraftModelBox")).Text);
+                ((TextBox)window.FindName("DraftModelBox")).Text = "C:/draft/head.gguf";
+                window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+                var specArgs = new LauncherArguments(args.Text);
+                Program.Equal("C:/draft/head.gguf", specArgs.Get("-md"));
+                Program.Equal("draft-mtp", specArgs.Get("--spec-type"));
+                Program.Check(((CheckBox)window.FindName("MtpCheckbox")).IsChecked == true, "mtp checkbox reflects draft-mtp");
+                args.Text = "--spec-type ngram-mod";
+                Program.Check(((CheckBox)window.FindName("MtpCheckbox")).IsChecked == false, "mtp checkbox ignores other spec types");
                 args.Text = "";
                 Program.Equal("默认", Box("ReasoningBudgetBox").Text);
+                Program.Equal("", ((TextBox)window.FindName("DraftModelBox")).Text);
                 Program.Equal(0, Box("FlashAttentionBox").SelectedIndex);
                 // Render both changed panels without opening a desktop window.
                 typeof(MainWindow).GetField("_loaded", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(window, false);

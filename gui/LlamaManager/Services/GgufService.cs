@@ -16,12 +16,21 @@ public sealed record GgufMetadata
     public int ValueLength { get; init; }
     public bool IsMoE { get; init; }
     public bool HasHadamard { get; init; }
+    public bool HasMtp { get; init; }
     public IReadOnlyDictionary<uint, int> TensorTypes { get; init; } = new Dictionary<uint, int>();
     public bool RequiresPrism => HasHadamard || TensorTypes.ContainsKey(142) || TensorTypes.ContainsKey(143);
     public bool HasTq1 => TensorTypes.ContainsKey(34);
-    public string CompatibilityNote => HasTq1
-        ? "含 TQ1_0 张量；部分引擎的 CUDA 后端不支持此类型，可能回退 CPU。请以加载日志中的 GPU 权重为准。"
-        : RequiresPrism ? "含 Prism 专用张量或 Hadamard 元数据，需要 Prism 引擎。" : "";
+    public string CompatibilityNote
+    {
+        get
+        {
+            var notes = new List<string>();
+            if (HasTq1) notes.Add("含 TQ1_0 张量；部分引擎的 CUDA 后端不支持此类型，可能回退 CPU。请以加载日志中的 GPU 权重为准。");
+            else if (RequiresPrism) notes.Add("含 Prism 专用张量或 Hadamard 元数据，需要 Prism 引擎。");
+            if (HasMtp) notes.Add("含内置 MTP 头，已在常用参数中提供投机解码开关。");
+            return string.Join("\n", notes);
+        }
+    }
 }
 
 /// <summary>Reads bounded metadata and tensor descriptors only, never model weights.</summary>
@@ -66,6 +75,7 @@ public static class GgufService
         var architecture = "";
         var hadamard = false;
         var moe = false;
+        var nextn = false;
         var scalars = new Dictionary<string, long>();
         for (ulong i = 0; i < count; i++)
         {
@@ -84,12 +94,14 @@ public static class GgufService
                 if (key.EndsWith(".expert_count") || key.EndsWith(".n_expert") || key.EndsWith(".n_experts"))
                     moe |= scalar.Value > 1;
                 if (key.EndsWith(".expert_used_count")) moe |= scalar.Value > 0;
+                if (key.EndsWith(".nextn_predict_layers")) nextn |= scalar.Value > 0;
             }
         }
         var types = new Dictionary<uint, int>();
         for (ulong i = 0; i < tensors; i++)
         {
-            _ = ReadString(reader, 4096);
+            var tensorName = ReadString(reader, 4096);
+            nextn |= tensorName.Contains(".nextn.", StringComparison.Ordinal);
             var dimensions = reader.ReadUInt32();
             if (dimensions is < 1 or > 4) throw new InvalidDataException("GGUF 张量维度无效。");
             for (var d = 0; d < dimensions; d++)
@@ -105,7 +117,7 @@ public static class GgufService
             EmbeddingLength = Number("embedding_length"), AttentionHeads = Number("attention.head_count"),
             KvHeads = Number("attention.head_count_kv"), KeyLength = Number("attention.key_length"),
             ValueLength = Number("attention.value_length"), IsMoE = moe || architecture.Contains("moe", StringComparison.OrdinalIgnoreCase),
-            HasHadamard = hadamard, TensorTypes = types
+            HasHadamard = hadamard, HasMtp = nextn, TensorTypes = types
         };
     }
 

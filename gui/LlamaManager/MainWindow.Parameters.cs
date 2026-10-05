@@ -1,5 +1,7 @@
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
 using LlamaManager.Services;
 
 namespace LlamaManager;
@@ -41,6 +43,10 @@ public partial class MainWindow
         SelectValue(UBatchSizeBox, args.Get("-ub"));
         SelectValue(MoeOffloadBox, args.Get("--n-cpu-moe"));
         CpuMoeCheckbox.IsChecked = args.Has("--cpu-moe");
+        SelectValue(SpecTypeBox, args.Get("--spec-type"));
+        DraftModelBox.Text = args.Get("-md") ?? "";
+        UpdateDraftValidation(DraftModelBox.Text);
+        MtpCheckbox.IsChecked = args.Get("--spec-type") == "draft-mtp";
         VerboseLogBox.SelectedIndex = args.Has("-v") ? 1 : 0;
         PortTextBox.Text = args.GetPort(_config.Port).ToString();
     }
@@ -61,6 +67,12 @@ public partial class MainWindow
             string updated;
             if (sender == CpuMoeCheckbox) updated = args.SetFlag("--cpu-moe", CpuMoeCheckbox.IsChecked == true);
             else if (sender == VerboseLogBox) updated = args.SetFlag("-v", VerboseLogBox.SelectedIndex == 1);
+            else if (sender == MtpCheckbox)
+            {
+                // Only claim draft-mtp; leave other speculative types untouched.
+                if (MtpCheckbox.IsChecked == true) updated = args.Set("--spec-type", "draft-mtp");
+                else updated = args.Get("--spec-type") == "draft-mtp" ? args.Set("--spec-type", null) : ArgsTextBox.Text;
+            }
             else
             {
                 var key = sender switch
@@ -76,6 +88,8 @@ public partial class MainWindow
                     _ when sender == BatchSizeBox => "-b",
                     _ when sender == UBatchSizeBox => "-ub",
                     _ when sender == MoeOffloadBox => "--n-cpu-moe",
+                    _ when sender == SpecTypeBox => "--spec-type",
+                    _ when sender == DraftModelBox => "-md",
                     _ => throw new ArgumentException("未知参数控件。")
                 };
                 // Editable ComboBox.Text is updated after SelectionChanged. Use the event's new item.
@@ -88,12 +102,45 @@ public partial class MainWindow
                 if (value != null && key == "--n-cpu-moe" && (!int.TryParse(value, out var moe) || moe < 0)) return;
                 if (value != null && key == "-ngl" && value is not ("all" or "auto") && (!int.TryParse(value, out var layers) || layers < -1)) return;
                 updated = args.Set(key, value);
+                if (sender == DraftModelBox) UpdateDraftValidation(value);
             }
             _parsingArgs = true;
             ArgsTextBox.Text = updated;
         }
         catch (ArgumentException ex) { ArgsTextBox.ToolTip = ex.Message; }
         finally { _parsingArgs = false; }
+    }
+
+    /// <summary>Bundled MTP heads get speculative decoding by default; explicit user choices win.</summary>
+    private static string EnsureBundledMtp(string path, string args) =>
+        GgufService.TryRead(path) is { HasMtp: true } && !new LauncherArguments(args).Has("--spec-type")
+            ? new LauncherArguments(args).Set("--spec-type", "draft-mtp")
+            : args;
+
+    private void UpdateDraftValidation(string? path)
+    {
+        if (string.IsNullOrEmpty(path) || File.Exists(path))
+        {
+            DraftModelBox.ToolTip = string.IsNullOrEmpty(path) ? "投机解码草稿模型路径；与上方投机解码选项配合使用" : null;
+            DraftModelBox.ClearValue(BorderBrushProperty);
+        }
+        else
+        {
+            DraftModelBox.ToolTip = "警告：草稿模型文件不存在，启动时将报错。";
+            DraftModelBox.BorderBrush = Brushes.IndianRed;
+        }
+    }
+
+    private void DraftModelBrowse_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "选择投机解码草稿模型",
+            Filter = "GGUF 模型 (*.gguf)|*.gguf|所有文件 (*.*)|*.*"
+        };
+        var initial = Path.GetDirectoryName(_config.ModelPath);
+        if (!string.IsNullOrEmpty(initial) && Directory.Exists(initial)) dialog.InitialDirectory = initial;
+        if (dialog.ShowDialog(this) == true) DraftModelBox.Text = dialog.FileName;
     }
 
     private void ArgsTextBox_TextChanged(object sender, TextChangedEventArgs e)
@@ -134,6 +181,10 @@ public partial class MainWindow
     private void VerboseLog_SelectionChanged(object sender, SelectionChangedEventArgs e) => SyncSelection(sender, e);
     private void ReasoningBudget_SelectionChanged(object sender, SelectionChangedEventArgs e) => SyncSelection(sender, e);
     private void ReasoningBudget_LostFocus(object sender, RoutedEventArgs e) => SyncArgsFromControls(sender);
+    private void SpecType_SelectionChanged(object sender, SelectionChangedEventArgs e) => SyncSelection(sender, e);
+    private void DraftModel_TextChanged(object sender, TextChangedEventArgs e) => SyncArgsFromControls(sender);
+    private void DraftModel_LostFocus(object sender, RoutedEventArgs e) => SyncArgsFromControls(sender);
+    private void MtpCheckbox_Changed(object sender, RoutedEventArgs e) => SyncArgsFromControls(sender);
 
     private void InfoButton_Click(object sender, RoutedEventArgs e)
     {
@@ -151,6 +202,8 @@ public partial class MainWindow
             "n_cpu_moe" => "MoE CPU 层数 (--n-cpu-moe)：强制部分专家权重驻留 CPU。0 表示不强制，实际分配仍受 -ngl 和显存影响。混合卸载的收益取决于模型、带宽和硬件，应实测。",
             "verbose_log" => "详细日志 (-v)：排查问题时启用。可能记录请求内容并增加写盘量。",
             "reasoning_budget" => "思考预算 (--reasoning-budget)：默认不传参数；-1 显式无限制；0 显式零预算；正数为上限。不同引擎或模板的支持情况可能不同。",
+            "spec_type" => "投机解码 (--spec-type)：默认不传参数（引擎默认不启用）。draft-mtp 使用多 Token 预测头；draft-simple/draft-eagle3 需要配套草稿模型；ngram-mod 为 n-gram 投机，无需草稿文件。支持与拒绝率取决于草稿质量，应实测。",
+            "draft_model" => "草稿模型 (-md)：投机解码使用的草稿/头模型文件，与上方投机解码选项配合使用，例如独立 MTP 头配 draft-mtp。文件不存在会在启动时报错。",
             _ => "具体参数以所选引擎的 --help 为准。"
         };
         MessageBox.Show(text, "参数说明", MessageBoxButton.OK, MessageBoxImage.Information);
