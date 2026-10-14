@@ -11,11 +11,10 @@
     <Grid Margin="14">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
         <!-- Status Bar -->
@@ -492,6 +491,169 @@
                     </Grid>
                 </Grid>
             </TabItem>
+
+            <!-- Strata Tab -->
+            <TabItem Header="Strata">
+                <Grid Margin="12,8">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Grid.Row="0" Text="Cyber on Strata 专家流式推理（35B MoE · 独立引擎 · 与 llama-server 共享显存不可同开）"
+                               FontSize="11" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,8"
+                               ToolTip="运行 Strata 前会请求停止 llama-server；运行结束后可再启动 llama-server。"/>
+
+                    <Grid Grid.Row="1" Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="包目录:" VerticalAlignment="Center" FontSize="12" Margin="0,0,8,0"/>
+                        <TextBox x:Name="StrataRootTextBox" Grid.Column="1" FontSize="11"
+                                 VerticalContentAlignment="Center"
+                                 ToolTip="包含 engine\strata.exe 的 Cyber on Strata 包目录"/>
+                        <Button Grid.Column="2" Content="浏览..." Click="StrataRootButton_Click"
+                                Margin="6,0,0,0" Padding="8,4" FontSize="11"/>
+                    </Grid>
+
+                    <Grid Grid.Row="2" Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="模型:" VerticalAlignment="Center" FontSize="12" Margin="0,0,8,0"/>
+                        <TextBox x:Name="StrataModelTextBox" Grid.Column="1" FontSize="11"
+                                 VerticalContentAlignment="Center" IsReadOnly="True"
+                                 ToolTip="为空时自动使用包内 models\ 下最大的 .gguf"/>
+                        <Button Grid.Column="2" Content="浏览..." Click="StrataModelButton_Click"
+                                Margin="6,0,0,0" Padding="8,4" FontSize="11"/>
+                        <Button Grid.Column="3" Content="默认" Click="StrataModelResetButton_Click"
+                                Margin="4,0,0,0" Padding="8,4" FontSize="11"/>
+                    </Grid>
+
+                    <TextBox x:Name="StrataPromptTextBox" Grid.Row="3" AcceptsReturn="True" TextWrapping="Wrap"
+                             VerticalScrollBarVisibility="Auto" Height="90" FontSize="11"
+                             VerticalContentAlignment="Top" LostFocus="StrataPromptTextBox_LostFocus"
+                             ToolTip="推理提示词"/>
+
+                    <Grid Grid.Row="4" Margin="0,8,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="70"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="70"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="70"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="70"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="80"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Reserve:" FontSize="11" VerticalAlignment="Center" Margin="0,0,4,0"
+                                   ToolTip="--vram-reserve-mib：显存预留（KV/桌面）。8GB 卡建议 1500，6GB 卡可用 500-800"/>
+                        <TextBox x:Name="StrataReserveBox" Grid.Column="1" FontSize="11" VerticalContentAlignment="Center" LostFocus="StrataParam_LostFocus"/>
+                        <TextBlock Grid.Column="2" Text="上下文:" FontSize="11" VerticalAlignment="Center" Margin="8,0,4,0"
+                                   ToolTip="--max-context"/>
+                        <TextBox x:Name="StrataContextBox" Grid.Column="3" FontSize="11" VerticalContentAlignment="Center" LostFocus="StrataParam_LostFocus"/>
+                        <TextBlock Grid.Column="4" Text="生成:" FontSize="11" VerticalAlignment="Center" Margin="8,0,4,0"
+                                   ToolTip="--max-new：最大生成 token 数"/>
+                        <TextBox x:Name="StrataMaxNewBox" Grid.Column="5" FontSize="11" VerticalContentAlignment="Center" LostFocus="StrataParam_LostFocus"/>
+                        <TextBlock Grid.Column="6" Text="Prefill:" FontSize="11" VerticalAlignment="Center" Margin="8,0,4,0"
+                                   ToolTip="--prefill 分块大小"/>
+                        <TextBox x:Name="StrataPrefillBox" Grid.Column="7" FontSize="11" VerticalContentAlignment="Center" LostFocus="StrataParam_LostFocus"/>
+                        <TextBlock Grid.Column="8" Text="KV:" FontSize="11" VerticalAlignment="Center" Margin="8,0,4,0"/>
+                        <ComboBox x:Name="StrataKvBox" Grid.Column="9" FontSize="11" SelectionChanged="StrataKvBox_SelectionChanged"
+                                  ToolTip="--kv 精度。int8 数值与 fp16 逐位一致"/>
+                        <TextBlock Grid.Column="10" Text="池线程:" FontSize="11" VerticalAlignment="Center" Margin="8,0,4,0"
+                                   ToolTip="--pool-workers：0 = 自动。CPU 专家池线程数"/>
+                        <TextBox x:Name="StrataWorkersBox" Grid.Column="11" FontSize="11" VerticalContentAlignment="Center" LostFocus="StrataParam_LostFocus"/>
+                    </Grid>
+
+                    <Grid Grid.Row="5" Margin="0,8,0,0">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.Row="0" x:Name="StrataStatsText" Text="" FontSize="11" FontFamily="Consolas"
+                                   Foreground="{StaticResource SuccessBrush}" TextWrapping="Wrap" Margin="0,0,0,4"/>
+                        <ScrollViewer Grid.Row="1" x:Name="StrataOutputScroll" VerticalScrollBarVisibility="Auto">
+                            <TextBox x:Name="StrataOutputBox" IsReadOnly="True"
+                                     Background="Transparent" BorderThickness="0"
+                                     FontFamily="Consolas" FontSize="11"
+                                     TextWrapping="Wrap" AcceptsReturn="True"
+                                     Foreground="{StaticResource TextPrimaryBrush}"/>
+                        </ScrollViewer>
+                    </Grid>
+
+                    <Grid Grid.Row="6" Margin="0,8,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <Button Grid.Column="0" x:Name="StrataRunButton" Content="▶ 运行推理" Click="StrataRunButton_Click"
+                                Margin="0,0,4,0" Padding="8,8" FontSize="13" FontWeight="SemiBold"/>
+                        <Button Grid.Column="1" x:Name="StrataStopButton" Content="■ 停止" Click="StrataStopButton_Click"
+                                Margin="4,0,4,0" Padding="8,8" FontSize="13" IsEnabled="False"/>
+                        <Button Grid.Column="2" x:Name="StrataOpenLogButton" Content="打开日志" Click="StrataOpenLogButton_Click"
+                                Padding="8,8" FontSize="13" IsEnabled="False"/>
+                    </Grid>
+                </Grid>
+            </TabItem>
+
+            <!-- Log Tab -->
+            <TabItem Header="日志">
+                <Grid Margin="12,8">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <Grid Grid.Row="0" Margin="0,0,0,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" x:Name="ProcessInfoText" Text="进程: 无"
+                                   FontSize="11" Foreground="{StaticResource TextSecondaryBrush}"
+                                   VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                                   ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
+                        <Button Grid.Column="1" Content="清空显示" Click="ClearLogButton_Click"
+                                FontSize="11" Padding="10,4" Margin="0,0,6,0"/>
+                        <Button Grid.Column="2" Content="打开日志文件" Click="OpenLogFileButton_Click"
+                                FontSize="11" Padding="10,4"/>
+                    </Grid>
+
+                    <Border Grid.Row="1" Background="{StaticResource SurfaceBrush}"
+                            CornerRadius="4" Padding="6">
+                        <ScrollViewer x:Name="LogScrollViewer" VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Auto">
+                            <TextBox x:Name="LogTextBox" IsReadOnly="True"
+                                     Background="Transparent" BorderThickness="0"
+                                     FontFamily="Consolas" FontSize="11.5"
+                                     TextWrapping="Wrap" AcceptsReturn="True"
+                                     Foreground="{StaticResource TextSecondaryBrush}"/>
+                        </ScrollViewer>
+                    </Border>
+
+                    <TextBlock Grid.Row="2" Margin="0,6,0,0" FontSize="10"
+                               Foreground="{StaticResource TextSecondaryBrush}"
+                               Text="显示 llama-manager 与 llama-server 的最近日志（自动刷新，滚动到底部）"/>
+                </Grid>
+            </TabItem>
         </TabControl>
 
         <!-- Action Buttons & Status -->
@@ -605,33 +767,5 @@
             </Grid>
         </Border>
 
-        <!-- Process Info + Log -->
-        <GroupBox Grid.Row="5" Header="日志">
-            <Grid>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="*"/>
-                </Grid.RowDefinitions>
-                <Grid Grid.Row="0" Margin="0,0,0,4">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
-                    <TextBlock Grid.Column="0" x:Name="ProcessInfoText" Text="进程: 无"
-                               FontSize="11" Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center"/>
-                    <StackPanel Grid.Column="1" Orientation="Horizontal">
-                        <Button Content="清空显示" Click="ClearLogButton_Click" FontSize="10" Padding="6,1" Margin="0,0,4,0"/>
-                        <Button Content="打开日志文件" Click="OpenLogFileButton_Click" FontSize="10" Padding="6,1"/>
-                    </StackPanel>
-                </Grid>
-                <ScrollViewer Grid.Row="1" x:Name="LogScrollViewer" VerticalScrollBarVisibility="Auto">
-                    <TextBox x:Name="LogTextBox" IsReadOnly="True"
-                             Background="Transparent" BorderThickness="0"
-                             FontFamily="Consolas" FontSize="11"
-                             TextWrapping="Wrap" AcceptsReturn="True"
-                             Foreground="{StaticResource TextSecondaryBrush}"/>
-                </ScrollViewer>
-            </Grid>
-        </GroupBox>
     </Grid>
 </Window>

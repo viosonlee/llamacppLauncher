@@ -138,7 +138,76 @@ public static class ConfigService
         return migrated;
     }
 
+    /// <summary>
+    /// Replaces a dead recorded session with a live process that fully matches it
+    /// (same engine, model, port and flags). Only the recorded session may be replaced;
+    /// foreign processes are never adopted.
+    /// </summary>
+    public static bool AdoptSession(ManagerConfig config, ServerSession recorded, ServerSession live)
+    {
+        if (recorded.Embedding != live.Embedding) return false;
+        var adopted = false;
+        var started = new DateTime(live.StartTimeUtcTicks, DateTimeKind.Utc).ToString("o");
+        Store.Update(latest =>
+        {
+            var current = live.Embedding ? latest.RunningEmbedding : latest.RunningServer;
+            if (!Equals(current, recorded)) return;
+            if (live.Embedding)
+            {
+                latest.RunningEmbedding = live;
+                latest.EmbeddingLastPid = live.ProcessId;
+                latest.EmbeddingLastStartedAt = started;
+            }
+            else
+            {
+                latest.RunningServer = live;
+                latest.LastPid = live.ProcessId;
+                latest.LastStartedAt = started;
+            }
+            adopted = true;
+        });
+        if (adopted)
+        {
+            if (live.Embedding)
+            {
+                config.RunningEmbedding = live;
+                config.EmbeddingLastPid = live.ProcessId;
+                config.EmbeddingLastStartedAt = started;
+            }
+            else
+            {
+                config.RunningServer = live;
+                config.LastPid = live.ProcessId;
+                config.LastStartedAt = started;
+            }
+        }
+        return adopted;
+    }
+
     public static void SaveAutostartSetting(bool enabled) => Store.Update(latest => latest.AutoStartEnabled = enabled);
+
+    public static void SaveStrata(ManagerConfig config)
+    {
+        Store.Update(latest => { latest.Strata = config.Strata; Touch(latest); });
+    }
+
+    /// <summary>记录/清除 Strata 推理进程的身份（PID + 创建时间 + 引擎路径）；running=false 时清零。不触碰其他设置。</summary>
+    public static void SaveStrataSession(ManagerConfig config, int pid, long startedUtcTicks, string? enginePath, bool running)
+        => Store.Update(latest =>
+        {
+            latest.Strata.LastPid = running ? pid : 0;
+            latest.Strata.LastStartedUtcTicks = running ? startedUtcTicks : 0;
+            latest.Strata.LastEnginePath = running ? enginePath ?? "" : "";
+        });
+
+    public static void SaveStrataStats(string stats)
+        => Store.Update(latest => { latest.Strata.LastStats = stats; });
+
+    private static void Touch(ManagerConfig latest)
+    {
+        if (string.IsNullOrEmpty(latest.CreatedAt)) latest.CreatedAt = DateTime.Now.ToString("o");
+        latest.UpdatedAt = DateTime.Now.ToString("o");
+    }
 
     public static ModelPreset? GetModelPreset(ManagerConfig config, string modelPath)
     {

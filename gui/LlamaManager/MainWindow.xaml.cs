@@ -16,7 +16,7 @@ public partial class MainWindow : Window
     private DispatcherTimer? _statusTimer;
     private List<ModelInfo> _models = [];
     private bool _loaded, _parsingArgs, _refreshing, _serverStarting, _serverStopping, _embeddingStarting, _speedTesting, _selecting, _scanning;
-    private int _updateCount, _statusVersion;
+    private int _updateCount, _statusVersion, _strataUpdate;
     private string? _lastLogText;
 
     public MainWindow()
@@ -36,6 +36,7 @@ public partial class MainWindow : Window
             var recovery = ConfigService.RecoveryWarning;
             await RefreshModelsAsync();
             ApplyConfig();
+            ApplyStrataConfig();
             _loaded = true;
             if (recovery != null) MessageBox.Show(recovery, "配置恢复");
             _statusTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };

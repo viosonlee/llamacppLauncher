@@ -62,7 +62,10 @@ internal static class UiRegression
                 var content = (FrameworkElement)window.Content;
                 ((TextBlock)window.FindName("SelectedModelText")).Text = "Sakura-Micro-Bonsai-2-GSQ-RCO.gguf";
                 ((TextBlock)window.FindName("ModelInfoText")).Text = "qwen3 · 64 层 · 原生上下文 32768\n含 TQ1_0 张量；部分引擎的 CUDA 后端不支持此类型，可能回退 CPU。请以加载日志中的 GPU 权重为准。";
-                foreach (var tab in new[] { 0, 1 })
+                var logTab = tabs.Items.Count - 1;
+                Program.Check(((TextBlock)window.FindName("ProcessInfoText")).Text == "进程: 无", "log tab lost process info");
+                Program.Check(window.FindName("LogScrollViewer") is ScrollViewer, "log scroll viewer missing");
+                foreach (var tab in new[] { 0, 1, logTab })
                 {
                     tabs.SelectedIndex = tab;
                     content.Measure(new Size(690, 775)); content.Arrange(new Rect(0, 0, 690, 775)); content.UpdateLayout();
@@ -79,6 +82,11 @@ internal static class UiRegression
                     var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(composited));
                     using var output = File.Create(Path.Combine(Directory.GetCurrentDirectory(), "logs", $"ui-regression-{tab}.png"));
                     encoder.Save(output);
+                    if (tab == logTab)
+                    {
+                        var viewer = (ScrollViewer)window.FindName("LogScrollViewer");
+                        Program.Check(viewer.ActualHeight > 200, $"log tab has no room to show logs: {viewer.ActualHeight}");
+                    }
                 }
                 app.Shutdown();
                 complete.SetResult();

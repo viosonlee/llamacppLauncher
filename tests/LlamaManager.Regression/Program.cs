@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using LlamaManager.Models;
 using LlamaManager.Services;
 
@@ -138,6 +139,70 @@ internal static class Program
                 ConfigService.SaveSession(config, null);
                 Equal("-t 7", ConfigService.ReadConfig().Args);
             }));
+            await Test("strata: config persistence does not clobber sessions or main settings", () => Run(() =>
+            {
+                var config = Config(Fixtures.FreePort());
+                ConfigService.SaveConfig(config);
+                var session = new ServerSession { ProcessId = 77, StartTimeUtcTicks = DateTime.UtcNow.Ticks, EnginePath = "x", ModelPath = _model, Port = 9000 };
+                ConfigService.SaveSession(config, session);
+                config.Strata.PackageRoot = Path.Combine(_root, "strata-pkg");
+                config.Strata.Prompt = "write a quicksort";
+                config.Strata.ReserveMib = 800;
+                config.Strata.Kv = "int8";
+                ConfigService.SaveStrata(config);
+                var reloaded = ConfigService.ReadConfig();
+                Equal("write a quicksort", reloaded.Strata.Prompt);
+                Equal(800, reloaded.Strata.ReserveMib);
+                Equal(session, reloaded.RunningServer);
+                // a stats-only transaction must not touch the running session identity
+                ConfigService.SaveStrataStats("decode 15.6 tok/s");
+                reloaded = ConfigService.ReadConfig();
+                Equal("decode 15.6 tok/s", reloaded.Strata.LastStats);
+                Equal(session, reloaded.RunningServer);
+                ConfigService.SaveStrataSession(config, 4242, 1234567890, "strata.exe", running: true);
+                var strataSession = ConfigService.ReadConfig().Strata;
+                Equal(4242, strataSession.LastPid);
+                Equal(1234567890L, strataSession.LastStartedUtcTicks);
+                Equal("strata.exe", strataSession.LastEnginePath);
+                ConfigService.SaveStrataSession(config, 0, 0, null, running: false);
+                var cleared = ConfigService.ReadConfig().Strata;
+                Equal(0, cleared.LastPid);
+                Equal(0L, cleared.LastStartedUtcTicks);
+                Equal("", cleared.LastEnginePath);
+            }));
+            await Test("strata: stats parsing extracts decode/prefill/cache/hits/pool", () => Run(() =>
+            {
+                var lines = new[]
+                {
+                    "strata: session is up (engine 0.1.39)",
+                    "  decode                   256 tokens in 16312.5 ms  ->  15.69 tok/s",
+                    "  prefill                 1038 tokens in 2818.0 ms  ->  368.35 tok/s  (time to first token 5615.0 ms)",
+                    "  expert cache auto: 2.53 GiB free, 800 MiB reserved (+0 MiB for the draft head) -> 817 slots",
+                    "  R4 expert-cache hits   1229 of 4090 = 0.3005      (0 admitted, 2861 refused, cache 100.0000% full)",
+                    "  the CPU expert pool    43.683 ms/token over 40 layers (14 positions, 560 dispatches)",
+                };
+                var parsed = new[]
+                {
+                    Regex.Match(lines[1], @"decode\s+\d+ tokens in [\d.]+ ms\s+->\s+([\d.]+) tok/s"),
+                    Regex.Match(lines[2], @"prefill\s+\d+ tokens in [\d.]+ ms\s+->\s+([\d.]+) tok/s"),
+                    Regex.Match(lines[3], @"expert cache auto:\s*(.*)$"),
+                    Regex.Match(lines[4], @"(R4 expert-cache hits .*)$"),
+                    Regex.Match(lines[5], @"(the CPU expert pool .*)$"),
+                };
+                Check(parsed.All(m => m.Success), "a stats line did not match");
+                Equal("15.69", parsed[0].Groups[1].Value);
+                Equal("368.35", parsed[1].Groups[1].Value);
+                Check(parsed[2].Groups[1].Value.Contains("817 slots"), "cache detail missing");
+                Check(parsed[3].Groups[1].Value.StartsWith("R4"), "hits detail missing");
+                Check(parsed[4].Groups[1].Value.StartsWith("the CPU"), "pool detail missing");
+            }));
+            await Test("strata: path resolution rejects missing package and falls back safely", () => Run(() =>
+            {
+                var config = new ManagerConfig();
+                Throws<DirectoryNotFoundException>(() => StrataService.ResolvePaths(config));
+                Check(StrataService.ResolvePathsSafe(config) == null, "safe resolution should return null");
+                Check(!StrataService.IsRunning(config), "no process should be running");
+            }));
             await Test("presets: reject a known signature mismatch on identical names", () => Run(() =>
             {
                 var config = new ManagerConfig();
@@ -273,6 +338,35 @@ internal static class Program
                 var session = new ServerSession { ProcessId = process.Id, StartTimeUtcTicks = process.StartTime.ToUniversalTime().Ticks + 1, EnginePath = Environment.ProcessPath! };
                 Check(ServerService.ValidateProcess(session) == null, "reused PID accepted");
             }));
+            await Test("session: adopts externally restarted server with identical args", async () =>
+            {
+                var config = Config(Fixtures.FreePort()); ConfigService.SaveConfig(config);
+                Check(await ServerService.StartAsync(config), "fake server failed");
+                var stale = config.RunningServer!;
+                using (var first = ServerService.GetManagedProcess(config)) Check(first != null && first.Id == stale.ProcessId, "not detected");
+                // Simulate an external restart (autostart/manual): kill without recording, relaunch identical command line.
+                try { using var victim = Process.GetProcessById(stale.ProcessId); victim.Kill(true); victim.WaitForExit(15000); } catch { }
+                var deadline = DateTime.UtcNow.AddSeconds(15);
+                while (ServerService.TestPortInUse(stale.Port) && DateTime.UtcNow < deadline) await Task.Delay(200);
+                Check(!ServerService.TestPortInUse(stale.Port), "port not released");
+                using var relaunch = Process.Start(new ProcessStartInfo(Path.Combine(_root, "llama-server.exe"), stale.Args)
+                {
+                    WorkingDirectory = _root, UseShellExecute = false, CreateNoWindow = true
+                })!;
+                try
+                {
+                    deadline = DateTime.UtcNow.AddSeconds(15);
+                    while (!await ServerService.TestApiReadyAsync(stale.Port) && DateTime.UtcNow < deadline) await Task.Delay(200);
+                    Check(await ServerService.TestApiReadyAsync(stale.Port), "relaunched server not ready");
+                    using var adopted = ServerService.GetManagedProcess(config);
+                    Check(adopted != null && adopted.Id == relaunch.Id,
+                        $"externally restarted server not adopted (adopted={(adopted == null ? "null" : adopted.Id.ToString())}, wanted={relaunch.Id})");
+                    var latest = ConfigService.ReadConfig();
+                    Check(latest.RunningServer != null && latest.RunningServer.ProcessId == relaunch.Id,
+                        $"session not migrated (pid={(latest.RunningServer == null ? "null" : latest.RunningServer.ProcessId.ToString())})");
+                }
+                finally { Check(await ServerService.StopAsync(config), "could not stop adopted server"); }
+            });
             await Test("lifecycle: selection and port edits do not change the running identity", async () =>
             {
                 var config = Config(Fixtures.FreePort()); ConfigService.SaveConfig(config);

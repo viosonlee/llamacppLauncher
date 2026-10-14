@@ -40,9 +40,17 @@ public static class ServerService
         if (embedding) { config.RunningEmbedding = latest.RunningEmbedding; config.EmbeddingLastPid = latest.EmbeddingLastPid; }
         else { config.RunningServer = latest.RunningServer; config.LastPid = latest.LastPid; }
         var session = embedding ? latest.RunningEmbedding : latest.RunningServer;
-        if (session != null) return ValidateProcess(session);
+        if (session != null)
+        {
+            var validated = ValidateProcess(session);
+            if (validated != null) return validated;
+        }
         // Migrate only the recorded PID. Never adopt arbitrary processes merely sharing a port.
-        return RecoverLegacy(config, latest, embedding);
+        var legacy = RecoverLegacy(config, latest, embedding);
+        if (legacy != null) return legacy;
+        // Adopt a live process only when it is the recorded session relaunched externally
+        // (same engine, model, port and flags, verified against the live command line).
+        return RecoverByScan(config, latest, embedding);
     }
 
     public static Process? ValidateProcess(ServerSession session)
@@ -74,30 +82,75 @@ public static class ServerService
             if (!PathIdentity.Equals(engine, expected) && !PathIdentity.Equals(engine, ConfigService.GetPrismServerPath())) return null;
             // Older configs stored wall-clock launch time rather than the OS process creation timestamp.
             if (Math.Abs((process.StartTime.ToUniversalTime() - recorded.ToUniversalTime()).TotalSeconds) > 10) return null;
-            using var search = new ManagementObjectSearcher($"SELECT CommandLine FROM Win32_Process WHERE ProcessId = {pid}");
-            using var rows = search.Get();
-            foreach (ManagementObject row in rows)
+            var args = new LauncherArguments(GetCommandLine(pid));
+            var model = args.Get("-m");
+            if (string.IsNullOrEmpty(model) || args.Has("--embedding") != embedding) return null;
+            var session = new ServerSession
             {
-                using (row)
-                {
-                    var args = new LauncherArguments(row["CommandLine"]?.ToString());
-                    var model = args.Get("-m");
-                    if (string.IsNullOrEmpty(model) || args.Has("--embedding") != embedding) continue;
-                    var session = new ServerSession
-                    {
-                        ProcessId = pid, StartTimeUtcTicks = process.StartTime.ToUniversalTime().Ticks,
-                        EnginePath = engine, ModelPath = model, Args = string.Join(" ", args.Values.Skip(1).Select(LauncherArguments.Quote)),
-                        Port = args.GetPort(embedding ? 8081 : 8080), Embedding = embedding
-                    };
-                    if (!ConfigService.MigrateSession(config, session)) return null;
-                    var result = process;
-                    process = null;
-                    return result;
-                }
-            }
+                ProcessId = pid, StartTimeUtcTicks = process.StartTime.ToUniversalTime().Ticks,
+                EnginePath = engine, ModelPath = model, Args = string.Join(" ", args.Values.Skip(1).Select(LauncherArguments.Quote)),
+                Port = args.GetPort(embedding ? 8081 : 8080), Embedding = embedding
+            };
+            if (!ConfigService.MigrateSession(config, session)) return null;
+            var result = process;
+            process = null;
+            return result;
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception or ManagementException) { }
         finally { process?.Dispose(); }
+        return null;
+    }
+
+    private static string? GetCommandLine(int processId)
+    {
+        using var search = new ManagementObjectSearcher($"SELECT CommandLine FROM Win32_Process WHERE ProcessId = {processId}");
+        using var rows = search.Get();
+        foreach (ManagementObject row in rows)
+        {
+            using (row) return row["CommandLine"]?.ToString();
+        }
+        return null;
+    }
+
+    private static bool RecordedProcessGone(ServerSession recorded)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(recorded.ProcessId);
+            return process.HasExited || process.StartTime.ToUniversalTime().Ticks != recorded.StartTimeUtcTicks;
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            return true;
+        }
+    }
+
+    private static Process? RecoverByScan(ManagerConfig config, ManagerConfig latest, bool embedding)
+    {
+        var recorded = embedding ? latest.RunningEmbedding : latest.RunningServer;
+        if (recorded == null || !RecordedProcessGone(recorded)) return null;
+        foreach (var candidate in Process.GetProcessesByName("llama-server"))
+        {
+            var adopted = false;
+            try
+            {
+                var engine = candidate.MainModule?.FileName ?? "";
+                var commandLine = GetCommandLine(candidate.Id);
+                if (commandLine == null) continue;
+                var startTicks = candidate.StartTime.ToUniversalTime().Ticks;
+                if (!recorded.MatchesFingerprint(engine, commandLine)) continue;
+                var live = new ServerSession
+                {
+                    ProcessId = candidate.Id, StartTimeUtcTicks = startTicks, EnginePath = engine,
+                    ModelPath = recorded.ModelPath, Args = recorded.Args, Port = recorded.Port, Embedding = recorded.Embedding
+                };
+                if (!ConfigService.AdoptSession(config, recorded, live)) return null;
+                adopted = true;
+                return candidate;
+            }
+            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception or ManagementException) { }
+            finally { if (!adopted) candidate.Dispose(); }
+        }
         return null;
     }
 
