@@ -29,6 +29,8 @@
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
         <!-- App Bar: read-only runtime state, always visible -->
@@ -66,8 +68,8 @@
         <TabControl x:Name="ConfigurationTabs" Grid.Row="1" Margin="0,0,0,10"
                     Background="Transparent" BorderThickness="0"
                     TabStripPlacement="Left"
-                    Template="{StaticResource NavTabControlTemplate}"
-                    ItemContainerStyle="{StaticResource NavTabItem}">
+                    Template="{DynamicResource NavTabControlTemplate}"
+                    ItemContainerStyle="{DynamicResource NavTabItem}">
             <!-- Model Selection Tab -->
             <TabItem ToolTip="模型选择">
                 <TabItem.Header>
@@ -103,7 +105,7 @@
                                 Margin="4,0,0,0" Padding="8,4" FontSize="11" ToolTip="选择任意单独的 GGUF 文件"/>
                     </Grid>
 
-                    <ListBox x:Name="ModelListBox" Grid.Row="1" ItemContainerStyle="{StaticResource ModelListItem}"
+                    <ListBox x:Name="ModelListBox" Grid.Row="1" ItemContainerStyle="{DynamicResource ModelListItem}"
                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                              SelectionChanged="ModelListBox_SelectionChanged">
                         <ListBox.ItemTemplate>

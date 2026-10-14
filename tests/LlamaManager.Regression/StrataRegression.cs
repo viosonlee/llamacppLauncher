@@ -116,6 +116,31 @@ internal static class StrataRegression
                 File.Delete(Path.Combine(stage, "hang"));
             }
         }
+        // Stop() is reachable in every state: with a live child it kills it and clears the identity.
+        File.WriteAllText(Path.Combine(engine, "hang"), "");
+        File.Delete(Path.Combine(engine, "started.pid"));
+        using var stopCancel = new CancellationTokenSource();
+        var stopProbe = StrataService.RunAsync(config, ct: stopCancel.Token);
+        try
+        {
+            var deadline = Stopwatch.StartNew();
+            while (!File.Exists(Path.Combine(engine, "started.pid")) && deadline.Elapsed < TimeSpan.FromSeconds(10))
+                await Task.Delay(20);
+            var pid = int.Parse(File.ReadAllText(Path.Combine(engine, "started.pid")));
+            using var child = Process.GetProcessById(pid);
+            Program.Check(StrataService.Stop(config), "Stop reported nothing stopped with a live child");
+            Program.Check(child.HasExited, "Stop left the engine running");
+            Program.Equal(0, ConfigService.ReadConfig().Strata.LastPid);
+            Program.Check(!StrataService.Stop(config), "idle Stop reported a stop");
+            stopCancel.Cancel();
+            // A user-initiated Stop kills the child, so the probe surfaces the engine's
+            // exit as InvalidOperationException rather than OCE; both are the designed paths.
+            try { await stopProbe.WaitAsync(TimeSpan.FromSeconds(10)); }
+            catch (Exception ex) when (ex is OperationCanceledException or InvalidOperationException
+                && (ex is OperationCanceledException || ex.Message.Contains("引擎提前退出"))) { }
+        }
+        finally { File.Delete(Path.Combine(engine, "hang")); }
+
         // Cancellation releases the run gate and cross-process lease.
         Program.Equal("中", (await StrataService.RunAsync(config)).Answer);
     }

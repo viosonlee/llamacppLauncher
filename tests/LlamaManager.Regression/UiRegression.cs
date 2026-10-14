@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Reflection;
 using System.IO;
 using System.Windows;
@@ -31,6 +32,18 @@ internal static class UiRegression
         for (var i = 0; i < 40; i++) window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
     }
 
+    private static System.Collections.Generic.IEnumerable<T> FindDescendants<T>(System.Windows.DependencyObject root)
+        where T : System.Windows.DependencyObject
+    {
+        var count = System.Windows.Media.VisualTreeHelper.GetChildrenCount(root);
+        for (var i = 0; i < count; i++)
+        {
+            var child = System.Windows.Media.VisualTreeHelper.GetChild(root, i);
+            if (child is T match) yield return match;
+            foreach (var descendant in FindDescendants<T>(child)) yield return descendant;
+        }
+    }
+
     public static Task RunAsync()
     {
         var complete = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -50,6 +63,21 @@ internal static class UiRegression
                 });
                 var window = new MainWindow();
                 typeof(MainWindow).GetField("_loaded", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(window, true);
+                // WPF clamps out-of-range Grid.Row to the last row silently, which
+                // stacks siblings on top of each other (footer borders once covered
+                // the service-control buttons). Guard every direct child of every
+                // grid in the window.
+                foreach (var grid in FindDescendants<System.Windows.Controls.Grid>(window))
+                {
+                    var rows = grid.RowDefinitions.Count;
+                    foreach (var child in grid.Children.OfType<UIElement>())
+                    {
+                        var row = System.Windows.Controls.Grid.GetRow(child);
+                        var rowSpan = System.Windows.Controls.Grid.GetRowSpan(child);
+                        Program.Check(row + Math.Max(1, rowSpan) <= Math.Max(rows, 1) || rows == 0,
+                            $"{grid.Name ?? "?"} child {child.GetType().Name} row {row}+{rowSpan} outside {rows} rows");
+                    }
+                }
                 // Guard contrast: labels must not render light-on-light.
                 var probeLabel = (TextBlock)window.FindName("SelectedModelText");
                 Program.Check(probeLabel.Foreground is SolidColorBrush { Color: var c } && (c.R + c.G + c.B) / 3 < 128,

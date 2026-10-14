@@ -11,6 +11,11 @@ public static class StrataParameterHelp
         5. 换量化、微调或模型变种需要对应的 Pack；当前入口仅接受受支持的 qwen35moe 40 层主干。
         Pack 生成不使用 GPU，也不会停止正在运行的模型服务。停止按钮可以取消准备任务。
 
+        Pack 复用条件与存放位置
+        Pack 按模型文件 + 打包工具的指纹复用。模型放在本地硬盘：OneDrive / 坚果云等同步盘会频繁
+        改动文件时间戳，导致缓存反复失效、重复生成。缓存位置默认在启动器 data\strata-packs，
+        生成中断只留临时目录，不会破坏已有 Pack；同一模型反复生成会产生带后缀的副本，可手动清理。
+
         推荐起始配置（6GB 显卡）
         显存预留 800 MiB；上下文 4096；生成 128；Prefill 2048；KV int8；Spec 2。
         8 核 CPU 可以从 6 个 pool worker 起步；0 表示引擎自动决定。

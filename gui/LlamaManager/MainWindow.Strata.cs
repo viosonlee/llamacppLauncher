@@ -177,9 +177,11 @@ public partial class MainWindow
         RefreshStrataButtons();
         try
         {
+            // All three in order: a live engine must be stopped even if a stale
+            // cancellation token survived a race; Stop() is a no-op when idle.
             if (_strataPreparationCancellation != null) _strataPreparationCancellation.Cancel();
-            else if (_strataRunCancellation != null) _strataRunCancellation.Cancel();
-            else await Task.Run(() => StrataService.Stop(_config, LogService.Write));
+            if (_strataRunCancellation != null) _strataRunCancellation.Cancel();
+            await Task.Run(() => StrataService.Stop(_config, LogService.Write));
         }
         catch (Exception ex) { ShowError("停止失败", ex); }
         finally { _strataStopping = false; RefreshStrataButtons(); }
