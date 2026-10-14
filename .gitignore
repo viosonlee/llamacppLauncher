@@ -31,3 +31,8 @@ llama-manager.config.json*
 
 # Exclude large binaries if any (llama-server.exe is probably downloaded, but if they want to track it, I will leave it, but typically it shouldn't be tracked)
 # llama-server.exe
+
+# Caches and local artifacts
+__pycache__/
+.idea/
+*.lnk
