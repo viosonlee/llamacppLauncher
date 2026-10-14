@@ -114,3 +114,5 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         if (!_lifetime.IsCancellationRequested) MessageBox.Show(ex.Message, title, MessageBoxButton.OK, MessageBoxImage.Error);
     }
 }
+
+

@@ -3,12 +3,13 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
         Title="Llama.cpp Manager"
-        Width="720" Height="820"
-        MinWidth="620" MinHeight="650"
+        Width="760" Height="700"
+        MinWidth="620" MinHeight="480"
         WindowBackdropType="Mica"
         WindowCornerPreference="Round"
         ExtendsContentIntoTitleBar="True"
         WindowStartupLocation="CenterScreen"
+        ResizeMode="CanResize"
         Background="{StaticResource PrimaryBrush}"
         FontFamily="Segoe UI">
 
@@ -90,7 +91,7 @@
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
                         <TextBlock Grid.Column="0" Text="模型目录:" VerticalAlignment="Center" FontSize="12" Margin="0,0,8,0" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                        <ui:TextBox x:Name="ModelsDirTextBox" Grid.Column="1" FontSize="11"
+                        <ui:TextBox BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" BorderThickness="1" x:Name="ModelsDirTextBox" Grid.Column="1" FontSize="11"
                                  VerticalContentAlignment="Center" KeyDown="ModelsDirTextBox_KeyDown"
                                  LostFocus="ModelsDirTextBox_LostFocus"
                                  ToolTip="指定模型文件夹，将自动递归扫描其所有子目录下的 .gguf 文件"/>
@@ -102,8 +103,8 @@
                                 Margin="4,0,0,0" Padding="8,4" FontSize="11" ToolTip="选择任意单独的 GGUF 文件"/>
                     </Grid>
 
-                    <ListBox x:Name="ModelListBox" Grid.Row="1"
-                             Height="120" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                    <ListBox x:Name="ModelListBox" Grid.Row="1" ItemContainerStyle="{StaticResource ModelListItem}"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                              SelectionChanged="ModelListBox_SelectionChanged">
                         <ListBox.ItemTemplate>
                             <DataTemplate>
@@ -114,12 +115,12 @@
                                         <ColumnDefinition Width="*"/>
                                     </Grid.ColumnDefinitions>
                                     <TextBlock Grid.Column="0" Text="{Binding SizeFormatted}" Width="70"
-                                               Foreground="{StaticResource TextSecondaryBrush}" FontSize="11" VerticalAlignment="Center"/>
+                                               FontSize="11" VerticalAlignment="Center"/>
                                     <Border Grid.Column="1" CornerRadius="3" Padding="4,1" Margin="0,0,6,0"
                                             BorderBrush="{StaticResource TextSecondaryBrush}" BorderThickness="1"
                                             ToolTip="{Binding Category}" VerticalAlignment="Center">
                                         <TextBlock Text="{Binding ModelTypeDisplay}" FontSize="10"
-                                                   Foreground="{StaticResource TextSecondaryBrush}"/>
+                                                  />
                                     </Border>
                                     <TextBlock Grid.Column="2" Text="{Binding DisplayName}" TextTrimming="CharacterEllipsis"
                                                FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
@@ -177,9 +178,9 @@
                             <ColumnDefinition Width="30"/>
                         </Grid.ColumnDefinitions>
                         <TextBlock Grid.Column="0" Text="上下文长度 (-c)" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                        <ui:TextBox x:Name="ContextLengthBox" Grid.Column="1" Text="8192" FontSize="12"
+                        <ui:TextBox BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" BorderThickness="1" x:Name="ContextLengthBox" Grid.Column="1" Text="8192" FontSize="12"
                                  VerticalContentAlignment="Center" TextChanged="ContextLength_TextChanged"/>
-                        <ui:Button Grid.Column="2" Content="?" FontSize="11" Width="24" Height="22"
+                        <ui:Button Grid.Column="2" Icon="{ui:SymbolIcon Symbol=QuestionCircle24}" FontSize="11" Width="24" Height="22"
                                 Padding="0" Margin="4,0,0,0" Click="InfoButton_Click"
                                 Tag="context_length"/>
                     </Grid>
@@ -192,7 +193,7 @@
                             <ColumnDefinition Width="30"/>
                         </Grid.ColumnDefinitions>
                         <TextBlock Grid.Column="0" Text="K 量化 (-ctk)" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                        <ComboBox Style="{StaticResource FluentComboBox}" x:Name="ContextQuantKBox" Grid.Column="1" FontSize="12" Height="26"
+                        <ComboBox Style="{StaticResource FluentComboBox}" x:Name="ContextQuantKBox" Grid.Column="1" FontSize="12"
                                   SelectedIndex="0" SelectionChanged="ContextQuant_SelectionChanged">
                             <ComboBoxItem Content="默认 (未量化/f16)"/>
                             <ComboBoxItem Content="q8_0 (8-bit)"/>
@@ -200,7 +201,7 @@
                             <ComboBoxItem Content="q4_1 (4-bit)"/>
                             <ComboBoxItem Content="f16"/>
                         </ComboBox>
-                        <ui:Button Grid.Column="2" Content="?" FontSize="11" Width="24" Height="22"
+                        <ui:Button Grid.Column="2" Icon="{ui:SymbolIcon Symbol=QuestionCircle24}" FontSize="11" Width="24" Height="22"
                                 Padding="0" Margin="4,0,0,0" Click="InfoButton_Click"
                                 Tag="context_quant"/>
                     </Grid>
@@ -213,14 +214,14 @@
                             <ColumnDefinition Width="30"/>
                         </Grid.ColumnDefinitions>
                         <TextBlock Grid.Column="0" Text="卸载层数 (-ngl)" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                        <ComboBox Style="{StaticResource FluentComboBox}" x:Name="OffloadLayersBox" Grid.Column="1" FontSize="12" Height="26"
+                        <ComboBox Style="{StaticResource FluentComboBox}" x:Name="OffloadLayersBox" Grid.Column="1" FontSize="12"
                                   IsEditable="True" Text="all" SelectionChanged="OffloadLayers_SelectionChanged"
                                   LostFocus="OffloadLayers_LostFocus">
                             <ComboBoxItem Content="all"/>
                             <ComboBoxItem Content="auto"/>
                             <ComboBoxItem Content="0"/>
                         </ComboBox>
-                        <ui:Button Grid.Column="2" Content="?" FontSize="11" Width="24" Height="22"
+                        <ui:Button Grid.Column="2" Icon="{ui:SymbolIcon Symbol=QuestionCircle24}" FontSize="11" Width="24" Height="22"
                                 Padding="0" Margin="4,0,0,0" Click="InfoButton_Click"
                                 Tag="offload_layers"/>
                     </Grid>
@@ -233,7 +234,7 @@
                             <ColumnDefinition Width="30"/>
                         </Grid.ColumnDefinitions>
                         <TextBlock Grid.Column="0" Text="V 量化 (-ctv)" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                        <ComboBox Style="{StaticResource FluentComboBox}" x:Name="ContextQuantVBox" Grid.Column="1" FontSize="12" Height="26"
+                        <ComboBox Style="{StaticResource FluentComboBox}" x:Name="ContextQuantVBox" Grid.Column="1" FontSize="12"
                                   SelectedIndex="0" SelectionChanged="ContextQuant_SelectionChanged">
                             <ComboBoxItem Content="默认 (未量化/f16)"/>
                             <ComboBoxItem Content="q8_0 (8-bit)"/>
@@ -241,7 +242,7 @@
                             <ComboBoxItem Content="q4_1 (4-bit)"/>
                             <ComboBoxItem Content="f16"/>
                         </ComboBox>
-                        <ui:Button Grid.Column="2" Content="?" FontSize="11" Width="24" Height="22"
+                        <ui:Button Grid.Column="2" Icon="{ui:SymbolIcon Symbol=QuestionCircle24}" FontSize="11" Width="24" Height="22"
                                 Padding="0" Margin="4,0,0,0" Click="InfoButton_Click"
                                 Tag="context_quant_v"/>
                     </Grid>
@@ -254,9 +255,9 @@
                             <ColumnDefinition Width="30"/>
                         </Grid.ColumnDefinitions>
                         <TextBlock Grid.Column="0" Text="CPU 核心数 (-t)" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                        <ComboBox Style="{StaticResource FluentComboBox}" x:Name="CpuCoresBox" Grid.Column="1" FontSize="12" Height="26"
+                        <ComboBox Style="{StaticResource FluentComboBox}" x:Name="CpuCoresBox" Grid.Column="1" FontSize="12"
                                   SelectionChanged="CpuCores_SelectionChanged"/>
-                        <ui:Button Grid.Column="2" Content="?" FontSize="11" Width="24" Height="22"
+                        <ui:Button Grid.Column="2" Icon="{ui:SymbolIcon Symbol=QuestionCircle24}" FontSize="11" Width="24" Height="22"
                                 Padding="0" Margin="4,0,0,0" Click="InfoButton_Click"
                                 Tag="cpu_cores"/>
                     </Grid>
@@ -269,14 +270,14 @@
                             <ColumnDefinition Width="30"/>
                         </Grid.ColumnDefinitions>
                         <TextBlock Grid.Column="0" Text="思考模式" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                        <ComboBox Style="{StaticResource FluentComboBox}" x:Name="ReasoningBox" Grid.Column="1" FontSize="12" Height="26"
+                        <ComboBox Style="{StaticResource FluentComboBox}" x:Name="ReasoningBox" Grid.Column="1" FontSize="12"
                                   SelectedIndex="0" SelectionChanged="Reasoning_SelectionChanged">
                             <ComboBoxItem Content="默认"/>
                             <ComboBoxItem Content="off (关闭)"/>
                             <ComboBoxItem Content="on (开启)"/>
                             <ComboBoxItem Content="auto"/>
                         </ComboBox>
-                        <ui:Button Grid.Column="2" Content="?" FontSize="11" Width="24" Height="22"
+                        <ui:Button Grid.Column="2" Icon="{ui:SymbolIcon Symbol=QuestionCircle24}" FontSize="11" Width="24" Height="22"
                                 Padding="0" Margin="4,0,0,0" Click="InfoButton_Click"
                                 Tag="reasoning"/>
                     </Grid>
@@ -289,14 +290,14 @@
                             <ColumnDefinition Width="30"/>
                         </Grid.ColumnDefinitions>
                         <TextBlock Grid.Column="0" Text="Flash Attention" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                        <ComboBox Style="{StaticResource FluentComboBox}" x:Name="FlashAttentionBox" Grid.Column="1" FontSize="12" Height="26"
+                        <ComboBox Style="{StaticResource FluentComboBox}" x:Name="FlashAttentionBox" Grid.Column="1" FontSize="12"
                                   SelectedIndex="0" SelectionChanged="FlashAttention_SelectionChanged">
                             <ComboBoxItem Content="默认"/>
                             <ComboBoxItem Content="off (关闭)"/>
                             <ComboBoxItem Content="on (开启)"/>
                             <ComboBoxItem Content="auto"/>
                         </ComboBox>
-                        <ui:Button Grid.Column="2" Content="?" FontSize="11" Width="24" Height="22"
+                        <ui:Button Grid.Column="2" Icon="{ui:SymbolIcon Symbol=QuestionCircle24}" FontSize="11" Width="24" Height="22"
                                 Padding="0" Margin="4,0,0,0" Click="InfoButton_Click"
                                 Tag="flash_attention"/>
                     </Grid>
@@ -309,14 +310,14 @@
                             <ColumnDefinition Width="30"/>
                         </Grid.ColumnDefinitions>
                         <TextBlock Grid.Column="0" Text="批处理大小 (-b)" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                        <ComboBox Style="{StaticResource FluentComboBox}" x:Name="BatchSizeBox" Grid.Column="1" FontSize="12" Height="26"
+                        <ComboBox Style="{StaticResource FluentComboBox}" x:Name="BatchSizeBox" Grid.Column="1" FontSize="12"
                                   IsEditable="True" Text="2048" SelectionChanged="BatchSize_SelectionChanged"
                                   LostFocus="BatchSize_LostFocus">
                             <ComboBoxItem Content="2048"/>
                             <ComboBoxItem Content="1024"/>
                             <ComboBoxItem Content="512"/>
                         </ComboBox>
-                        <ui:Button Grid.Column="2" Content="?" FontSize="11" Width="24" Height="22"
+                        <ui:Button Grid.Column="2" Icon="{ui:SymbolIcon Symbol=QuestionCircle24}" FontSize="11" Width="24" Height="22"
                                 Padding="0" Margin="4,0,0,0" Click="InfoButton_Click" Tag="batch_size"/>
                     </Grid>
 
@@ -328,14 +329,14 @@
                             <ColumnDefinition Width="30"/>
                         </Grid.ColumnDefinitions>
                         <TextBlock Grid.Column="0" Text="物理批大小 (-ub)" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                        <ComboBox Style="{StaticResource FluentComboBox}" x:Name="UBatchSizeBox" Grid.Column="1" FontSize="12" Height="26"
+                        <ComboBox Style="{StaticResource FluentComboBox}" x:Name="UBatchSizeBox" Grid.Column="1" FontSize="12"
                                   IsEditable="True" Text="512" SelectionChanged="UBatchSize_SelectionChanged"
                                   LostFocus="UBatchSize_LostFocus">
                             <ComboBoxItem Content="512"/>
                             <ComboBoxItem Content="256"/>
                             <ComboBoxItem Content="128"/>
                         </ComboBox>
-                        <ui:Button Grid.Column="2" Content="?" FontSize="11" Width="24" Height="22"
+                        <ui:Button Grid.Column="2" Icon="{ui:SymbolIcon Symbol=QuestionCircle24}" FontSize="11" Width="24" Height="22"
                                 Padding="0" Margin="4,0,0,0" Click="InfoButton_Click" Tag="ubatch_size"/>
                     </Grid>
 
@@ -347,12 +348,12 @@
                             <ColumnDefinition Width="30"/>
                         </Grid.ColumnDefinitions>
                         <TextBlock Grid.Column="0" Text="详细调用日志" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                        <ComboBox Style="{StaticResource FluentComboBox}" x:Name="VerboseLogBox" Grid.Column="1" FontSize="12" Height="26"
+                        <ComboBox Style="{StaticResource FluentComboBox}" x:Name="VerboseLogBox" Grid.Column="1" FontSize="12"
                                   SelectedIndex="0" SelectionChanged="VerboseLog_SelectionChanged">
                             <ComboBoxItem Content="关闭 (默认)"/>
                             <ComboBoxItem Content="开启 (-v / 详细)"/>
                         </ComboBox>
-                        <ui:Button Grid.Column="2" Content="?" FontSize="11" Width="24" Height="22"
+                        <ui:Button Grid.Column="2" Icon="{ui:SymbolIcon Symbol=QuestionCircle24}" FontSize="11" Width="24" Height="22"
                                 Padding="0" Margin="4,0,0,0" Click="InfoButton_Click"
                                 Tag="verbose_log"/>
                     </Grid>
@@ -365,7 +366,7 @@
                             <ColumnDefinition Width="30"/>
                         </Grid.ColumnDefinitions>
                         <TextBlock Grid.Column="0" Text="投机解码" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                        <ComboBox Style="{StaticResource FluentComboBox}" x:Name="SpecTypeBox" Grid.Column="1" FontSize="12" Height="26"
+                        <ComboBox Style="{StaticResource FluentComboBox}" x:Name="SpecTypeBox" Grid.Column="1" FontSize="12"
                                   SelectedIndex="0" SelectionChanged="SpecType_SelectionChanged">
                             <ComboBoxItem Content="默认 (不传)"/>
                             <ComboBoxItem Content="draft-mtp"/>
@@ -374,7 +375,7 @@
                             <ComboBoxItem Content="ngram-mod"/>
                             <ComboBoxItem Content="none"/>
                         </ComboBox>
-                        <ui:Button Grid.Column="2" Content="?" FontSize="11" Width="24" Height="22"
+                        <ui:Button Grid.Column="2" Icon="{ui:SymbolIcon Symbol=QuestionCircle24}" FontSize="11" Width="24" Height="22"
                                 Padding="0" Margin="4,0,0,0" Click="InfoButton_Click"
                                 Tag="spec_type"/>
                     </Grid>
@@ -387,7 +388,7 @@
                             <ColumnDefinition Width="30"/>
                         </Grid.ColumnDefinitions>
                         <TextBlock Grid.Column="0" Text="思考上限 (tokens)" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                        <ComboBox Style="{StaticResource FluentComboBox}" x:Name="ReasoningBudgetBox" Grid.Column="1" FontSize="12" Height="26"
+                        <ComboBox Style="{StaticResource FluentComboBox}" x:Name="ReasoningBudgetBox" Grid.Column="1" FontSize="12"
                                   IsEditable="True" Text="默认" SelectionChanged="ReasoningBudget_SelectionChanged"
                                   LostFocus="ReasoningBudget_LostFocus">
                             <ComboBoxItem Content="默认"/>
@@ -398,7 +399,7 @@
                             <ComboBoxItem Content="4096"/>
                             <ComboBoxItem Content="8192"/>
                         </ComboBox>
-                        <ui:Button Grid.Column="2" Content="?" FontSize="11" Width="24" Height="22"
+                        <ui:Button Grid.Column="2" Icon="{ui:SymbolIcon Symbol=QuestionCircle24}" FontSize="11" Width="24" Height="22"
                                 Padding="0" Margin="4,0,0,0" Click="InfoButton_Click"
                                 Tag="reasoning_budget"/>
                     </Grid>
@@ -412,13 +413,13 @@
                             <ColumnDefinition Width="30"/>
                         </Grid.ColumnDefinitions>
                         <TextBlock Grid.Column="0" Text="草稿模型 (-md)" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                        <ui:TextBox x:Name="DraftModelBox" Grid.Column="1" FontSize="12" Height="26"
+                        <ui:TextBox BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" BorderThickness="1" x:Name="DraftModelBox" Grid.Column="1" FontSize="12"
                                  VerticalContentAlignment="Center"
                                  ToolTip="投机解码草稿模型路径；与上方投机解码选项配合使用"
                                  TextChanged="DraftModel_TextChanged" LostFocus="DraftModel_LostFocus"/>
-                        <ui:Button Grid.Column="2" Content="浏览..." FontSize="11" Height="26"
+                        <ui:Button Grid.Column="2" Content="浏览..." FontSize="11"
                                 Padding="8,0" Margin="6,0,0,0" Click="DraftModelBrowse_Click"/>
-                        <ui:Button Grid.Column="3" Content="?" FontSize="11" Width="24" Height="22"
+                        <ui:Button Grid.Column="3" Icon="{ui:SymbolIcon Symbol=QuestionCircle24}" FontSize="11" Width="24" Height="22"
                                 Padding="0" Margin="4,0,0,0" Click="InfoButton_Click"
                                 Tag="draft_model"/>
                     </Grid>
@@ -454,8 +455,8 @@
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="30"/>
                                 </Grid.ColumnDefinitions>
-                                <TextBlock Grid.Column="0" Text="MoE卸载 (--n-cpu-moe)" FontSize="11" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                <ComboBox Style="{StaticResource FluentComboBox}" x:Name="MoeOffloadBox" Grid.Column="1" FontSize="12" Height="26"
+                                <TextBlock Grid.Column="0" Text="MoE卸载" ToolTip="--n-cpu-moe：强制在 CPU 上计算的专家层数" FontSize="11" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                <ComboBox Style="{StaticResource FluentComboBox}" x:Name="MoeOffloadBox" Grid.Column="1" FontSize="12"
                                           IsEditable="True" Text="默认" SelectionChanged="MoeOffload_SelectionChanged"
                                           LostFocus="MoeOffload_LostFocus">
                             <ComboBoxItem Content="默认"/>
@@ -467,7 +468,7 @@
                             <ComboBoxItem Content="16"/>
                             <ComboBoxItem Content="32"/>
                         </ComboBox>
-                                <ui:Button Grid.Column="2" Content="?" FontSize="11" Width="24" Height="22"
+                                <ui:Button Grid.Column="2" Icon="{ui:SymbolIcon Symbol=QuestionCircle24}" FontSize="11" Width="24" Height="22"
                                         Padding="0" Margin="4,0,0,0" Click="InfoButton_Click" Tag="n_cpu_moe"/>
                             </Grid>
 
@@ -501,9 +502,9 @@
 
                     <TextBlock Grid.Row="0" Text="自定义启动参数 (llama-server 命令行):" Margin="0,0,0,6" FontSize="12" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
 
-                    <ui:TextBox x:Name="ArgsTextBox" Grid.Row="1"
+                    <ui:TextBox BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" BorderThickness="1" x:Name="ArgsTextBox" Grid.Row="1"
                              AcceptsReturn="True" TextWrapping="Wrap"
-                             VerticalScrollBarVisibility="Auto" Height="100"
+                             VerticalScrollBarVisibility="Auto" MinHeight="100"
                              FontFamily="Consolas" FontSize="11"
                              VerticalContentAlignment="Top"
                              TextChanged="ArgsTextBox_TextChanged"/>
@@ -517,7 +518,7 @@
                         <ui:Button Grid.Column="0" Content="重新生成预设参数" Click="RegenerateButton_Click"
                                 HorizontalAlignment="Left" Padding="12,5" FontSize="11"/>
                         <TextBlock Grid.Column="1" Text="端口:" Margin="8,0,6,0" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                        <ui:TextBox x:Name="PortTextBox" Grid.Column="2" Width="60" FontSize="12"
+                        <ui:TextBox BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" BorderThickness="1" x:Name="PortTextBox" Grid.Column="2" Width="60" FontSize="12"
                                  VerticalContentAlignment="Center" Text="8080" LostFocus="PortTextBox_LostFocus"/>
                     </Grid>
                 </Grid>
@@ -548,23 +549,23 @@
                                         <TextBlock Text="包目录（含 engine 和 tools）" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
                                         <DockPanel Margin="0,3,0,6">
                                             <ui:Button DockPanel.Dock="Right" Content="浏览…" Click="StrataRootButton_Click" Margin="6,0,0,0" Padding="8,3"/>
-                                            <ui:TextBox x:Name="StrataRootTextBox" LostFocus="StrataParam_LostFocus" FontSize="11"/>
+                                            <ui:TextBox BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" BorderThickness="1" x:Name="StrataRootTextBox" LostFocus="StrataParam_LostFocus" FontSize="11"/>
                                         </DockPanel>
                                         <TextBlock Text="所选 GGUF（分片模型选第一片）" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
                                         <DockPanel Margin="0,3,0,6">
                                             <ui:Button DockPanel.Dock="Right" Content="浏览…" Click="StrataModelButton_Click" Margin="6,0,0,0" Padding="8,3"/>
                                             <ui:Button DockPanel.Dock="Right" Content="默认" Click="StrataModelResetButton_Click" Margin="6,0,0,0" Padding="8,3"/>
-                                            <ui:TextBox x:Name="StrataModelTextBox" IsReadOnly="True" FontSize="11"/>
+                                            <ui:TextBox BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" BorderThickness="1" x:Name="StrataModelTextBox" IsReadOnly="True" FontSize="11"/>
                                         </DockPanel>
                                         <TextBlock Text="Python 3.10+（留空自动查找；已有 Pack 推理不需要 Python）" FontSize="11" TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
                                         <DockPanel Margin="0,3,0,6">
                                             <ui:Button DockPanel.Dock="Right" Content="选择…" Tag="Python" Click="StrataPathButton_Click" Margin="6,0,0,0" Padding="8,3"/>
-                                            <ui:TextBox x:Name="StrataPythonTextBox" FontSize="11" LostFocus="StrataParam_LostFocus"/>
+                                            <ui:TextBox BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" BorderThickness="1" x:Name="StrataPythonTextBox" FontSize="11" LostFocus="StrataParam_LostFocus"/>
                                         </DockPanel>
                                         <TextBlock Text="Pack 缓存位置（留空使用启动器 data/strata-packs）" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
                                         <DockPanel Margin="0,3,0,6">
                                             <ui:Button DockPanel.Dock="Right" Content="选择…" Tag="Cache" Click="StrataPathButton_Click" Margin="6,0,0,0" Padding="8,3"/>
-                                            <ui:TextBox x:Name="StrataCacheTextBox" FontSize="11" LostFocus="StrataParam_LostFocus"/>
+                                            <ui:TextBox BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" BorderThickness="1" x:Name="StrataCacheTextBox" FontSize="11" LostFocus="StrataParam_LostFocus"/>
                                         </DockPanel>
                                     </StackPanel>
                                     <ui:Button x:Name="StrataGeneratePackButton" Content="为所选 GGUF 一键生成 / 复用 Pack" Click="StrataGeneratePackButton_Click" Padding="8,6" HorizontalAlignment="Left"/>
@@ -575,17 +576,17 @@
                                             <TextBlock Text="Pack：必须对应当前 GGUF" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
                                             <DockPanel Margin="0,3,0,6">
                                                 <ui:Button DockPanel.Dock="Right" Content="选择…" Tag="Pack" Click="StrataPathButton_Click" Margin="6,0,0,0"/>
-                                                <ui:TextBox x:Name="StrataPackTextBox" FontSize="11" LostFocus="StrataParam_LostFocus"/>
+                                                <ui:TextBox BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" BorderThickness="1" x:Name="StrataPackTextBox" FontSize="11" LostFocus="StrataParam_LostFocus"/>
                                             </DockPanel>
                                             <TextBlock Text="Profile：专家缓存排序，初始 Profile 可直接运行" TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
                                             <DockPanel Margin="0,3,0,6">
                                                 <ui:Button DockPanel.Dock="Right" Content="选择…" Tag="Profile" Click="StrataPathButton_Click" Margin="6,0,0,0"/>
-                                                <ui:TextBox x:Name="StrataProfileTextBox" FontSize="11" LostFocus="StrataParam_LostFocus"/>
+                                                <ui:TextBox BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" BorderThickness="1" x:Name="StrataProfileTextBox" FontSize="11" LostFocus="StrataParam_LostFocus"/>
                                             </DockPanel>
                                             <TextBlock Text="MTP：可选草稿目录，需另行准备；不是另一个完整 GGUF" TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
                                             <DockPanel Margin="0,3,0,6">
                                                 <ui:Button DockPanel.Dock="Right" Content="选择…" Tag="Mtp" Click="StrataPathButton_Click" Margin="6,0,0,0"/>
-                                                <ui:TextBox x:Name="StrataMtpTextBox" FontSize="11" LostFocus="StrataParam_LostFocus"/>
+                                                <ui:TextBox BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" BorderThickness="1" x:Name="StrataMtpTextBox" FontSize="11" LostFocus="StrataParam_LostFocus"/>
                                             </DockPanel>
                                         </StackPanel>
                                     </Expander>
@@ -608,31 +609,31 @@
                                             <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
                                         </Grid.RowDefinitions>
                                         <TextBlock Text="显存预留 MiB" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                        <ui:TextBox x:Name="StrataReserveBox" Grid.Column="1" Margin="0,0,8,6" LostFocus="StrataParam_LostFocus" ToolTip="--vram-reserve-mib；6GB 从 800 起步，500 可增加专家缓存；越小越容易挤占 KV 和桌面空间。"/>
+                                        <ui:TextBox BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" BorderThickness="1" x:Name="StrataReserveBox" Grid.Column="1" Margin="0,0,8,6" LostFocus="StrataParam_LostFocus" ToolTip="--vram-reserve-mib；6GB 从 800 起步，500 可增加专家缓存；越小越容易挤占 KV 和桌面空间。"/>
                                         <TextBlock Grid.Column="2" Text="6GB 从 800 起步；降低可增加缓存，不等于一定更快。" TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
                                         <TextBlock Grid.Row="1" Text="上下文 tokens" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                        <ui:TextBox x:Name="StrataContextBox" Grid.Row="1" Grid.Column="1" Margin="0,0,8,6" LostFocus="StrataParam_LostFocus" ToolTip="--max-context；建议 4096，包含输入和输出。增大会占用更多 KV 显存。"/>
+                                        <ui:TextBox BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" BorderThickness="1" x:Name="StrataContextBox" Grid.Row="1" Grid.Column="1" Margin="0,0,8,6" LostFocus="StrataParam_LostFocus" ToolTip="--max-context；建议 4096，包含输入和输出。增大会占用更多 KV 显存。"/>
                                         <TextBlock Grid.Row="1" Grid.Column="2" Text="建议 4096；必须容纳提示词 + 最大生成长度。" TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
                                         <TextBlock Grid.Row="2" Text="最大生成" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                        <ui:TextBox x:Name="StrataMaxNewBox" Grid.Row="2" Grid.Column="1" Margin="0,0,8,6" LostFocus="StrataParam_LostFocus" ToolTip="--max-new；首次 128，长回答可改 256/512。"/>
+                                        <ui:TextBox BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" BorderThickness="1" x:Name="StrataMaxNewBox" Grid.Row="2" Grid.Column="1" Margin="0,0,8,6" LostFocus="StrataParam_LostFocus" ToolTip="--max-new；首次 128，长回答可改 256/512。"/>
                                         <TextBlock Grid.Row="2" Grid.Column="2" Text="首次 128；长回答可调 256/512，不能超过剩余上下文。" TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
                                         <TextBlock Grid.Row="3" Text="Prefill 分块" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                        <ui:TextBox x:Name="StrataPrefillBox" Grid.Row="3" Grid.Column="1" Margin="0,0,8,6" LostFocus="StrataParam_LostFocus" ToolTip="--prefill；建议 2048，临时显存不足时降至 1024/512。不是上下文总长度。"/>
+                                        <ui:TextBox BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" BorderThickness="1" x:Name="StrataPrefillBox" Grid.Row="3" Grid.Column="1" Margin="0,0,8,6" LostFocus="StrataParam_LostFocus" ToolTip="--prefill；建议 2048，临时显存不足时降至 1024/512。不是上下文总长度。"/>
                                         <TextBlock Grid.Row="3" Grid.Column="2" Text="建议 2048；临时显存不足时降低，不是上下文总长度。" TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
                                         <TextBlock Grid.Row="4" Text="KV 精度" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
                                         <ComboBox Style="{StaticResource FluentComboBox}" x:Name="StrataKvBox" Grid.Row="4" Grid.Column="1" Margin="0,0,8,6" SelectionChanged="StrataKvBox_SelectionChanged" ToolTip="建议 int8；fp16 占用更多，k8v4/q4_0 更省但有不同的量化误差，不保证逐位相同。"/>
                                         <TextBlock Grid.Row="4" Grid.Column="2" Text="建议 int8；fp16 更占显存，k8v4/q4_0 更省。" TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
                                         <TextBlock Grid.Row="5" Text="CPU 池线程" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                        <ui:TextBox x:Name="StrataWorkersBox" Grid.Row="5" Grid.Column="1" Margin="0,0,8,6" LostFocus="StrataParam_LostFocus" ToolTip="--pool-workers；0 自动；8 核 CPU 可从 6 起步，越多不一定越快。"/>
+                                        <ui:TextBox BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" BorderThickness="1" x:Name="StrataWorkersBox" Grid.Row="5" Grid.Column="1" Margin="0,0,8,6" LostFocus="StrataParam_LostFocus" ToolTip="--pool-workers；0 自动；8 核 CPU 可从 6 起步，越多不一定越快。"/>
                                         <TextBlock Grid.Row="5" Grid.Column="2" Text="0 自动；8 核 CPU 可从 6 起步，线程越多不一定越快。" TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
                                         <TextBlock Grid.Row="6" Text="线程亲和" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
                                         <ComboBox Style="{StaticResource FluentComboBox}" x:Name="StrataAffinityBox" Grid.Row="6" Grid.Column="1" Margin="0,0,8,6" SelectionChanged="StrataKvBox_SelectionChanged" ToolTip="auto 自动选择，all 全部物理核心，p-cores 用于有性能核/能效核的 CPU。"/>
                                         <TextBlock Grid.Row="6" Grid.Column="2" Text="auto 通用；all 使用物理核心；p-cores 针对混合架构 CPU。" TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
                                         <TextBlock Grid.Row="7" Text="Spec 窗口" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                        <ui:TextBox x:Name="StrataSpecBox" Grid.Row="7" Grid.Column="1" Margin="0,0,8,6" LostFocus="StrataParam_LostFocus" ToolTip="2-8；建议 2。MTP 开启时 spec 2 最多起草 1 个，spec 4 最多 3 个。无 MTP 时仍需 native 验证窗口。"/>
+                                        <ui:TextBox BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" BorderThickness="1" x:Name="StrataSpecBox" Grid.Row="7" Grid.Column="1" Margin="0,0,8,6" LostFocus="StrataParam_LostFocus" ToolTip="2-8；建议 2。MTP 开启时 spec 2 最多起草 1 个，spec 4 最多 3 个。无 MTP 时仍需 native 验证窗口。"/>
                                         <TextBlock Grid.Row="7" Grid.Column="2" Text="从 2 起步；MTP 可尝试 4，看吞吐而不只看接受率。" TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
                                         <TextBlock Grid.Row="8" Text="锁页 RAM GiB" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                        <ui:TextBox x:Name="StrataArenaPinBox" Grid.Row="8" Grid.Column="1" Margin="0,0,8,6" LostFocus="StrataParam_LostFocus" ToolTip="STRATA_ARENA_PIN_GIB；主机内存，不是显存。0 自动，24GB RAM 笔记本可从 12 起步。"/>
+                                        <ui:TextBox BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" BorderThickness="1" x:Name="StrataArenaPinBox" Grid.Row="8" Grid.Column="1" Margin="0,0,8,6" LostFocus="StrataParam_LostFocus" ToolTip="STRATA_ARENA_PIN_GIB；主机内存，不是显存。0 自动，24GB RAM 笔记本可从 12 起步。"/>
                                         <TextBlock Grid.Row="8" Grid.Column="2" Text="0 自动；24GB RAM 可从 12 起步。这是主机内存，不是显存。" TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
                                     </Grid>
                                     <WrapPanel Margin="0,6,0,0">
@@ -644,7 +645,7 @@
                             </ui:DynamicScrollViewer>
                         </TabItem>
                     </TabControl>
-                    <ui:TextBox x:Name="StrataPromptTextBox" Grid.Row="2" AcceptsReturn="True" TextWrapping="Wrap"
+                    <ui:TextBox BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" BorderThickness="1" x:Name="StrataPromptTextBox" Grid.Row="2" AcceptsReturn="True" TextWrapping="Wrap"
                              VerticalScrollBarVisibility="Auto" Height="65" FontSize="11" Margin="0,0,0,6"
                              LostFocus="StrataPromptTextBox_LostFocus" ToolTip="原始提示词；当前不自动套用聊天模板，可粘贴模型要求的完整模板。"/>
                     <Grid Grid.Row="3" Margin="0,4,0,0">
@@ -766,18 +767,18 @@
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
 
-                    <ui:Button Grid.Column="0" x:Name="StartButton"
-                            Content="▶ 启动服务" Click="StartButton_Click"
-                            Margin="0,0,4,0" Padding="8,8" FontSize="13" FontWeight="SemiBold"/>
-                    <ui:Button Grid.Column="1" x:Name="StopButton"
-                            Content="■ 停止服务" Click="StopButton_Click"
-                            Margin="3,0,3,0" Padding="8,8" FontSize="13" IsEnabled="False"/>
-                    <ui:Button Grid.Column="2" x:Name="OpenButton"
-                            Content="🌐 打开 Web UI" Click="OpenButton_Click"
-                            Margin="3,0,3,0" Padding="8,8" FontSize="13" IsEnabled="False"/>
-                    <ui:Button Grid.Column="3" x:Name="SpeedTestButton"
-                            Content="⚡ 测速" Click="SpeedTestButton_Click"
-                            Margin="4,0,0,0" Padding="8,8" FontSize="13" IsEnabled="False"
+                    <ui:Button Grid.Column="0" x:Name="StartButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Icon="{ui:SymbolIcon Symbol=Play24}"
+                            Content="启动服务" Click="StartButton_Click"
+                            Margin="0,0,4,0" Padding="10,9" FontSize="13" FontWeight="SemiBold"/>
+                    <ui:Button Grid.Column="1" x:Name="StopButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Icon="{ui:SymbolIcon Symbol=Stop24}"
+                            Content="停止服务" Click="StopButton_Click"
+                            Margin="3,0,3,0" Padding="10,9" FontSize="13" IsEnabled="False"/>
+                    <ui:Button Grid.Column="2" x:Name="OpenButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Icon="{ui:SymbolIcon Symbol=Globe24}"
+                            Content="Web UI" Click="OpenButton_Click"
+                            Margin="3,0,3,0" Padding="10,9" FontSize="13" IsEnabled="False"/>
+                    <ui:Button Grid.Column="3" x:Name="SpeedTestButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Icon="{ui:SymbolIcon Symbol=Gauge24}"
+                            Content="测速" Click="SpeedTestButton_Click"
+                            Margin="4,0,0,0" Padding="10,9" FontSize="13" IsEnabled="False"
                             ToolTip="实测推理速度：首Token延迟(TTFT) 与解码速度(tok/s)"/>
                 </Grid>
 

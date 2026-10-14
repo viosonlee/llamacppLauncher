@@ -34,6 +34,23 @@
         <Setter Property="FontFamily" Value="Segoe UI"/>
     </Style>
 
+    <Style x:Key="ComboBoxToggleButtonStyle" TargetType="ToggleButton">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="Focusable" Value="False"/>
+        <Setter Property="ClickMode" Value="Press"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ToggleButton">
+                    <Border Background="{TemplateBinding Background}"
+                            BorderThickness="0" CornerRadius="4" SnapsToDevicePixels="True">
+                        <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- WPF-UI ships no ComboBox, so the native Aero template must be replaced
          wholesale or dropdowns keep their legacy look. -->
     <Style x:Key="FluentComboBox" TargetType="ComboBox">
@@ -60,6 +77,12 @@
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
+                                <ToggleButton x:Name="DropDownToggle"
+                                              Grid.ColumnSpan="2"
+                                              Style="{StaticResource ComboBoxToggleButtonStyle}"
+                                              IsChecked="{Binding IsDropDownOpen, Mode=TwoWay,
+                                                          RelativeSource={RelativeSource TemplatedParent}}"
+                                              Background="Transparent"/>
                                 <ContentPresenter x:Name="ContentSite" Grid.Column="0"
                                                   Margin="{TemplateBinding Padding}"
                                                   HorizontalAlignment="Left" VerticalAlignment="Center"
@@ -77,7 +100,7 @@
                             <Border MinWidth="{Binding ActualWidth, ElementName=Root}"
                                     MaxHeight="{TemplateBinding MaxDropDownHeight}"
                                     Margin="4,2,4,4" CornerRadius="6"
-                                    Background="{DynamicResource FlyoutBackgroundBrush}"
+                                    Background="{DynamicResource ApplicationBackgroundBrush}"
                                     BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
                                     BorderThickness="1">
                                 <Border.Effect>
@@ -94,7 +117,7 @@
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
                             <Setter TargetName="Root" Property="BorderBrush"
-                                    Value="{DynamicResource ControlStrokeColorStrongBrush}"/>
+                                    Value="{DynamicResource ControlStrokeColorDefaultBrush}"/>
                         </Trigger>
                         <Trigger Property="IsDropDownOpen" Value="True">
                             <Setter TargetName="Root" Property="BorderBrush"
@@ -150,6 +173,34 @@
         <Setter Property="MinHeight" Value="30"/>
         <Setter Property="VerticalContentAlignment" Value="Center"/>
         <Setter Property="FontSize" Value="12"/>
+    </Style>
+
+    <Style x:Key="ModelListItem" TargetType="ListBoxItem">
+        <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
+        <Setter Property="Padding" Value="8,5"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ListBoxItem">
+                    <Border x:Name="Row" CornerRadius="4" Margin="2,1" Background="Transparent"
+                            Padding="{TemplateBinding Padding}">
+                        <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Center"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Row" Property="Background"
+                                    Value="{DynamicResource ControlFillColorSecondaryBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter TargetName="Row" Property="Background"
+                                    Value="{DynamicResource AccentFillColorDefaultBrush}"/>
+                            <Setter Property="Foreground"
+                                    Value="{DynamicResource TextOnAccentFillColorPrimaryBrush}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
     </Style>
 
     <!-- Left icon navigation rail: vertical tabs rendered as square nav buttons -->
