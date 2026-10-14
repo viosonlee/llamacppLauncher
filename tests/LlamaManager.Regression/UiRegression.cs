@@ -10,6 +10,27 @@ using LlamaManager.Services;
 
 internal static class UiRegression
 {
+    // ToggleSwitch (WPF-UI) replaced CheckBox; read IsChecked without casting.
+    private static bool? IsChecked(MainWindow window, string name)
+    {
+        var control = window.FindName(name);
+        var property = control!.GetType().GetProperty("IsChecked");
+        return (bool?)property!.GetValue(control);
+    }
+
+    private static void SetFlag(MainWindow window, string field, bool value) =>
+        typeof(MainWindow).GetField(field, BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(window, value);
+
+    private static void InvokeStrataRefresh(MainWindow window)
+    {
+        var method = typeof(MainWindow).GetMethod("RefreshStrataButtons", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        // RefreshStrataButtons kicks off RefreshStatusAsync; pump the dispatcher
+        // until it settles instead of awaiting (STA thread has no await context).
+        window.Dispatcher.Invoke(() => method.Invoke(window, null));
+        for (var i = 0; i < 40; i++) window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+    }
+
     public static Task RunAsync()
     {
         var complete = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -18,12 +39,21 @@ internal static class UiRegression
             try
             {
                 var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+                // Mirror App.xaml: WPF-UI owns control appearance, Brushes.xaml
+                // supplies legacy tokens. Missing any of them reproduces the
+                // StaticResourceException users would hit at runtime.
+                app.Resources.MergedDictionaries.Add(new Wpf.Ui.Markup.ThemesDictionary { Theme = Wpf.Ui.Appearance.ApplicationTheme.Light });
+                app.Resources.MergedDictionaries.Add(new Wpf.Ui.Markup.ControlsDictionary());
                 app.Resources.MergedDictionaries.Add(new ResourceDictionary
                 {
-                    Source = new Uri("/LlamaManager;component/Styles.xaml", UriKind.Relative)
+                    Source = new Uri("/LlamaManager;component/Brushes.xaml", UriKind.Relative)
                 });
                 var window = new MainWindow();
                 typeof(MainWindow).GetField("_loaded", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(window, true);
+                // Guard contrast: labels must not render light-on-light.
+                var probeLabel = (TextBlock)window.FindName("SelectedModelText");
+                Program.Check(probeLabel.Foreground is SolidColorBrush { Color: var c } && (c.R + c.G + c.B) / 3 < 128,
+                    $"label foreground too light for a light theme: {probeLabel.Foreground}");
                 var args = (TextBox)window.FindName("ArgsTextBox");
                 ComboBox Box(string name) => (ComboBox)window.FindName(name);
                 args.Text = "--flash-attn off --reasoning-budget 0 --threads 4 --threads-batch 2 --prompt \"a  b\"";
@@ -49,9 +79,9 @@ internal static class UiRegression
                 var specArgs = new LauncherArguments(args.Text);
                 Program.Equal("C:/draft/head.gguf", specArgs.Get("-md"));
                 Program.Equal("draft-mtp", specArgs.Get("--spec-type"));
-                Program.Check(((CheckBox)window.FindName("MtpCheckbox")).IsChecked == true, "mtp checkbox reflects draft-mtp");
+                Program.Check(IsChecked(window, "MtpCheckbox") == true, "mtp checkbox reflects draft-mtp");
                 args.Text = "--spec-type ngram-mod";
-                Program.Check(((CheckBox)window.FindName("MtpCheckbox")).IsChecked == false, "mtp checkbox ignores other spec types");
+                Program.Check(IsChecked(window, "MtpCheckbox") == false, "mtp checkbox ignores other spec types");
                 args.Text = "";
                 Program.Equal("默认", Box("ReasoningBudgetBox").Text);
                 Program.Equal("", ((TextBox)window.FindName("DraftModelBox")).Text);
@@ -63,9 +93,11 @@ internal static class UiRegression
                 ((TextBlock)window.FindName("SelectedModelText")).Text = "Sakura-Micro-Bonsai-2-GSQ-RCO.gguf";
                 ((TextBlock)window.FindName("ModelInfoText")).Text = "qwen3 · 64 层 · 原生上下文 32768\n含 TQ1_0 张量；部分引擎的 CUDA 后端不支持此类型，可能回退 CPU。请以加载日志中的 GPU 权重为准。";
                 var logTab = tabs.Items.Count - 1;
+                Program.Check(tabs.Items.Count == 5, $"expected 5 nav pages, found {tabs.Items.Count}");
                 Program.Check(((TextBlock)window.FindName("ProcessInfoText")).Text == "进程: 无", "log tab lost process info");
                 Program.Check(window.FindName("LogScrollViewer") is ScrollViewer, "log scroll viewer missing");
-                foreach (var tab in new[] { 0, 1, logTab })
+                Program.Check(window.FindName("AutoOpenBrowserCheckBox") != null, "auto-open checkbox missing from advanced page");
+                foreach (var tab in new[] { 0, 1, 2, 3, 4 })
                 {
                     tabs.SelectedIndex = tab;
                     content.Measure(new Size(690, 775)); content.Arrange(new Rect(0, 0, 690, 775)); content.UpdateLayout();
@@ -88,6 +120,16 @@ internal static class UiRegression
                         Program.Check(viewer.ActualHeight > 200, $"log tab has no room to show logs: {viewer.ActualHeight}");
                     }
                 }
+                // Strata and llama-server share VRAM: simulating a running Strata
+                // must lock the footer lifecycle controls, not just the Strata buttons.
+                // RefreshStatusAsync bails out while _loaded is false, so re-enable it.
+                SetFlag(window, "_loaded", true);
+                SetFlag(window, "_strataRunning", true);
+                InvokeStrataRefresh(window);
+                Program.Check(((Button)window.FindName("StartButton")).IsEnabled == false, "start button stayed enabled while Strata runs");
+                Program.Check(((Button)window.FindName("SpeedTestButton")).IsEnabled == false, "speed test stayed enabled while Strata runs");
+                Program.Check(((Button)window.FindName("EmbeddingToggleButton")).IsEnabled == false, "embedding toggle stayed enabled while Strata runs");
+                Program.Check(((TextBlock)window.FindName("ActionStatusText")).Text.Contains("Strata"), "status line does not explain the Strata lock");
                 app.Shutdown();
                 complete.SetResult();
             }

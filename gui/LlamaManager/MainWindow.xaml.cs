@@ -7,7 +7,7 @@ using LlamaManager.Services;
 
 namespace LlamaManager;
 
-public partial class MainWindow : Window
+public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
 {
     private ManagerConfig _config = new();
     private readonly CancellationTokenSource _lifetime = new();
@@ -36,7 +36,7 @@ public partial class MainWindow : Window
             var recovery = ConfigService.RecoveryWarning;
             await RefreshModelsAsync();
             ApplyConfig();
-            ApplyStrataConfig();
+            await ApplyStrataConfigAsync();
             _loaded = true;
             if (recovery != null) MessageBox.Show(recovery, "配置恢复");
             _statusTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };

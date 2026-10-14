@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Text.Json;
 using LlamaManager.Models;
 
 namespace LlamaManager.Services;
@@ -12,28 +13,31 @@ namespace LlamaManager.Services;
 /// </summary>
 public static class StrataService
 {
+    private static readonly SemaphoreSlim RunGate = new(1, 1);
     public sealed record StrataResult(string Answer, string Stats, int PromptTokens, string LogPath);
     public sealed record EnginePaths(string PackageRoot, string StrataExe, string TokenizeExe, string VocabTsv, string PackDir, string ProfileBin, string ModelsDir, string LastRunLog);
 
     public static bool IsRunning(ManagerConfig config)
     {
         var session = ConfigService.ReadConfig().Strata;
-        return session.LastPid > 0 && GetLiveProcess(session) != null;
+        using var process = GetLiveProcess(session);
+        return process != null;
     }
 
     private static Process? GetLiveProcess(StrataConfig config)
     {
         if (config.LastPid <= 0) return null;
+        Process? process = null;
         try
         {
-            var process = Process.GetProcessById(config.LastPid);
+            process = Process.GetProcessById(config.LastPid);
             if (!process.HasExited &&
                 process.StartTime.ToUniversalTime().Ticks == config.LastStartedUtcTicks &&
                 PathIdentity.Equals(process.MainModule?.FileName, config.LastEnginePath))
                 return process;
-            process.Dispose();
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) { }
+        process?.Dispose();
         return null;
     }
 
@@ -42,13 +46,23 @@ public static class StrataService
         var root = config.Strata.PackageRoot;
         if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
             throw new DirectoryNotFoundException("未找到 Strata 包目录，请先在 Strata 面板中选择。");
+        root = Path.GetFullPath(root);
         var engineDir = Path.Combine(root, "engine");
         var strata = Path.Combine(engineDir, "strata.exe");
         var tokenize = Path.Combine(engineDir, "tokenize", "llama-tokenize.exe");
         var vocab = Path.Combine(engineDir, "vocab_bytes.tsv");
         var pack = ResolvePackDir(root, config.Strata.PackDir);
-        var profile = Directory.GetFiles(Path.Combine(root, "profile"), "*.bin").FirstOrDefault()
-            ?? throw new FileNotFoundException("profile 目录中没有 expert profile (*.bin)。");
+        var modelVocab = Path.Combine(pack, "vocab_bytes.tsv");
+        if (File.Exists(modelVocab)) vocab = modelVocab;
+        var profile = config.Strata.ProfilePath;
+        if (string.IsNullOrWhiteSpace(profile))
+        {
+            var profiles = Directory.GetFiles(Path.Combine(root, "profile"), "*.bin");
+            profile = profiles.Length == 1 ? profiles[0]
+                : throw new InvalidOperationException("请选择与模型对应的 expert profile；不会从多个 profile 中任取一个。");
+        }
+        profile = Path.GetFullPath(profile);
+        if (!File.Exists(profile)) throw new FileNotFoundException("未找到选择的 expert profile。", profile);
         if (!File.Exists(strata)) throw new FileNotFoundException("未找到 strata.exe。", strata);
         if (!File.Exists(tokenize)) throw new FileNotFoundException("未找到 llama-tokenize.exe。", tokenize);
         if (!File.Exists(vocab)) throw new FileNotFoundException("未找到 vocab_bytes.tsv。", vocab);
@@ -60,56 +74,60 @@ public static class StrataService
     /// <summary>pack 目录解析优先级：用户指定 > root\pack\iq-native > root\pack > root 下的 pack-* 目录。</summary>
     private static string ResolvePackDir(string root, string? userPack)
     {
-        if (!string.IsNullOrWhiteSpace(userPack) && Directory.Exists(userPack))
-            return userPack;
+        if (!string.IsNullOrWhiteSpace(userPack))
+        {
+            if (!File.Exists(Path.Combine(userPack, "index.txt")) || !File.Exists(Path.Combine(userPack, "dense.bin")))
+                throw new DirectoryNotFoundException("指定的 pack 不完整：需要 index.txt 和 dense.bin。");
+            return Path.GetFullPath(userPack);
+        }
         var nested = Path.Combine(root, "pack", "iq-native");
         if (Directory.Exists(nested)) return nested;
         var flat = Path.Combine(root, "pack");
         if (Directory.Exists(flat) && Directory.EnumerateFiles(flat, "*.bin").Any()) return flat;
-        foreach (var d in Directory.EnumerateDirectories(root, "pack-*", SearchOption.TopDirectoryOnly))
-        {
-            if (Directory.EnumerateFiles(d, "index.txt").Any() ||
-                Directory.EnumerateFiles(d, "dense.bin").Any()) return d;
-        }
+        var candidates = Directory.EnumerateDirectories(root, "pack-*", SearchOption.TopDirectoryOnly)
+            .Where(d => File.Exists(Path.Combine(d, "index.txt")) && File.Exists(Path.Combine(d, "dense.bin"))).ToArray();
+        if (candidates.Length == 1) return candidates[0];
+        if (candidates.Length > 1) throw new InvalidOperationException("检测到多个 pack，请明确选择与模型对应的目录。");
         return nested; // return the default path so the caller gets a meaningful error
     }
 
     /// <summary>未显式选择模型时取包内 models\ 下最大的 gguf（与 run.ps1 的规则一致）。</summary>
     public static string ResolveModel(ManagerConfig config, EnginePaths paths) =>
-        string.IsNullOrWhiteSpace(config.Strata.ModelPath) || !File.Exists(config.Strata.ModelPath)
+        string.IsNullOrWhiteSpace(config.Strata.ModelPath)
             ? Directory.EnumerateFiles(paths.ModelsDir, "*.gguf", SearchOption.AllDirectories)
                 .Select(f => new FileInfo(f)).OrderByDescending(f => f.Length).FirstOrDefault()?.FullName
                 ?? throw new FileNotFoundException("包内 models\\ 目录没有 .gguf 模型。")
-            : config.Strata.ModelPath;
+            : File.Exists(config.Strata.ModelPath) ? Path.GetFullPath(config.Strata.ModelPath)
+                : throw new FileNotFoundException("未找到指定模型。", config.Strata.ModelPath);
 
     /// <summary>UI 展示用：包目录未配置或损坏时返回 null 而不是抛出。</summary>
     public static EnginePaths? ResolvePathsSafe(ManagerConfig config)
     {
         try { return ResolvePaths(config); }
-        catch (Exception ex) when (ex is DirectoryNotFoundException or FileNotFoundException or ArgumentException) { return null; }
+        catch (Exception ex) when (ex is IOException or ArgumentException or InvalidOperationException or UnauthorizedAccessException) { return null; }
     }
 
-    /// <summary>包目录为空时自动探测：在 manager root 的兄弟/子目录里找 engine\strata.exe + pack 目录。</summary>
+    /// <summary>有界探测可执行包；pack 与 profile 允许在包外单独选择。</summary>
     public static string? DetectPackageRoot()
     {
         var seeds = new List<string> { ConfigService.GetManagerRoot(), ConfigService.GetLlamaCppRoot() };
         var parent = Path.GetDirectoryName(ConfigService.GetManagerRoot());
         if (parent != null) seeds.Add(parent);
-        foreach (var seed in seeds.Distinct(StringComparer.OrdinalIgnoreCase))
+        var queue = new Queue<(string Path, int Depth)>();
+        foreach (var seed in seeds.Distinct(StringComparer.OrdinalIgnoreCase)) queue.Enqueue((seed, 0));
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        while (queue.Count > 0 && seen.Count < 256)
         {
-            if (seed == null || !Directory.Exists(seed)) continue;
-            foreach (var strata in Directory.EnumerateFiles(seed, "strata.exe", SearchOption.AllDirectories))
+            var (root, depth) = queue.Dequeue();
+            if (!seen.Add(root) || !Directory.Exists(root)) continue;
+            try
             {
-                try
-                {
-                    var root = Path.GetDirectoryName(Path.GetDirectoryName(Path.GetFullPath(strata)));
-                    if (root == null) continue;
-                    if (ResolvePackDir(root, null) is { } pack && Directory.Exists(pack) &&
-                        Directory.GetFiles(Path.Combine(root, "profile"), "*.bin").Length > 0)
-                        return root;
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+                if (File.Exists(Path.Combine(root, "engine", "strata.exe"))) return root;
+                if (depth < 3)
+                    foreach (var child in Directory.EnumerateDirectories(root).Take(256 - seen.Count))
+                        if ((File.GetAttributes(child) & FileAttributes.ReparsePoint) == 0) queue.Enqueue((child, depth + 1));
             }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         }
         return null;
     }
@@ -136,8 +154,61 @@ public static class StrataService
     /// PID 记录的是 strata.exe 子进程（不是 GUI 自己），并带创建时间与引擎路径校验。</summary>
     public static async Task<StrataResult> RunAsync(ManagerConfig config, Action<string>? log = null, CancellationToken ct = default)
     {
-        if (GetLiveProcess(ConfigService.ReadConfig().Strata) != null)
-            throw new InvalidOperationException("已有一个 Strata 推理在运行，请先停止。");
+        ct.ThrowIfCancellationRequested();
+        if (!await RunGate.WaitAsync(0, ct).ConfigureAwait(false))
+            throw new InvalidOperationException("已有一个 Strata 推理或分词任务在运行，请先停止。");
+        try
+        {
+            // Hold the lease through tokenization, execution and cleanup, including across GUI instances.
+            using var lease = new FileStream(Path.Combine(ConfigService.GetManagerRoot(), "logs", "strata.run.lock"),
+                FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            using var existing = GetLiveProcess(ConfigService.ReadConfig().Strata);
+            if (existing != null) throw new InvalidOperationException("已有一个 Strata 推理在运行，请先停止。");
+            var snapshot = JsonSerializer.Deserialize<ManagerConfig>(JsonSerializer.Serialize(config))!;
+            return await RunCoreAsync(snapshot, log, ct).ConfigureAwait(false);
+        }
+        finally { RunGate.Release(); }
+    }
+
+    public static ProcessStartInfo CreateEngineStart(ManagerConfig config, EnginePaths paths, string model, string tokensFile)
+    {
+        var s = config.Strata;
+        if (s.Spec is < 2 or > 8) throw new ArgumentException("Spec 必须为 2-8（native pack 的验证窗口）。");
+        if (s.ReserveMib is < 0 or > 60000 || s.Context is < 512 or > 1048576 ||
+            s.MaxNew is < 1 or > 65536 || s.Prefill is < 128 or > 65536 || s.Workers is < 0 or > 256)
+            throw new ArgumentException("Strata 数值参数超出范围。");
+        if (s.MaxNew >= s.Context) throw new ArgumentException("生成长度必须小于上下文容量。");
+        if (s.ArenaPinGib is < 0 or > 128) throw new ArgumentException("锁页内存上限必须为 0-128 GiB，0 为自动。");
+        if (!new[] { "int8", "fp16", "k8v4", "q4_0" }.Contains(s.Kv) ||
+            !new[] { "all", "auto", "p-cores" }.Contains(s.Affinity))
+            throw new ArgumentException("Strata KV 或线程亲和模式无效。");
+        var start = CaptureStart(paths.StrataExe);
+        string[] arguments = ["--pack", paths.PackDir, "--native", model, "--no-ple", "--tokens-file", tokensFile,
+            "--expert-profile", paths.ProfileBin, "--expert-cache", "auto", "--vram-reserve-mib", s.ReserveMib.ToString(),
+            "--prefill", s.Prefill.ToString(), "--max-context", s.Context.ToString(), "--max-new", s.MaxNew.ToString(),
+            "--kv", s.Kv, "--kv-resident", "0", "--spec", s.Spec.ToString(), "--suffix-draft", "0",
+            "--pool-workers", s.Workers.ToString(), "--pool-affinity", s.Affinity, "--stats"];
+        foreach (var arg in arguments) start.ArgumentList.Add(arg);
+        start.Environment.Remove("STRATA_ARENA_PIN_GIB");
+        if (s.ArenaPinGib > 0) start.Environment["STRATA_ARENA_PIN_GIB"] = s.ArenaPinGib.ToString();
+        // Do not inherit a caller's MTP norm override when the GUI explicitly chose another mode.
+        start.Environment.Remove("STRATA_MTP_PLAIN");
+        if (s.MtpEnabled)
+        {
+            if (string.IsNullOrWhiteSpace(s.MtpDir)) throw new ArgumentException("请先选择 MTP runtime 目录。");
+            var mtpDir = Path.GetFullPath(s.MtpDir);
+            foreach (var file in new[] { "dense.bin", "dense.txt", "experts.bin" })
+                if (!File.Exists(Path.Combine(mtpDir, file)))
+                    throw new FileNotFoundException("MTP 目录不完整：缺少 " + file);
+            start.ArgumentList.Add("--mtp");
+            start.ArgumentList.Add(mtpDir);
+            if (s.MtpPlain) start.Environment["STRATA_MTP_PLAIN"] = "1";
+        }
+        return start;
+    }
+
+    private static async Task<StrataResult> RunCoreAsync(ManagerConfig config, Action<string>? log, CancellationToken ct)
+    {
         var paths = ResolvePaths(config);
         var model = ResolveModel(config, paths);
         var prompt = config.Strata.Prompt;
@@ -148,8 +219,6 @@ public static class StrataService
         var tokensFile = Path.Combine(work, "tokens.txt");
         var tokOut = Path.Combine(work, "tok.out");
         var tokErr = Path.Combine(work, "tok.err");
-        var engOut = Path.Combine(work, "eng.out");
-        var engErr = Path.Combine(work, "eng.err");
         var stdoutPath = Path.Combine(ConfigService.GetManagerRoot(), "logs", "strata.stdout.log");
         var stderrPath = Path.Combine(ConfigService.GetManagerRoot(), "logs", "strata.stderr.log");
         File.WriteAllText(promptFile, prompt, new UTF8Encoding(false));
@@ -157,7 +226,13 @@ public static class StrataService
         try
         {
             log?.Invoke("[Strata 1/3] 分词中…");
-            RunCapture(paths.TokenizeExe, $"-m \"{model}\" -f \"{promptFile}\" --ids", tokOut, tokErr);            var raw = File.Exists(tokOut) ? File.ReadAllText(tokOut) : "";
+            var engineStart = CreateEngineStart(config, paths, model, tokensFile);
+            var tokenizeStart = CaptureStart(paths.TokenizeExe);
+            foreach (var arg in new[] { "-m", model, "-f", promptFile, "--ids" }) tokenizeStart.ArgumentList.Add(arg);
+            var tokenized = await RunChildAsync(tokenizeStart, tokOut, tokErr, ct).ConfigureAwait(false);
+            if (tokenized.ExitCode != 0)
+                throw new InvalidOperationException($"分词失败（{tokenized.ExitCode}）：{tokenized.Stderr}");
+            var raw = tokenized.Stdout;
             var match = Regex.Match(raw, @"\[[^\[\]]*\]");
             if (!match.Success)
                 throw new InvalidOperationException("tokenizer 没有输出 token id（模型文件可能不兼容）。");
@@ -166,52 +241,29 @@ public static class StrataService
             var promptTokens = ids.Split(' ').Length;
             File.WriteAllText(tokensFile, ids);
 
+            if (promptTokens + config.Strata.MaxNew > config.Strata.Context)
+                throw new ArgumentException("提示词与生成长度之和超过上下文容量。");
             var s = config.Strata;
-            var argv = $"--pack \"{paths.PackDir}\" --native \"{model}\" --no-ple --tokens-file \"{tokensFile}\" " +
-                $"--expert-profile \"{paths.ProfileBin}\" --expert-cache auto --vram-reserve-mib {s.ReserveMib} " +
-                $"--prefill {s.Prefill} --max-context {s.Context} --max-new {s.MaxNew} --kv {s.Kv} " +
-                $"--spec 2 --suffix-draft 0 --pool-workers {s.Workers} --pool-affinity {s.Affinity} --stats";
             log?.Invoke($"[Strata 2/3] 推理中（reserve {s.ReserveMib} MiB, context {s.Context}, max-new {s.MaxNew}）…");
 
-            var engineStart = new ProcessStartInfo(paths.StrataExe, argv)
-            {
-                RedirectStandardOutput = true, RedirectStandardError = true,
-                UseShellExecute = false, CreateNoWindow = true,
-                WorkingDirectory = Path.GetDirectoryName(paths.StrataExe)!
-            };
-            using var process = Process.Start(engineStart) ?? throw new InvalidOperationException("无法启动 strata.exe");
-            // the real engine identity: the PID the Stop button kills, checked against creation time + path
-            ConfigService.SaveStrataSession(config, process.Id, process.StartTime.ToUniversalTime().Ticks, paths.StrataExe, running: true);
-            string stdout, stderr;
+            ChildResult result;
             try
             {
-                var readOut = Task.Run(() => ReadPump(process, process.StandardOutput, engOut, stdoutPath), ct);
-                var readErr = Task.Run(() => ReadPump(process, process.StandardError, engErr, stderrPath), ct);
-                var exited = await Task.Run(() =>
-                {
-                    try { process.WaitForExit(); }
-                    catch (Exception) when (ct.IsCancellationRequested) { }
-                    return process.HasExited;
-                }, ct).ConfigureAwait(false);
-                if (!exited)
-                {
-                    try { process.Kill(entireProcessTree: true); } catch (System.ComponentModel.Win32Exception) { }
-                    throw new OperationCanceledException("Strata 推理已取消。");
-                }
-                stdout = await readOut.ConfigureAwait(false);
-                stderr = await readErr.ConfigureAwait(false);
+                result = await RunChildAsync(engineStart, stdoutPath, stderrPath, ct, process =>
+                    ConfigService.SaveStrataSession(config, process.Id, process.StartTime.ToUniversalTime().Ticks,
+                        paths.StrataExe, running: true)).ConfigureAwait(false);
             }
             finally
             {
                 ConfigService.SaveStrataSession(config, 0, 0, null, running: false);
             }
-            var lines = stdout.Split('\n').Concat(stderr.Split('\n'));
+            var lines = result.Stdout.Split('\n').Concat(result.Stderr.Split('\n')).ToArray();
             try { File.WriteAllLines(paths.LastRunLog, lines); } catch (IOException) { }
             var outputLine = lines.LastOrDefault(l => Regex.IsMatch(l, @"^\s*output\s*:"));
-            if (outputLine == null)
+            if (outputLine == null || result.ExitCode != 0)
             {
                 var tail = string.Join("\n", lines.Where(l => l.Length > 0).TakeLast(10));
-                throw new InvalidOperationException($"引擎提前退出（{process.ExitCode}）。\n" + tail);
+                throw new InvalidOperationException($"引擎提前退出（{result.ExitCode}）。\n" + tail);
             }
             var answer = Detokenize(paths.VocabTsv, outputLine);
             var stats = FormatStats(lines, promptTokens);
@@ -225,40 +277,52 @@ public static class StrataService
         }
     }
 
-    /// <summary>短生命周期的分词子进程：同步等待，输出直接落盘。</summary>
-    private static void RunCapture(string exe, string arguments, string outPath, string errPath)
+    internal static ProcessStartInfo CaptureStart(string exe) => new(exe)
     {
-        var start = new ProcessStartInfo(exe, arguments)
-        {
-            RedirectStandardOutput = true, RedirectStandardError = true,
-            UseShellExecute = false, CreateNoWindow = true,
-            WorkingDirectory = Path.GetDirectoryName(exe)!
-        };
-        using var process = Process.Start(start) ?? throw new InvalidOperationException("无法启动进程：" + exe);
-        process.OutputDataReceived += (_, e) => { if (e.Data != null) File.AppendAllText(outPath, e.Data + "\n"); };
-        process.ErrorDataReceived += (_, e) => { if (e.Data != null) File.AppendAllText(errPath, e.Data + "\n"); };
-        process.BeginOutputReadLine();
-        process.BeginErrorReadLine();
-        process.WaitForExit();
-    }
+        RedirectStandardOutput = true, RedirectStandardError = true,
+        StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8,
+        UseShellExecute = false, CreateNoWindow = true,
+        WorkingDirectory = Path.GetDirectoryName(exe)!
+    };
 
-    private static string ReadPump(Process process, StreamReader reader, string tempPath, string logPath)
+    internal sealed record ChildResult(int ExitCode, string Stdout, string Stderr);
+
+    internal static async Task<ChildResult> RunChildAsync(ProcessStartInfo start, string outPath, string errPath,
+        CancellationToken ct, Action<Process>? started = null, Action<string>? progress = null)
     {
-        var buffer = new StringBuilder();
-        string? line;
-        while ((line = reader.ReadLine()) != null)
+        ct.ThrowIfCancellationRequested();
+        using var process = Process.Start(start) ?? throw new InvalidOperationException("无法启动进程：" + start.FileName);
+        async Task<string> ReadAsync(StreamReader reader)
         {
-            lock (buffer) buffer.AppendLine(line);
-            try { File.AppendAllText(tempPath, line + "\n"); File.AppendAllText(logPath, line + "\n"); }
-            catch (IOException) { }
+            var text = new StringBuilder();
+            while (await reader.ReadLineAsync().ConfigureAwait(false) is { } line)
+            {
+                text.AppendLine(line);
+                progress?.Invoke(line);
+            }
+            return text.ToString();
         }
-        process.WaitForExit();   // drain buffers after exit, as Process.BeginOutputReadLine would
-        lock (buffer) return buffer.ToString();
+        var stdout = ReadAsync(process.StandardOutput);
+        var stderr = ReadAsync(process.StandardError);
+        try
+        {
+            started?.Invoke(process);
+            await process.WaitForExitAsync(ct).ConfigureAwait(false);
+            return new ChildResult(process.ExitCode, await stdout.ConfigureAwait(false), await stderr.ConfigureAwait(false));
+        }
+        finally
+        {
+            try { if (!process.HasExited) process.Kill(entireProcessTree: true); }
+            catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception) { }
+            await process.WaitForExitAsync().ConfigureAwait(false);
+            await File.WriteAllTextAsync(outPath, await stdout.ConfigureAwait(false)).ConfigureAwait(false);
+            await File.WriteAllTextAsync(errPath, await stderr.ConfigureAwait(false)).ConfigureAwait(false);
+        }
     }
 
     private static string Detokenize(string vocabTsv, string outputLine)
     {
-        var ids = outputLine.Replace("output:", "").Trim()
+        var ids = Regex.Replace(outputLine, @"^\s*output\s*:\s*", "")
             .Split([' ', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Where(t => t.All(char.IsDigit)).Select(int.Parse);
         var map = new Dictionary<int, string>();

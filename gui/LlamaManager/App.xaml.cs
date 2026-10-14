@@ -41,9 +41,13 @@ public partial class App : Application
         DispatcherUnhandledException += (_, args) =>
         {
             LogService.Write("UI 异常：" + args.Exception);
+            Diagnostics.WriteCrash(args.Exception);
             args.Handled = true;
             MessageBox.Show(args.Exception.Message, "LlamaManager 错误", MessageBoxButton.OK, MessageBoxImage.Error);
         };
+        AppDomain.CurrentDomain.UnhandledException += (_, args) =>
+            Diagnostics.WriteCrash(args.ExceptionObject as Exception ?? new Exception(args.ExceptionObject?.ToString()));
+        TaskScheduler.UnobservedTaskException += (_, args) => { Diagnostics.WriteCrash(args.Exception); args.SetObserved(); };
         ShutdownMode = ShutdownMode.OnMainWindowClose;
         MainWindow = new MainWindow();
         MainWindow.Show();

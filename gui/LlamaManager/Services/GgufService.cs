@@ -10,6 +10,8 @@ public sealed record GgufMetadata
     public int LayerCount { get; init; }
     public int ContextLength { get; init; }
     public int EmbeddingLength { get; init; }
+    public int ExpertCount { get; init; }
+    public int ExpertUsedCount { get; init; }
     public int AttentionHeads { get; init; }
     public int KvHeads { get; init; }
     public int KeyLength { get; init; }
@@ -115,6 +117,7 @@ public static class GgufService
         {
             Architecture = architecture, LayerCount = Number("block_count"), ContextLength = Number("context_length"),
             EmbeddingLength = Number("embedding_length"), AttentionHeads = Number("attention.head_count"),
+            ExpertCount = Number("expert_count"), ExpertUsedCount = Number("expert_used_count"),
             KvHeads = Number("attention.head_count_kv"), KeyLength = Number("attention.key_length"),
             ValueLength = Number("attention.value_length"), IsMoE = moe || architecture.Contains("moe", StringComparison.OrdinalIgnoreCase),
             HasHadamard = hadamard, HasMtp = nextn, TensorTypes = types

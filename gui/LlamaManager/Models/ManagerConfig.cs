@@ -65,6 +65,17 @@ public class StrataConfig
     [JsonPropertyName("PackDir")]
     public string PackDir { get; set; } = string.Empty;
 
+    public string ProfilePath { get; set; } = string.Empty;
+    public int Spec { get; set; } = 2;
+    public bool MtpEnabled { get; set; }
+    public string MtpDir { get; set; } = string.Empty;
+    /// <summary>APEX/Qwen MTP uses plain RMSNorm, rather than the donor HC path.</summary>
+    public bool MtpPlain { get; set; } = true;
+    public string PythonPath { get; set; } = string.Empty;
+    public string PackCacheDirectory { get; set; } = string.Empty;
+    /// <summary>Host RAM pinning cap, not GPU memory; 0 lets the engine decide.</summary>
+    public int ArenaPinGib { get; set; }
+
     /// <summary>模型 .gguf 路径；为空时使用包内 models\ 下最大的 gguf。</summary>
     [JsonPropertyName("ModelPath")]
     public string ModelPath { get; set; } = string.Empty;

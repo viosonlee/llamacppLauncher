@@ -32,6 +32,28 @@ internal static class Program
     {
         if (args.FirstOrDefault() == "--check-published")
             return await PublishedSmoke.RunAsync(args[1]);
+        if (args.FirstOrDefault() == "--check-strata")
+        {
+            if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("LLAMA_MANAGER_ROOT")))
+                throw new ArgumentException("Set an isolated LLAMA_MANAGER_ROOT for the explicit GPU smoke run.");
+            var config = JsonSerializer.Deserialize<ManagerConfig>(File.ReadAllText(args[1]))!;
+            var result = await StrataService.RunAsync(config, Console.WriteLine);
+            Console.WriteLine(result.Answer);
+            Console.WriteLine("Log: " + result.LogPath);
+            return 0;
+        }
+        if (args.FirstOrDefault() == "--prepare-pack")
+        {
+            if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("LLAMA_MANAGER_ROOT")))
+                throw new ArgumentException("Set an isolated LLAMA_MANAGER_ROOT for the pack smoke run.");
+            var o = JsonSerializer.Deserialize<StrataPackService.Options>(File.ReadAllText(args[1]))!;
+            var prepared = await StrataPackService.PrepareAsync(o, Console.WriteLine);
+            Console.WriteLine("Pack: " + prepared.PackDir);
+            Console.WriteLine("Profile: " + prepared.ProfilePath);
+            Console.WriteLine("Reused: " + prepared.Reused);
+            return 0;
+        }
+        if (args.Contains("--ids") || args.Contains("--tokens-file")) return await StrataRegression.RunChildAsync(args);
         if (args.Contains("-m")) { await Fixtures.RunFakeServerAsync(args); return 0; }
         if (args.FirstOrDefault() == "--invoke-cli")
         {
@@ -203,6 +225,10 @@ internal static class Program
                 Check(StrataService.ResolvePathsSafe(config) == null, "safe resolution should return null");
                 Check(!StrataService.IsRunning(config), "no process should be running");
             }));
+            await Test("strata: subprocess output, MTP settings, failure and cancellation in both stages", () =>
+                StrataRegression.RunAsync(_root, _model));
+            await Test("strata: pack preparation refuses unsupported models and missing files", () =>
+                StrataRegression.RunPackServiceAsync(_root));
             await Test("presets: reject a known signature mismatch on identical names", () => Run(() =>
             {
                 var config = new ManagerConfig();

@@ -35,26 +35,31 @@ public partial class MainWindow
             var ready = running && readyTask.Result;
             var busy = _serverStarting || _serverStopping;
             var brush = (Brush)FindResource(ready ? "SuccessBrush" : running || busy ? "WarningBrush" : "ErrorBrush");
-            StatusDot.Fill = ActionStatusDot.Fill = brush;
+            StatusDot.Fill = brush;
             StatusText.Text = _serverStopping ? "正在停止…" : running ? ready ? "服务运行中" : "模型加载中…" : busy ? "正在启动…" : "已停止";
-            ActionStatusText.Text = session != null && running
-                ? $"{Path.GetFileName(session.ModelPath)} · PID {session.ProcessId}" : "选择模型后启动服务";
-            ActionStatusText.Foreground = (Brush)FindResource("TextPrimaryBrush");
-            TabActionStatusText.Text = session != null && running
-                ? $"{Path.GetFileName(session.ModelPath)} · PID {session.ProcessId}" : "服务已停止，点击【启动服务】开始运行";
-            TabActionStatusText.Foreground = (Brush)FindResource(ready ? "SuccessBrush" : "TextSecondaryBrush");
+            ActionStatusText.Text = _strataRunning || _strataStopping
+                ? "Strata 运行中 · llama-server 不可用（共享显存）"
+                : session != null && running
+                    ? $"{Path.GetFileName(session.ModelPath)} · PID {session.ProcessId}"
+                    : "选择模型后启动服务";
+            ActionStatusText.Foreground = (Brush)FindResource(ready && !(_strataRunning || _strataStopping) ? "SuccessBrush" : "TextSecondaryBrush");
             ActionEndpointText.Text = session != null && running ? $"http://127.0.0.1:{session.Port}" : "未监听";
-            TabActionEndpointText.Text = ActionEndpointText.Text;
             ApiStatusBadge.Text = ready ? "API: 就绪" : running ? "API: 加载中" : "API: 离线";
             ApiStatusBadge.Foreground = brush;
-            TabApiStatusBadge.Text = ApiStatusBadge.Text;
-            TabApiStatusBadge.Foreground = brush;
-            StartButton.Content = _serverStarting ? "⏳ 正在启动…" : running ? "🔄 重启服务" : "▶ 启动服务";
-            StartButton.IsEnabled = !busy && !_selecting && !_scanning;
-            StopButton.Content = _serverStarting ? "■ 终止启动" : "■ 停止服务";
+            // Icons come from XAML (WPF-UI SymbolIcon); Content stays text-only.
+            StartButton.Content = _serverStarting ? "正在启动…" : running ? "重启服务" : "启动服务";
+            StopButton.Content = _serverStarting ? "终止启动" : "停止服务";
+            // Strata 与 llama-server 共享显存：Strata 活动期间不允许拉起主服务。
+            var strataBusy = _strataRunning || _strataStopping;
+            StartButton.IsEnabled = !busy && !_selecting && !_scanning && !strataBusy;
             StopButton.IsEnabled = !_serverStopping && (running || _serverStarting);
-            OpenButton.IsEnabled = ready && !busy;
-            SpeedTestButton.IsEnabled = _speedTesting || ready && !busy;
+            OpenButton.IsEnabled = ready && !busy && !strataBusy;
+            SpeedTestButton.IsEnabled = (_speedTesting || ready && !busy) && !strataBusy;
+            EmbeddingToggleButton.IsEnabled = !_embeddingStarting && !strataBusy;
+            StartButton.ToolTip = strataBusy ? "Strata 正在运行，与 llama-server 共享显存，无法同时启动" : null;
+            SpeedTestButton.ToolTip = strataBusy
+                ? "Strata 正在运行，无法测速"
+                : "实测推理速度：首Token延迟(TTFT) 与解码速度(tok/s)";
             LiveSpeedText.Text = running ? status.Text : "";
             LiveSpeedText.Foreground = (Brush)FindResource(status.IsActive ? "AccentBrush" : "SuccessBrush");
             ProcessInfoText.Text = running
@@ -63,12 +68,12 @@ public partial class MainWindow
             CudaText.Text = cuda.Available ? "CUDA: 可用（所选引擎）" : "CUDA: 未检测到";
             CudaText.ToolTip = cuda.Text + "\n设备内存为检测时快照；点击模型列表旁的刷新可重新检测。";
             PortText.Text = session != null && running ? $":{session.Port}" : $":{_config.Port}";
-            EmbeddingStatusText.Text = embeddingSession == null ? "嵌入服务: 未启动" :
-                $"嵌入服务: {(embeddingReadyTask.Result ? "就绪" : "加载中")} · 端口 {embeddingSession.Port}";
+            EmbeddingStatusText.Text = embeddingSession == null ? "嵌入: 未启动" :
+                $"嵌入: {(embeddingReadyTask.Result ? "就绪" : "加载中")} · {embeddingSession.Port}";
             EmbeddingStatusDot.Fill = (Brush)FindResource(embeddingSession == null ? "TextSecondaryBrush" : embeddingReadyTask.Result ? "SuccessBrush" : "WarningBrush");
             EmbeddingToggleButton.Content = _embeddingStarting ? "终止启动" : embeddingSession == null ? "启动" : "停止";
             AutostartStatusText.Text = autostartTask.Result.Text;
-            AutostartButton.Content = autostartTask.Result.Enabled ? "关闭自启动" : "开启自启动";
+            AutostartButton.Content = autostartTask.Result.Enabled ? "关闭自启" : "开启自启";
             RefreshLog();
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
@@ -79,13 +84,19 @@ public partial class MainWindow
     private async void StartButton_Click(object sender, RoutedEventArgs e)
     {
         if (_serverStarting || _serverStopping || _selecting || _scanning) return;
+        if (_strataRunning || _strataStopping)
+        {
+            MessageBox.Show("Strata 正在运行，与 llama-server 共享显存，无法同时启动。\n\n请先停止 Strata。",
+                "显存冲突", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
         _serverStarting = true;
         _statusVersion++;
         _speedCancellation?.Cancel();
         _startCancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
         StartButton.IsEnabled = false;
         StopButton.IsEnabled = true;
-        StopButton.Content = "■ 终止启动";
+        StopButton.Content = "终止启动";
         try
         {
             SaveCurrentConfig();
@@ -159,7 +170,7 @@ public partial class MainWindow
         {
             _speedCancellation?.Dispose(); _speedCancellation = null;
             _speedTesting = false;
-            SpeedTestButton.Content = "⚡ 测速";
+            SpeedTestButton.Content = "测速";
             await RefreshStatusAsync();
         }
     }

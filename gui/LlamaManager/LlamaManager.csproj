@@ -8,6 +8,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>LlamaManager</AssemblyName>
     <RootNamespace>LlamaManager</RootNamespace>
+    <ApplicationIcon>..\..\assets\LlamaManager.ico</ApplicationIcon>
 
     <!-- Self-contained publish includes the .NET 8 desktop runtime. -->
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
@@ -18,6 +19,7 @@
 
   <ItemGroup>
     <PackageReference Include="System.Management" Version="8.0.0" />
+    <PackageReference Include="WPF-UI" Version="4.3.0" />
   </ItemGroup>
 
 </Project>

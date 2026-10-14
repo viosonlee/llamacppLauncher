@@ -188,7 +188,32 @@ public static class ConfigService
 
     public static void SaveStrata(ManagerConfig config)
     {
-        Store.Update(latest => { latest.Strata = config.Strata; Touch(latest); });
+        Store.Update(latest =>
+        {
+            // Persist edits without writing a stale GUI copy over the live process.
+            var s = config.Strata;
+            var target = latest.Strata;
+            target.PackageRoot = s.PackageRoot;
+            target.PackDir = s.PackDir;
+            target.ProfilePath = s.ProfilePath;
+            target.ModelPath = s.ModelPath;
+            target.Prompt = s.Prompt;
+            target.ReserveMib = s.ReserveMib;
+            target.Context = s.Context;
+            target.MaxNew = s.MaxNew;
+            target.Prefill = s.Prefill;
+            target.Kv = s.Kv;
+            target.Workers = s.Workers;
+            target.Affinity = s.Affinity;
+            target.Spec = s.Spec;
+            target.MtpEnabled = s.MtpEnabled;
+            target.MtpDir = s.MtpDir;
+            target.MtpPlain = s.MtpPlain;
+            target.PythonPath = s.PythonPath;
+            target.PackCacheDirectory = s.PackCacheDirectory;
+            target.ArenaPinGib = s.ArenaPinGib;
+            Touch(latest);
+        });
     }
 
     /// <summary>记录/清除 Strata 推理进程的身份（PID + 创建时间 + 引擎路径）；running=false 时清零。不触碰其他设置。</summary>
