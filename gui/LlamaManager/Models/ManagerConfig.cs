@@ -61,6 +61,10 @@ public class StrataConfig
     [JsonPropertyName("PackageRoot")]
     public string PackageRoot { get; set; } = string.Empty;
 
+    /// <summary>pack 目录路径（可选；为空时自动探测 root\pack\iq-native 或 root 下的 pack-* 目录）。</summary>
+    [JsonPropertyName("PackDir")]
+    public string PackDir { get; set; } = string.Empty;
+
     /// <summary>模型 .gguf 路径；为空时使用包内 models\ 下最大的 gguf。</summary>
     [JsonPropertyName("ModelPath")]
     public string ModelPath { get; set; } = string.Empty;

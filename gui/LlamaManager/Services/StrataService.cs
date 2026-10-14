@@ -46,15 +46,32 @@ public static class StrataService
         var strata = Path.Combine(engineDir, "strata.exe");
         var tokenize = Path.Combine(engineDir, "tokenize", "llama-tokenize.exe");
         var vocab = Path.Combine(engineDir, "vocab_bytes.tsv");
-        var pack = Path.Combine(root, "pack", "iq-native");
+        var pack = ResolvePackDir(root, config.Strata.PackDir);
         var profile = Directory.GetFiles(Path.Combine(root, "profile"), "*.bin").FirstOrDefault()
             ?? throw new FileNotFoundException("profile 目录中没有 expert profile (*.bin)。");
         if (!File.Exists(strata)) throw new FileNotFoundException("未找到 strata.exe。", strata);
         if (!File.Exists(tokenize)) throw new FileNotFoundException("未找到 llama-tokenize.exe。", tokenize);
         if (!File.Exists(vocab)) throw new FileNotFoundException("未找到 vocab_bytes.tsv。", vocab);
-        if (!Directory.Exists(pack)) throw new DirectoryNotFoundException("未找到 pack\\iq-native 目录。");
+        if (!Directory.Exists(pack)) throw new DirectoryNotFoundException("未找到 pack 目录。请先用 iq_pack.py 生成 pack，或在设置中指定 pack 路径。");
         return new EnginePaths(root, strata, tokenize, vocab, pack, profile,
             Path.Combine(root, "models"), Path.Combine(root, "last-run.log"));
+    }
+
+    /// <summary>pack 目录解析优先级：用户指定 > root\pack\iq-native > root\pack > root 下的 pack-* 目录。</summary>
+    private static string ResolvePackDir(string root, string? userPack)
+    {
+        if (!string.IsNullOrWhiteSpace(userPack) && Directory.Exists(userPack))
+            return userPack;
+        var nested = Path.Combine(root, "pack", "iq-native");
+        if (Directory.Exists(nested)) return nested;
+        var flat = Path.Combine(root, "pack");
+        if (Directory.Exists(flat) && Directory.EnumerateFiles(flat, "*.bin").Any()) return flat;
+        foreach (var d in Directory.EnumerateDirectories(root, "pack-*", SearchOption.TopDirectoryOnly))
+        {
+            if (Directory.EnumerateFiles(d, "index.txt").Any() ||
+                Directory.EnumerateFiles(d, "dense.bin").Any()) return d;
+        }
+        return nested; // return the default path so the caller gets a meaningful error
     }
 
     /// <summary>未显式选择模型时取包内 models\ 下最大的 gguf（与 run.ps1 的规则一致）。</summary>
@@ -72,7 +89,7 @@ public static class StrataService
         catch (Exception ex) when (ex is DirectoryNotFoundException or FileNotFoundException or ArgumentException) { return null; }
     }
 
-    /// <summary>包目录为空时自动探测：在 manager root 的兄弟/子目录里找 engine\strata.exe + pack\iq-native。</summary>
+    /// <summary>包目录为空时自动探测：在 manager root 的兄弟/子目录里找 engine\strata.exe + pack 目录。</summary>
     public static string? DetectPackageRoot()
     {
         var seeds = new List<string> { ConfigService.GetManagerRoot(), ConfigService.GetLlamaCppRoot() };
@@ -87,7 +104,7 @@ public static class StrataService
                 {
                     var root = Path.GetDirectoryName(Path.GetDirectoryName(Path.GetFullPath(strata)));
                     if (root == null) continue;
-                    if (Directory.Exists(Path.Combine(root, "pack", "iq-native")) &&
+                    if (ResolvePackDir(root, null) is { } pack && Directory.Exists(pack) &&
                         Directory.GetFiles(Path.Combine(root, "profile"), "*.bin").Length > 0)
                         return root;
                 }

@@ -13,44 +13,51 @@
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <!-- Status Bar -->
-        <Border Grid.Row="0" Background="{StaticResource SurfaceBrush}" CornerRadius="6" Padding="14,10" Margin="0,0,0,10">
+        <!-- App Bar: read-only runtime state, always visible -->
+        <Border Grid.Row="0" Background="{StaticResource SurfaceBrush}" CornerRadius="6" Padding="12,8" Margin="0,0,0,10">
             <Grid>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                </Grid.RowDefinitions>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
                     <Ellipse x:Name="StatusDot" Width="12" Height="12" Fill="{StaticResource ErrorBrush}" Margin="0,0,8,0"/>
                     <TextBlock x:Name="StatusText" Text="已停止" FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="ActionStatusText" Text="选择模型后启动服务" FontSize="11" Margin="10,0,0,0"
+                               VerticalAlignment="Center" Foreground="{StaticResource TextSecondaryBrush}"
+                               TextTrimming="CharacterEllipsis" MaxWidth="280"
+                               ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
+                    <TextBlock x:Name="LiveSpeedText" Text="" FontSize="13" FontWeight="SemiBold"
+                               Foreground="{StaticResource SuccessBrush}" Margin="14,0,0,0"
+                               VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="220"
+                               ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
                 </StackPanel>
-                <TextBlock x:Name="LiveSpeedText" Grid.Row="1" Grid.ColumnSpan="2" Text=""
-                           FontSize="14" Foreground="{StaticResource SuccessBrush}" FontWeight="SemiBold"
-                           Margin="0,6,0,0" TextTrimming="CharacterEllipsis"
-                           ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
-                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                    <TextBlock x:Name="CudaText" Text="CUDA: 检测中..." FontSize="12" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,16,0"/>
-                    <TextBlock x:Name="PortText" Text=":8080" FontSize="12" Foreground="{StaticResource TextSecondaryBrush}"/>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0">
+                    <TextBlock x:Name="CudaText" Text="CUDA: 检测中..." FontSize="11" Foreground="{StaticResource TextSecondaryBrush}"
+                               Margin="0,0,10,0" TextTrimming="CharacterEllipsis" MaxWidth="160"
+                               ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
+                    <TextBlock x:Name="PortText" Text=":8080" FontSize="11" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,10,0"/>
+                    <TextBlock x:Name="ActionEndpointText" Text="未监听" FontSize="11" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,10,0"/>
+                    <TextBlock x:Name="ApiStatusBadge" Text="API: 离线" FontSize="11" FontWeight="SemiBold"
+                               Foreground="{StaticResource TextSecondaryBrush}"/>
                 </StackPanel>
             </Grid>
         </Border>
 
-        <!-- Main Tabs -->
-        <TabControl x:Name="ConfigurationTabs" Grid.Row="1" Margin="0,0,0,6" Background="Transparent" BorderThickness="1" BorderBrush="{StaticResource AccentBrush}">
+        <!-- Main Tabs (left icon rail) -->
+        <TabControl x:Name="ConfigurationTabs" Grid.Row="1" Margin="0,0,0,10"
+                    Background="Transparent" BorderThickness="0"
+                    TabStripPlacement="Left"
+                    Template="{StaticResource NavTabControlTemplate}"
+                    ItemContainerStyle="{StaticResource NavTabItem}">
             <!-- Model Selection Tab -->
-            <TabItem Header="模型选择">
+            <TabItem Header="&#128193;" ToolTip="模型选择">
                 <Grid Margin="12,8">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
@@ -123,7 +130,7 @@
             </TabItem>
 
             <!-- Common Parameters Tab -->
-            <TabItem Header="常用参数">
+            <TabItem Header="&#128202;" ToolTip="常用参数">
                 <Grid Margin="12,8">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
@@ -460,7 +467,7 @@
             </TabItem>
 
             <!-- Advanced Options Tab -->
-            <TabItem Header="高级选项">
+            <TabItem Header="&#128295;" ToolTip="高级选项">
                 <Grid Margin="12,8">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
@@ -493,7 +500,7 @@
             </TabItem>
 
             <!-- Strata Tab -->
-            <TabItem Header="Strata">
+            <TabItem Header="&#128640;" ToolTip="Strata 推理">
                 <Grid Margin="12,8">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
@@ -613,7 +620,7 @@
             </TabItem>
 
             <!-- Log Tab -->
-            <TabItem Header="日志">
+            <TabItem Header="&#128220;" ToolTip="日志">
                 <Grid Margin="12,8">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
@@ -677,11 +684,11 @@
                         </Grid.ColumnDefinitions>
                         <Ellipse x:Name="ActionStatusDot" Grid.Column="0" Width="10" Height="10"
                                  Fill="{StaticResource ErrorBrush}" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                        <TextBlock Grid.Column="1" x:Name="ActionStatusText"
+                        <TextBlock Grid.Column="1" x:Name="TabActionStatusText"
                                    Text="服务已停止，点击【启动服务】开始运行"
                                    FontSize="12" VerticalAlignment="Center" FontWeight="Medium"
                                    Foreground="{StaticResource TextSecondaryBrush}"/>
-                        <TextBlock Grid.Column="2" x:Name="ActionEndpointText"
+                        <TextBlock Grid.Column="2" x:Name="TabActionEndpointText"
                                    Text="未监听" FontSize="11" Foreground="{StaticResource TextSecondaryBrush}"
                                    FontWeight="SemiBold" VerticalAlignment="Center"/>
                     </Grid>
@@ -721,7 +728,7 @@
                               Content="启动成功后自动打开 Web UI 前端 (多模型切换调试建议保持关闭)"
                               FontSize="11" VerticalAlignment="Center"
                               Checked="AutoOpenBrowserCheckBox_Changed" Unchecked="AutoOpenBrowserCheckBox_Changed"/>
-                    <TextBlock Grid.Column="1" x:Name="ApiStatusBadge"
+                    <TextBlock Grid.Column="1" x:Name="TabApiStatusBadge"
                                Text="API: 离线" FontSize="11"
                                Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center"/>
                 </Grid>

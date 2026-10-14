@@ -40,9 +40,15 @@ public partial class MainWindow
             ActionStatusText.Text = session != null && running
                 ? $"{Path.GetFileName(session.ModelPath)} · PID {session.ProcessId}" : "选择模型后启动服务";
             ActionStatusText.Foreground = (Brush)FindResource("TextPrimaryBrush");
+            TabActionStatusText.Text = session != null && running
+                ? $"{Path.GetFileName(session.ModelPath)} · PID {session.ProcessId}" : "服务已停止，点击【启动服务】开始运行";
+            TabActionStatusText.Foreground = (Brush)FindResource(ready ? "SuccessBrush" : "TextSecondaryBrush");
             ActionEndpointText.Text = session != null && running ? $"http://127.0.0.1:{session.Port}" : "未监听";
+            TabActionEndpointText.Text = ActionEndpointText.Text;
             ApiStatusBadge.Text = ready ? "API: 就绪" : running ? "API: 加载中" : "API: 离线";
             ApiStatusBadge.Foreground = brush;
+            TabApiStatusBadge.Text = ApiStatusBadge.Text;
+            TabApiStatusBadge.Foreground = brush;
             StartButton.Content = _serverStarting ? "⏳ 正在启动…" : running ? "🔄 重启服务" : "▶ 启动服务";
             StartButton.IsEnabled = !busy && !_selecting && !_scanning;
             StopButton.Content = _serverStarting ? "■ 终止启动" : "■ 停止服务";

@@ -95,4 +95,45 @@
             </Trigger>
         </Style.Triggers>
     </Style>
+
+    <!-- Left icon navigation rail: vertical tabs rendered as square nav buttons -->
+    <ControlTemplate x:Key="NavTabControlTemplate" TargetType="TabControl">
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <Border Grid.Column="0" Background="{StaticResource SurfaceBrush}" CornerRadius="6"
+                    Padding="4" Margin="0,0,8,0">
+                <TabPanel IsItemsHost="True" Background="Transparent"/>
+            </Border>
+            <ContentPresenter Grid.Column="1" ContentSource="SelectedContent"/>
+        </Grid>
+    </ControlTemplate>
+
+    <Style x:Key="NavTabItem" TargetType="TabItem">
+        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+        <Setter Property="FontSize" Value="17"/>
+        <Setter Property="FontFamily" Value="Segoe UI Emoji, Segoe UI Symbol, Segoe UI"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="TabItem">
+                    <Border x:Name="NavBorder" Width="44" Height="44" CornerRadius="4"
+                            Background="Transparent" Margin="0,0,0,4">
+                        <ContentPresenter ContentSource="Header"
+                                          HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="NavBorder" Property="Background" Value="{StaticResource SecondaryBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter TargetName="NavBorder" Property="Background" Value="{StaticResource HighlightBrush}"/>
+                            <Setter Property="Foreground" Value="White"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
 </ResourceDictionary>
