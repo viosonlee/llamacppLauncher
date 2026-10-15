@@ -50,7 +50,79 @@ public static class ServerService
         if (legacy != null) return legacy;
         // Adopt a live process only when it is the recorded session relaunched externally
         // (same engine, model, port and flags, verified against the live command line).
-        return RecoverByScan(config, latest, embedding);
+        var byScan = RecoverByScan(config, latest, embedding);
+        if (byScan != null) return byScan;
+        // A detached server can outlive its record (crash, cleared or corrupt config).
+        // Adopt it with the same full fingerprint so "start" manages our own server
+        // instead of failing with a port conflict.
+        return RecoverByPort(config, embedding);
+    }
+
+    private static DateTime _lastPortRecoveryUtc = DateTime.MinValue;
+
+    /// <summary>
+    /// Last-resort recovery for a server whose config record is gone. It only matches a
+    /// live llama-server started from this install's engine for the configured model on
+    /// the configured port - never an arbitrary process that merely shares the port.
+    /// WMI is only touched while the port is actually busy and at most every few seconds,
+    /// so the two-second status poll stays cheap.
+    /// </summary>
+    private static Process? RecoverByPort(ManagerConfig config, bool embedding)
+    {
+        var port = embedding ? config.EmbeddingPort : new LauncherArguments(config.Args).GetPort(config.Port);
+        if (port <= 0 || !TestPortInUse(port)) return null;
+        var now = DateTime.UtcNow;
+        if ((now - _lastPortRecoveryUtc).TotalSeconds < 5) return null;
+        _lastPortRecoveryUtc = now;
+        var model = embedding ? config.EmbeddingModelPath : config.ModelPath;
+        foreach (var candidate in Process.GetProcessesByName("llama-server"))
+        {
+            var keep = false;
+            try
+            {
+                var commandLine = GetCommandLine(candidate.Id);
+                if (commandLine == null) continue;
+                var args = new LauncherArguments(commandLine);
+                if (args.GetPort(0) != port || args.Has("--embedding") != embedding) continue;
+                var engine = candidate.MainModule?.FileName ?? "";
+                var modelPath = args.Get("-m") ?? model;
+                if (!PathIdentity.Equals(engine, ConfigService.GetLlamaServerPath(modelPath))) continue;
+                if (!PathIdentity.Equals(modelPath, model)) continue;
+                var session = new ServerSession
+                {
+                    ProcessId = candidate.Id, StartTimeUtcTicks = candidate.StartTime.ToUniversalTime().Ticks,
+                    EnginePath = engine, ModelPath = modelPath,
+                    Args = string.Join(" ", args.Values.Skip(1).Select(LauncherArguments.Quote)),
+                    Port = port, Embedding = embedding
+                };
+                ConfigService.SaveSession(config, session, embedding);
+                keep = true;
+                return candidate;
+            }
+            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception or ManagementException) { }
+            finally { if (!keep) candidate.Dispose(); }
+        }
+        return null;
+    }
+
+    /// <summary>Names the process holding a port when it is a llama-server, for the error text.</summary>
+    private static string DescribePortOccupant(int port)
+    {
+        try
+        {
+            foreach (var candidate in Process.GetProcessesByName("llama-server"))
+            {
+                using (candidate)
+                {
+                    var commandLine = GetCommandLine(candidate.Id);
+                    if (commandLine != null && new LauncherArguments(commandLine).GetPort(0) == port)
+                        return $"占用者是 llama-server（PID {candidate.Id}）：它可能是此前启动、未正常退出或使用了其它模型/参数的服务。" +
+                               "请先结束该进程，或在“高级选项”页把端口改为其它值。";
+                }
+            }
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception or ManagementException) { }
+        return "请结束占用该端口的进程，或在“高级选项”页把端口改为其它值。";
     }
 
     public static Process? ValidateProcess(ServerSession session)
@@ -212,7 +284,7 @@ public static class ServerService
             }
             else
             {
-                if (TestPortInUse(port)) throw new InvalidOperationException($"端口 {port} 已被占用。");
+                if (TestPortInUse(port)) throw new InvalidOperationException($"端口 {port} 已被占用。{DescribePortOccupant(port)}");
                 log?.Invoke($"启动 {engine} {args}");
                 process = DetachedProcess.Start(engine, args,
                     embedding ? ConfigService.GetEmbeddingStdoutPath() : ConfigService.GetMainStdoutPath(),

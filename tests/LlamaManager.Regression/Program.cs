@@ -406,6 +406,32 @@ internal static class Program
                 }
                 finally { Check(await ServerService.StopAsync(config), "could not stop adopted server"); }
             });
+            await Test("session: adopts a detached server after its config record is lost", async () =>
+            {
+                var config = Config(Fixtures.FreePort()); ConfigService.SaveConfig(config);
+                Check(await ServerService.StartAsync(config), "fake server failed");
+                var session = config.RunningServer!;
+                try
+                {
+                    // Simulate the record being lost (crash, cleared or corrupt config)
+                    // while the detached server keeps listening on the port.
+                    ConfigService.SaveSession(config, null);
+                    Check(ConfigService.ReadConfig().RunningServer == null, "record not cleared");
+                    Process? adopted = null;
+                    var deadline = DateTime.UtcNow.AddSeconds(15);
+                    while (adopted == null && DateTime.UtcNow < deadline)
+                    {
+                        adopted = ServerService.GetManagedProcess(config);
+                        if (adopted == null) await Task.Delay(500);
+                    }
+                    Check(adopted != null && adopted.Id == session.ProcessId,
+                        $"detached server not re-adopted (adopted={(adopted == null ? "null" : adopted.Id.ToString())}, wanted={session.ProcessId})");
+                    adopted!.Dispose();
+                    var latest = ConfigService.ReadConfig();
+                    Check(latest.RunningServer != null && latest.RunningServer.ProcessId == session.ProcessId, "session not restored");
+                }
+                finally { Check(await ServerService.StopAsync(config), "could not stop adopted server"); }
+            });
             await Test("lifecycle: selection and port edits do not change the running identity", async () =>
             {
                 var config = Config(Fixtures.FreePort()); ConfigService.SaveConfig(config);

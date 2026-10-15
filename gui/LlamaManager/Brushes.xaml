@@ -6,9 +6,10 @@
      navigation rail keep templates here; every colour comes from a theme token
      so light/dark and high-contrast switch with the system. -->
 
-    <!-- Text inherits the active WPF-UI theme. -->
+    <!-- Text inherits the active WPF-UI theme. Foreground is set on the window
+         root instead of here: a hard TextBlock foreground would also win over
+         the white text that accent-filled buttons/items inherit. -->
     <Style TargetType="TextBlock">
-        <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
         <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI"/>
         <Setter Property="TextOptions.TextFormattingMode" Value="Ideal"/>
     </Style>
