@@ -32,8 +32,8 @@ public static class StrataCompatibility
         public bool IsPackable => StructureOk && Blockers.Count == 0;
     }
 
-    // gate/up decode: iq_kernels.cu STRATA_GU_FMTS — 16,17,18,21,22,23,29,42,12,13,11,6,2,3,8
-    private static readonly HashSet<uint> GuDecode = [16, 17, 18, 21, 22, 23, 29, 42, 12, 13, 11, 6, 2, 3, 8];
+    // gate/up decode: iq_kernels.cu STRATA_GU_FMTS — 16,17,18,21,22,23,29,42,12,13,14,11,6,2,3,8
+    private static readonly HashSet<uint> GuDecode = [16, 17, 18, 21, 22, 23, 29, 42, 12, 13, 14, 11, 6, 2, 3, 8];
     // down decode: STRATA_D_FMTS — 20,23,42,7,6,2,3,8,14,12,13,11,22,18
     private static readonly HashSet<uint> DownDecode = [20, 23, 42, 7, 6, 2, 3, 8, 14, 12, 13, 11, 22, 18];
     // NativeHead::load and NativeDense use native_mmvq_supported, which also includes Q4_0 and Q6_K.
