@@ -103,6 +103,14 @@ public static class ConfigService
         config.SetRunning(slot, session);
     }
 
+    /// <summary>Persists a session under an explicit slot (a backend id, "main", or "embedding").
+    /// Plugin/Strata backends keep their own slot so they never masquerade as llama.cpp.</summary>
+    public static void SaveSessionSlot(ManagerConfig config, string slot, ServerSession? session)
+    {
+        Store.Update(target => target.SetRunning(slot, session));
+        config.SetRunning(slot, session);
+    }
+
     public static bool MigrateSession(ManagerConfig config, ServerSession session)
     {
         var slot = session.Embedding ? ManagerConfig.SlotEmbedding : ManagerConfig.SlotMain;

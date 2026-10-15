@@ -38,28 +38,31 @@ public partial class MainWindow
             var brush = (Brush)FindResource(ready ? "SystemFillColorSuccessBrush" : running || busy ? "SystemFillColorCautionBrush" : "SystemFillColorCriticalBrush");
             StatusDot.Fill = brush;
             StatusText.Text = _serverStopping ? "正在停止…" : running ? ready ? "服务运行中" : "模型加载中…" : busy ? "正在启动…" : "已停止";
-            ActionStatusText.Text = _strataRunning || _strataStopping
-                ? "Strata 运行中 · llama-server 不可用（共享显存）"
+            // Another GPU-heavy backend (Strata/PolyStrata) holding the GPU blocks llama.cpp.
+            var gpuHolder = EngineArbiter.ActiveGpuBackend(_config);
+            var otherBackendBusy = gpuHolder != null && gpuHolder != "llamacpp";
+            ActionStatusText.Text = otherBackendBusy
+                ? $"{EngineArbiter.DisplayName(gpuHolder!)} 运行中 · llama-server 不可用（共享显存）"
                 : session != null && running
                     ? $"{Path.GetFileName(session.ModelPath)} · PID {session.ProcessId}"
                     : "选择模型后启动服务";
-            ActionStatusText.Foreground = (Brush)FindResource(ready && !(_strataRunning || _strataStopping) ? "SystemFillColorSuccessBrush" : "TextFillColorSecondaryBrush");
+            ActionStatusText.Foreground = (Brush)FindResource(ready && !otherBackendBusy ? "SystemFillColorSuccessBrush" : "TextFillColorSecondaryBrush");
             ActionEndpointText.Text = session != null && running ? $"http://127.0.0.1:{session.Port}" : "未监听";
             ApiStatusBadge.Text = ready ? "API: 就绪" : running ? "API: 加载中" : "API: 离线";
             ApiStatusBadge.Foreground = brush;
             // Icons come from XAML (WPF-UI SymbolIcon); Content stays text-only.
             StartButton.Content = _serverStarting ? "正在启动…" : running ? "重启服务" : "启动服务";
             StopButton.Content = _serverStarting ? "终止启动" : "停止服务";
-            // Strata 与 llama-server 共享显存：Strata 活动期间不允许拉起主服务。
-            var strataBusy = _strataRunning || _strataStopping;
+            // A GPU-heavy backend other than llama.cpp blocks the main service controls.
+            var strataBusy = otherBackendBusy;
             StartButton.IsEnabled = !busy && !_selecting && !_scanning && !strataBusy;
             StopButton.IsEnabled = !_serverStopping && (running || _serverStarting);
             OpenButton.IsEnabled = ready && !busy && !strataBusy;
             SpeedTestButton.IsEnabled = (_speedTesting || ready && !busy) && !strataBusy;
             EmbeddingToggleButton.IsEnabled = !_embeddingStarting && !strataBusy;
-            StartButton.ToolTip = strataBusy ? "Strata 正在运行，与 llama-server 共享显存，无法同时启动" : null;
+            StartButton.ToolTip = strataBusy ? $"{EngineArbiter.DisplayName(gpuHolder!)} 正在运行，共享显存，无法同时启动" : null;
             SpeedTestButton.ToolTip = strataBusy
-                ? "Strata 正在运行，无法测速"
+                ? $"{EngineArbiter.DisplayName(gpuHolder!)} 正在运行，无法测速"
                 : "实测推理速度：首Token延迟(TTFT) 与解码速度(tok/s)";
             LiveSpeedText.Text = running ? status.Text : "";
             LiveSpeedText.Foreground = (Brush)FindResource(status.IsActive ? "AccentFillColorDefaultBrush" : "SystemFillColorSuccessBrush");
@@ -85,9 +88,10 @@ public partial class MainWindow
     private async void StartButton_Click(object sender, RoutedEventArgs e)
     {
         if (_serverStarting || _serverStopping || _selecting || _scanning) return;
-        if (_strataRunning || _strataStopping)
+        var gpuHolder = EngineArbiter.ActiveGpuBackend(_config);
+        if (gpuHolder != null && gpuHolder != "llamacpp")
         {
-            MessageBox.Show("Strata 正在运行，与 llama-server 共享显存，无法同时启动。\n\n请先停止 Strata。",
+            MessageBox.Show($"{EngineArbiter.DisplayName(gpuHolder)} 正在运行，共享显存，无法同时启动。\n\n请先在「引擎」页停止它。",
                 "显存冲突", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }

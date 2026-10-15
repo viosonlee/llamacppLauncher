@@ -19,11 +19,11 @@ public static class EngineArbiter
         foreach (var backend in BackendRegistry.All())
         {
             if (!backend.Descriptor.GpuHeavy) continue;
-            var slot = backend.Descriptor.Id;
-            if (config.GetRunning(slot) != null) return slot;
+            var id = backend.Descriptor.Id;
+            // llama.cpp keeps its main session under the "main" slot; other backends use their id.
+            var slot = id == "llamacpp" ? ManagerConfig.SlotMain : id;
+            if (config.GetRunning(slot) != null) return id;
         }
-        // llama.cpp keeps its main session under the "main" slot.
-        if (config.RunningServer != null) return "llamacpp";
         return null;
     }
 

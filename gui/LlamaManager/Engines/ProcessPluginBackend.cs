@@ -190,7 +190,7 @@ public sealed class ProcessPluginBackend : IServerBackend
             Port = port,
         };
         process.Dispose();
-        ConfigService.SaveSession(request.Config, ToServerSession(session));
+        ConfigService.SaveSessionSlot(request.Config, _manifest.Id, ToServerSession(session));
         await WaitReadyAsync(session, log, ct).ConfigureAwait(false);
         return session;
     }
@@ -214,7 +214,7 @@ public sealed class ProcessPluginBackend : IServerBackend
         }
         if (process == null)
         {
-            ConfigService.SaveSession(ConfigService.ReadConfig(), null);
+            ConfigService.SaveSessionSlot(ConfigService.ReadConfig(), _manifest.Id, null);
             log.Write("记录的引擎进程已不存在，已清理记录。");
             return;
         }
@@ -225,7 +225,7 @@ public sealed class ProcessPluginBackend : IServerBackend
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             try { await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false); } catch (OperationCanceledException) { }
         }
-        ConfigService.SaveSession(ConfigService.ReadConfig(), null);
+        ConfigService.SaveSessionSlot(ConfigService.ReadConfig(), _manifest.Id, null);
     }
 
     public Task<bool> ReadyAsync(EngineSession session, CancellationToken ct) =>

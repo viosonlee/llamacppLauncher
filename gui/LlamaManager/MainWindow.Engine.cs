@@ -24,13 +24,13 @@ public partial class MainWindow
         _engineUpdate = true;
         try
         {
-            if (EngineBackendBox.Items.Count == 0)
-            {
-                EngineBackendBox.ItemsSource = BackendRegistry.All().Select(b => b.Descriptor.DisplayName).ToArray();
-                EngineBackendBox.SelectedIndex = 0;
-            }
+            var all = BackendRegistry.All();
+            EngineBackendBox.ItemsSource = all.Select(b => b.Descriptor.DisplayName).ToArray();
+            var index = all.ToList().FindIndex(b => b.Descriptor.Id == _config.ActiveBackendId);
+            EngineBackendBox.SelectedIndex = index >= 0 ? index : 0;
         }
         finally { _engineUpdate = false; }
+        RebuildEngineParameters();
         await RefreshEngineAsync();
     }
 
@@ -121,7 +121,32 @@ public partial class MainWindow
                     };
                     if (spec.ToolTip != null) control.ToolTip = spec.ToolTip;
                     Grid.SetColumn(control, 1);
-                    row.Children.Add(control);
+                    if (spec.Type is ParamType.FilePath or ParamType.FolderPath && control is TextBox pathBox)
+                    {
+                        // A path parameter gets a browse button beside the text box.
+                        var pathRow = new DockPanel();
+                        var browse = new Button { Content = "浏览…", Padding = new Thickness(8, 3, 8, 3), Margin = new Thickness(6, 0, 0, 0) };
+                        var folder = spec.Type == ParamType.FolderPath;
+                        browse.Click += (_, _) =>
+                        {
+                            if (folder)
+                            {
+                                var dialog = new Microsoft.Win32.OpenFolderDialog { Title = spec.Label };
+                                if (dialog.ShowDialog() == true) pathBox.Text = dialog.FolderName;
+                            }
+                            else
+                            {
+                                var dialog = new Microsoft.Win32.OpenFileDialog { Title = spec.Label, Filter = "可执行文件|*.exe|所有文件|*.*" };
+                                if (dialog.ShowDialog() == true) pathBox.Text = dialog.FileName;
+                            }
+                            pathBox.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+                        };
+                        DockPanel.SetDock(browse, Dock.Right);
+                        pathRow.Children.Add(browse);
+                        pathRow.Children.Add(pathBox);
+                        row.Children.Add(pathRow);
+                    }
+                    else row.Children.Add(control);
                     EngineParametersPanel.Children.Add(row);
                     if (control is TextBox textBox) _engineParameterBoxes[spec.Key] = textBox;
                 }
@@ -157,8 +182,10 @@ public partial class MainWindow
                 ? $"http://127.0.0.1:{ResolveDisplayPort(backend)}/v1"
                 : "";
             var model = backend.Descriptor.Id == "llamacpp" ? _config.ModelPath
-                : backend.Descriptor.Id == "strata-upstream" ? _config.Strata.ModelPath
-                : _config.Engines.GetValueOrDefault(backend.Descriptor.Id)?.ModelPath ?? _config.ModelPath;
+                : _config.Engines.GetValueOrDefault(backend.Descriptor.Id)?.ModelPath ?? "";
+            // Legacy fallback: an install configured before the engine page kept the model in StrataConfig.
+            if (string.IsNullOrWhiteSpace(model) && backend.Descriptor.Id == "strata-upstream")
+                model = _config.Strata.ModelPath;
             EngineModelTextBox.Text = model;
             if (!string.IsNullOrWhiteSpace(model) && File.Exists(model))
             {
@@ -187,9 +214,9 @@ public partial class MainWindow
         var backend = SelectedEngineBackend();
         if (backend == null) return;
         if (backend.Descriptor.Id == "llamacpp") _config.ModelPath = dialog.FileName;
-        else if (backend.Descriptor.Id == "strata-upstream") { _config.Strata.ModelPath = dialog.FileName; ConfigService.SaveStrata(_config); }
         else
         {
+            // Every non-llama.cpp backend (Strata, plugins) keeps its model in its own settings.
             var settings = _config.Engines.GetValueOrDefault(backend.Descriptor.Id) ?? new EngineSettings();
             settings.ModelPath = dialog.FileName;
             _config.Engines[backend.Descriptor.Id] = settings;

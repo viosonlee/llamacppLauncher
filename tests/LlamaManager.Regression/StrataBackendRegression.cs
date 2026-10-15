@@ -38,20 +38,23 @@ internal static class StrataBackendRegression
         // The tokenizer prep tool must exist; pre-seed the tokenizer dir so no Python is needed.
         File.WriteAllText(Path.Combine(source, "tools", "strata_tokenizer.py"), "# fixture\n");
 
-        var config = new ManagerConfig
+        var port = Fixtures.FreePort();
+        var config = new ManagerConfig();
+        config.Engines["strata-upstream"] = new EngineSettings
         {
-            Strata = new StrataConfig
+            ModelPath = model,
+            Port = port,
+            Parameters = new Dictionary<string, string>
             {
-                PackageRoot = package,
-                ServeRoot = source,
-                ModelPath = model,
-                PythonPath = python,
-                ServePort = Fixtures.FreePort(),
-                Context = 4096,
-            }
+                ["packageRoot"] = package,
+                ["serveRoot"] = source,
+                ["pythonPath"] = python,
+                ["servePort"] = port.ToString(),
+                ["context"] = "4096",
+            },
         };
         ConfigService.SaveConfig(config);
-        ConfigService.SaveStrata(config);
+        ConfigService.SaveEngineSettings(config, "strata-upstream", config.Engines["strata-upstream"]);
 
         var backend = BackendRegistry.ServerById("strata-upstream");
         Check(backend != null, "strata-upstream backend not registered");
@@ -77,8 +80,9 @@ internal static class StrataBackendRegression
         var runconfig = JsonNode.Parse(plan.GeneratedFiles[runconfigPath])!.AsObject();
         Equal("qwen35moe", runconfig["arch"]!.GetValue<string>());
         Check(runconfig["exe"]!.GetValue<string>().EndsWith("strata.exe"), "runconfig exe wrong");
-        Equal(config.Strata.ServePort, runconfig["port"]!.GetValue<int>());
-        Check(args.Contains(config.Strata.ServePort.ToString()), "port not passed to the server");
+        // The engine page's settings must actually drive the runconfig (not the legacy Strata block).
+        Equal(port, runconfig["port"]!.GetValue<int>());
+        Check(args.Contains(port.ToString()), "port not passed to the server");
     }
 
     /// <summary>Resolvers must report honest problems instead of throwing at random points.</summary>
@@ -88,5 +92,36 @@ internal static class StrataBackendRegression
         Check(StrataBackend.ResolveEngine(empty) == null, "engine resolved from an empty config");
         Check(StrataBackend.ResolveServer(empty) == null, "server resolved from an empty config");
         Check(!StrataBackend.EngineSupportsQwen35(Path.Combine(root, "missing.exe")), "missing engine advertised qwen35moe");
+    }
+
+    /// <summary>
+    /// Regression for the reported hang: selecting the Strata backend runs `strata.exe --families`.
+    /// An engine that floods stderr and never exits must not deadlock the caller; the probe is
+    /// bounded and kills the child. This is the bug the user hit as "选择 strata 卡死".
+    /// </summary>
+    public static async Task RunProbeHangAsync(string root)
+    {
+        var package = Path.Combine(root, "strata-hang-pkg");
+        var engineDir = Path.Combine(package, "engine");
+        Fixtures.CopyRuntime(engineDir);
+        var engine = Path.Combine(engineDir, "strata.exe");
+        File.Copy(Environment.ProcessPath!, engine, true);
+        File.WriteAllText(Path.Combine(engineDir, "families-hang"), "");
+
+        var config = new ManagerConfig();
+        config.Engines["strata-upstream"] = new EngineSettings
+        {
+            Parameters = new Dictionary<string, string> { ["packageRoot"] = package },
+        };
+        ConfigService.SaveConfig(config);
+        ConfigService.SaveEngineSettings(config, "strata-upstream", config.Engines["strata-upstream"]);
+
+        var backend = BackendRegistry.ServerById("strata-upstream")!;
+        var started = DateTime.UtcNow;
+        var probe = await backend.ProbeAsync(CancellationToken.None);
+        var elapsed = DateTime.UtcNow - started;
+        Check(elapsed < TimeSpan.FromSeconds(20), $"probe did not stay bounded: {elapsed.TotalSeconds:F1}s");
+        // A hung engine is not a usable backend, and the reason is reported (not an exception).
+        Check(!probe.Available, "hung engine reported as available");
     }
 }

@@ -41,20 +41,29 @@ public static class StrataService
         return null;
     }
 
-    /// <summary>引擎是否带原生 qwen35moe 家族路径（上游 0.1.44+ 的 `--families`）。旧 cyber-on-strata 引擎没有该旗标。</summary>
+    /// <summary>引擎是否带原生 qwen35moe 家族路径（上游 0.1.44+ 的 `--families`）。旧 cyber-on-strata 引擎没有该旗标。
+    /// 必须同时排空 stdout 与 stderr 并在超时后结束子进程，否则日志填满管道会死锁调用线程。</summary>
     public static bool EngineSupportsQwen35(string strataExe)
     {
+        Process? process = null;
         try
         {
             var start = CaptureStart(strataExe);
             start.ArgumentList.Add("--families");
-            using var process = Process.Start(start);
+            process = Process.Start(start);
             if (process == null) return false;
-            var stdout = process.StandardOutput.ReadToEnd();
-            process.WaitForExit(5000);
-            return process.ExitCode == 0 && stdout.Contains("qwen35moe", StringComparison.Ordinal);
+            var stdout = process.StandardOutput.ReadToEndAsync();
+            var stderr = process.StandardError.ReadToEndAsync();
+            if (!process.WaitForExit(5000)) return false;
+            var text = stdout.GetAwaiter().GetResult();
+            return process.ExitCode == 0 && text.Contains("qwen35moe", StringComparison.Ordinal);
         }
         catch (Exception ex) when (ex is IOException or System.ComponentModel.Win32Exception or InvalidOperationException) { return false; }
+        finally
+        {
+            try { if (process is { HasExited: false }) process.Kill(true); } catch { }
+            process?.Dispose();
+        }
     }
 
     /// <summary>q36 分词表的稳定缓存路径（按归一化模型路径的 SHA-256 前 16 位）。</summary>

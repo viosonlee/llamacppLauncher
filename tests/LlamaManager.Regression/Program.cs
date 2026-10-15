@@ -250,6 +250,8 @@ internal static class Program
                 StrataBackendRegression.RunLaunchAsync(_root, _model));
             await Test("strata backend: resolvers report honest problems", () =>
                 Run(() => StrataBackendRegression.RunResolvers(_root)));
+            await Test("strata backend: a hung engine probe stays bounded and does not deadlock", () =>
+                StrataBackendRegression.RunProbeHangAsync(_root));
             await Test("plugins: manifest parse, validation and argument templating", () =>
                 Run(() => PluginRegression.RunManifest(_root)));
             await Test("plugins: discovery rejects built-in id collisions", () =>

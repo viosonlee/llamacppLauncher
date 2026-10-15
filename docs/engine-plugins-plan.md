@@ -53,8 +53,10 @@
 - [x] `ProbeAsync`：`--families` 含 `qwen35moe` + `serve/server.py` + Python 可用性。
 - [x] `ReadyAsync`：`GET /health`；`StartAsync` 先准备 tokenizer 目录（`EnsureTokenizerDirAsync`）。
 - [x] `InspectAsync`：复用 `StrataCompatibility.Analyze` + 资源估算。
-- [x] 回归：假 `serve/server.py`、runconfig 生成、解析器诚实报错（**43/43**）。
-- [ ] UI：Strata 面板改为「选择包根/源码根/模型 → 启动服务 → 显示 base URL」；移除一次性推理流程（阶段 6 一并做）。
+- [x] 回归：假 `serve/server.py`、runconfig 生成、解析器诚实报错（**48/48**）。
+- [x] UI：删除旧 Strata pack 页与其代码隐藏（`MainWindow.Strata.cs`、`StrataParameterHelp.cs`）；Strata 的包目录/源码根/Python 改为引擎页的参数（`packageRoot`/`serveRoot`/`pythonPath`，带浏览按钮）。
+- [x] 修复：引擎页参数此前写入 `EngineSettings` 但 `StrataBackend` 只读 `StrataConfig`（UI 值被忽略）；现改为后端优先读自身设置，`StrataConfig` 仅作旧安装回退。
+- [x] 修复：`strata.exe --families` 探测只读 stdout、不读 stderr 且超时不 kill，日志填满管道会死锁 UI（"选择 strata 卡死"）；改为异步排空双流 + 超时强杀，并把探测移出 UI 线程。新增复现该卡死的回归测试。
 
 ## 阶段 3b：引擎环境一键初始化（bootstrap）
 
@@ -87,7 +89,7 @@
 - [x] 状态区：可用性、兼容性、运行状态、**可复制的 base URL**（供 pi/Claude Code/Codex）。
 - [x] 启动/停止经 `IServerBackend` + `EngineArbiter` GPU 互斥（统一冲突确认）。
 - [x] 初始化按钮（`BootstrapService`）。
-- [x] UI 回归：6 个导航页、引擎控件存在、离屏渲染 6 张 PNG（**47/47**）。
+- [x] UI 回归：5 个导航页、引擎控件存在、离屏渲染 5 张 PNG（**48/48**）。
 
 ## 阶段 7：CLI / autostart 走注册表
 

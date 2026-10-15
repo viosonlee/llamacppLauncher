@@ -13,6 +13,12 @@ internal static class StrataRegression
         File.WriteAllText(Path.Combine(folder, "arguments.json"), JsonSerializer.Serialize(args));
         if (args.Contains("--families"))
         {
+            // Reproduces the probe deadlock: flood stderr so an unread pipe fills, then hang.
+            if (File.Exists(Path.Combine(folder, "families-hang")))
+            {
+                for (var i = 0; i < 20000; i++) Console.Error.WriteLine(new string('e', 200));
+                await Task.Delay(60000);
+            }
             // The upstream engine advertises its native families; the old cyber engine exits nonzero here.
             if (File.Exists(Path.Combine(folder, "no-qwen35"))) return 2;
             Console.WriteLine("qwen4exp qwen35moe");

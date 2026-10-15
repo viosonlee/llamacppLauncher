@@ -29,6 +29,9 @@ public sealed class StrataBackend : IServerBackend
 
     public IReadOnlyList<ParameterSpec> Parameters { get; } =
     [
+        new("packageRoot", "Strata 包目录", "路径", ParamType.FolderPath, "", "包含 engine\\strata.exe 的目录。"),
+        new("serveRoot", "Strata 源码根", "路径", ParamType.FolderPath, "", "包含 serve\\server.py 的目录；留空则用包目录。"),
+        new("pythonPath", "Python 解释器", "路径", ParamType.FilePath, "", "Python 3.10+ 的 python.exe；留空自动查找。"),
         new("servePort", "服务端口", "基本", ParamType.Integer, "8091", "HTTP API 端口（OpenAI/Anthropic）。", 1, 65535),
         new("host", "监听地址", "基本", ParamType.Text, "127.0.0.1", "默认仅本机回环。"),
         new("context", "上下文", "基本", ParamType.Integer, "4096", "--max-context。", 256, 1048576),
@@ -38,6 +41,24 @@ public sealed class StrataBackend : IServerBackend
         new("anthropicThinking", "Anthropic 思考", "高级", ParamType.Choice, "model", "未显式要求思考时的行为。", Choices: ["model", "on_request"]),
     ];
 
+    /// <summary>
+    /// Reads a Strata setting from the backend's own EngineSettings, falling back to the
+    /// legacy StrataConfig block so existing installs keep working. Empty values fall through.
+    /// </summary>
+    private static string? Param(ManagerConfig config, string key)
+    {
+        var settings = config.Engines.GetValueOrDefault(Id);
+        if (settings != null && settings.Parameters.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value))
+            return value;
+        return null;
+    }
+
+    private static int ParamInt(ManagerConfig config, string key, int fallback)
+    {
+        var value = Param(config, key);
+        return value != null && int.TryParse(value, out var parsed) ? parsed : fallback;
+    }
+
     public async Task<BackendStatus> ProbeAsync(CancellationToken ct)
     {
         var config = ConfigService.ReadConfig();
@@ -46,7 +67,9 @@ public sealed class StrataBackend : IServerBackend
             return BackendStatus.Unavailable("未找到 strata.exe；请在面板中选择 Strata 包目录。");
         if (!File.Exists(engine))
             return BackendStatus.Unavailable("未找到 strata.exe：" + engine);
-        if (!EngineSupportsQwen35(engine))
+        // Both checks spawn a child process; never run them on the UI thread.
+        var supportsQwen35 = await Task.Run(() => EngineSupportsQwen35(engine), ct).ConfigureAwait(false);
+        if (!supportsQwen35)
             return BackendStatus.Unavailable("该 strata.exe 没有 qwen35moe 原生路径（需要上游 0.1.44+ 构建）。");
         var server = ResolveServer(config);
         if (server == null)
@@ -77,13 +100,12 @@ public sealed class StrataBackend : IServerBackend
     public LaunchPlan BuildLaunch(EngineStartRequest request)
     {
         var config = request.Config;
-        var s = config.Strata;
         var model = ResolveModel(config);
         var engine = ResolveEngine(config) ?? throw new FileNotFoundException("未找到 strata.exe。");
         var server = ResolveServer(config) ?? throw new FileNotFoundException("未找到 serve\\server.py。");
         var python = ResolvePython(config) ?? throw new FileNotFoundException("未找到 Python 3.10+。");
-        var port = s.ServePort;
-        var host = string.IsNullOrWhiteSpace(s.Host) ? "127.0.0.1" : s.Host;
+        var port = ResolvePort(request);
+        var host = Param(config, "host") ?? (string.IsNullOrWhiteSpace(config.Strata.Host) ? "127.0.0.1" : config.Strata.Host);
 
         var tokenizer = TokenizerDir(config, model);
         var runconfig = BuildRunConfig(config, engine, model, tokenizer, port, host);
@@ -107,14 +129,14 @@ public sealed class StrataBackend : IServerBackend
         var serveRoot = Path.GetDirectoryName(Path.GetDirectoryName(server))!;
         log.Write("准备分词表…");
         await StrataPackService.EnsureTokenizerDirAsync(serveRoot, model, TokenizerDir(request.Config, model),
-            request.Config.Strata.PythonPath, log.Write, ct).ConfigureAwait(false);
+            Param(request.Config, "pythonPath") ?? request.Config.Strata.PythonPath, log.Write, ct).ConfigureAwait(false);
         // Materialize generated files (the runconfig) before launching.
         foreach (var (path, content) in plan.GeneratedFiles)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             await File.WriteAllTextAsync(path, content, ct).ConfigureAwait(false);
         }
-        var port = request.Config.Strata.ServePort;
+        var port = ResolvePort(request);
         if (ServerService.TestPortInUse(port))
             throw new InvalidOperationException($"端口 {port} 已被占用。请改用其它端口。");
         var args = string.Join(" ", plan.Arguments.Select(LauncherArguments.Quote));
@@ -134,15 +156,13 @@ public sealed class StrataBackend : IServerBackend
             Extra = { ["runconfig"] = RunConfigPath(model) },
         };
         process.Dispose();
-        ConfigService.SaveSession(request.Config, ToServerSession(session));
+        ConfigService.SaveSessionSlot(request.Config, Id, ToServerSession(session));
         await WaitReadyAsync(session, log, ct).ConfigureAwait(false);
         return session;
     }
 
     public async Task StopAsync(EngineSession session, ILogSink log)
     {
-        var slot = ManagerConfig.SlotMain;
-        var recorded = ConfigService.ReadConfig().GetRunning(slot);
         Process? process = null;
         try
         {
@@ -160,7 +180,7 @@ public sealed class StrataBackend : IServerBackend
         }
         if (process == null)
         {
-            ConfigService.SaveSession(ConfigService.ReadConfig(), null);
+            ConfigService.SaveSessionSlot(ConfigService.ReadConfig(), Id, null);
             log.Write("记录的 Strata 服务进程已不存在，已清理记录。");
             return;
         }
@@ -171,13 +191,14 @@ public sealed class StrataBackend : IServerBackend
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             try { await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false); } catch (OperationCanceledException) { }
         }
-        ConfigService.SaveSession(ConfigService.ReadConfig(), null);
+        ConfigService.SaveSessionSlot(ConfigService.ReadConfig(), Id, null);
     }
 
     public Task<bool> ReadyAsync(EngineSession session, CancellationToken ct) =>
         ServerService.TestApiReadyAsync(session.Port, ct);
 
-    public int ResolvePort(EngineStartRequest request) => request.Config.Strata.ServePort;
+    public int ResolvePort(EngineStartRequest request) =>
+        ParamInt(request.Config, "servePort", request.Config.Strata.ServePort);
 
     public string HealthUrl(EngineSession session) => $"http://127.0.0.1:{session.Port}/health";
 
@@ -215,10 +236,14 @@ public sealed class StrataBackend : IServerBackend
         string tokenizer, int port, string host)
     {
         var s = config.Strata;
-        var args = new List<string> { "--native", model, "--max-context", s.Context.ToString() };
+        var context = ParamInt(config, "context", s.Context);
+        var workers = ParamInt(config, "poolWorkers", s.Workers);
+        var reserve = ParamInt(config, "vramReserveMib", 700);
+        var args = new List<string> { "--native", model, "--max-context", context.ToString() };
         if (s.Prefill > 0) { args.Add("--prefill"); args.Add(s.Prefill.ToString()); }
         if (s.MaxNew > 0) { args.Add("--max-new"); args.Add(s.MaxNew.ToString()); }
-        if (s.Workers > 0) { args.Add("--pool-workers"); args.Add(s.Workers.ToString()); }
+        if (workers > 0) { args.Add("--pool-workers"); args.Add(workers.ToString()); }
+        if (reserve > 0) { args.Add("--vram-reserve-mib"); args.Add(reserve.ToString()); }
         var cfg = new Dictionary<string, object>
         {
             ["exe"] = engine,
@@ -231,8 +256,10 @@ public sealed class StrataBackend : IServerBackend
             ["port"] = port,
             ["host"] = host,
         };
-        if (s.ReasoningBudgetTokens > 0) cfg["reasoning_budget_tokens"] = s.ReasoningBudgetTokens;
-        if (!string.IsNullOrWhiteSpace(s.AnthropicThinking)) cfg["anthropic_thinking"] = s.AnthropicThinking;
+        var reasoning = ParamInt(config, "reasoningBudget", s.ReasoningBudgetTokens);
+        if (reasoning > 0) cfg["reasoning_budget_tokens"] = reasoning;
+        var thinking = Param(config, "anthropicThinking") ?? s.AnthropicThinking;
+        if (!string.IsNullOrWhiteSpace(thinking)) cfg["anthropic_thinking"] = thinking;
         return cfg;
     }
 
@@ -253,7 +280,8 @@ public sealed class StrataBackend : IServerBackend
 
     public static string? ResolveEngine(ManagerConfig config)
     {
-        var root = config.Strata.PackageRoot;
+        // Prefer the backend's own settings; fall back to the legacy StrataConfig block.
+        var root = Param(config, "packageRoot") ?? config.Strata.PackageRoot;
         if (string.IsNullOrWhiteSpace(root)) return null;
         var engine = Path.Combine(Path.GetFullPath(root), "engine", "strata.exe");
         return File.Exists(engine) ? engine : null;
@@ -261,7 +289,9 @@ public sealed class StrataBackend : IServerBackend
 
     public static string? ResolveServer(ManagerConfig config)
     {
-        foreach (var root in new[] { config.Strata.ServeRoot, config.Strata.PackageRoot })
+        var serveRoot = Param(config, "serveRoot") ?? config.Strata.ServeRoot;
+        var packageRoot = Param(config, "packageRoot") ?? config.Strata.PackageRoot;
+        foreach (var root in new[] { serveRoot, packageRoot })
         {
             if (string.IsNullOrWhiteSpace(root)) continue;
             var server = Path.Combine(Path.GetFullPath(root), "serve", "server.py");
@@ -272,8 +302,9 @@ public sealed class StrataBackend : IServerBackend
 
     internal static string? ResolvePython(ManagerConfig config)
     {
-        if (!string.IsNullOrWhiteSpace(config.Strata.PythonPath) && File.Exists(config.Strata.PythonPath))
-            return config.Strata.PythonPath;
+        var configured = Param(config, "pythonPath") ?? config.Strata.PythonPath;
+        if (!string.IsNullOrWhiteSpace(configured) && File.Exists(configured))
+            return configured;
         foreach (var candidate in new[] { "python", "py" })
         {
             var path = FindOnPath(candidate);
@@ -286,18 +317,27 @@ public sealed class StrataBackend : IServerBackend
     {
         var direct = ResolvePython(config);
         if (direct == null) return null;
+        Process? process = null;
         try
         {
             var start = StrataService.CaptureStart(direct);
             if (Path.GetFileNameWithoutExtension(direct).Equals("py", StringComparison.OrdinalIgnoreCase)) start.ArgumentList.Add("-3");
             start.ArgumentList.Add("-c");
             start.ArgumentList.Add("import sys; assert sys.version_info>=(3,10)");
-            using var process = Process.Start(start);
+            process = Process.Start(start);
             if (process == null) return null;
-            await process.WaitForExitAsync(ct).ConfigureAwait(false);
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            deadline.CancelAfter(TimeSpan.FromSeconds(10));
+            try { await process.WaitForExitAsync(deadline.Token).ConfigureAwait(false); }
+            catch (OperationCanceledException) { return null; }
             return process.ExitCode == 0 ? direct : null;
         }
         catch (Exception ex) when (ex is IOException or System.ComponentModel.Win32Exception or InvalidOperationException) { return null; }
+        finally
+        {
+            try { if (process is { HasExited: false }) process.Kill(true); } catch { }
+            process?.Dispose();
+        }
     }
 
     private static string? FindOnPath(string name)
@@ -317,7 +357,10 @@ public sealed class StrataBackend : IServerBackend
 
     internal static string ResolveModel(ManagerConfig config)
     {
-        var model = config.Strata.ModelPath;
+        // The engine page stores the model in the backend's settings; the legacy Strata block
+        // is the fallback for installs that predate it.
+        var model = config.Engines.GetValueOrDefault(Id)?.ModelPath;
+        if (string.IsNullOrWhiteSpace(model)) model = config.Strata.ModelPath;
         if (!string.IsNullOrWhiteSpace(model) && File.Exists(model)) return Path.GetFullPath(model);
         throw new FileNotFoundException("请先选择已下载完成的 GGUF 模型。", model);
     }

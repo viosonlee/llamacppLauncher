@@ -7,6 +7,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using LlamaManager;
+using LlamaManager.Models;
 using LlamaManager.Services;
 
 internal static class UiRegression
@@ -23,11 +24,11 @@ internal static class UiRegression
         typeof(MainWindow).GetField(field, BindingFlags.Instance | BindingFlags.NonPublic)!
             .SetValue(window, value);
 
-    private static void InvokeStrataRefresh(MainWindow window)
+    private static void InvokeStatusRefresh(MainWindow window)
     {
-        var method = typeof(MainWindow).GetMethod("RefreshStrataButtons", BindingFlags.Instance | BindingFlags.NonPublic)!;
-        // RefreshStrataButtons kicks off RefreshStatusAsync; pump the dispatcher
-        // until it settles instead of awaiting (STA thread has no await context).
+        var method = typeof(MainWindow).GetMethod("RefreshStatusAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        // RefreshStatusAsync is async; pump the dispatcher until it settles
+        // (the STA thread has no await context).
         window.Dispatcher.Invoke(() => method.Invoke(window, null));
         for (var i = 0; i < 40; i++) window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
     }
@@ -106,13 +107,13 @@ internal static class UiRegression
                 ((TextBlock)window.FindName("SelectedModelText")).Text = "Sakura-Micro-Bonsai-2-GSQ-RCO.gguf";
                 ((TextBlock)window.FindName("ModelInfoText")).Text = "qwen3 · 64 层 · 原生上下文 32768\n含 TQ1_0 张量；部分引擎的 CUDA 后端不支持此类型，可能回退 CPU。请以加载日志中的 GPU 权重为准。";
                 var logTab = tabs.Items.Count - 1;
-                Program.Check(tabs.Items.Count == 6, $"expected 6 nav pages, found {tabs.Items.Count}");
+                Program.Check(tabs.Items.Count == 5, $"expected 5 nav pages, found {tabs.Items.Count}");
                 Program.Check(((TextBlock)window.FindName("ProcessInfoText")).Text == "进程: 无", "log tab lost process info");
                 Program.Check(window.FindName("LogScrollViewer") is ScrollViewer, "log scroll viewer missing");
                 Program.Check(window.FindName("AutoOpenBrowserCheckBox") != null, "auto-open checkbox missing from advanced page");
                 Program.Check(window.FindName("EngineBackendBox") != null, "engine backend selector missing");
                 Program.Check(window.FindName("EngineBaseUrlTextBox") != null, "engine base URL field missing");
-                foreach (var tab in new[] { 0, 1, 2, 3, 4, 5 })
+                foreach (var tab in new[] { 0, 1, 2, 3, 4 })
                 {
                     tabs.SelectedIndex = tab;
                     content.Measure(new Size(690, 775)); content.Arrange(new Rect(0, 0, 690, 775)); content.UpdateLayout();
@@ -179,12 +180,14 @@ internal static class UiRegression
                 Program.Check(comboPopup.IsOpen && comboPopup.Child is FrameworkElement, "combo dropdown did not open");
                 comboProbe.IsDropDownOpen = false;
                 comboHost.Close();
-                // Strata and llama-server share VRAM: simulating a running Strata
-                // must lock the footer lifecycle controls, not just the Strata buttons.
+                // A GPU-heavy backend other than llama.cpp holding the GPU must lock the footer
+                // lifecycle controls. Record a Strata session in its own slot and refresh status.
                 // RefreshStatusAsync bails out while _loaded is false, so re-enable it.
                 SetFlag(window, "_loaded", true);
-                SetFlag(window, "_strataRunning", true);
-                InvokeStrataRefresh(window);
+                var config = (ManagerConfig)typeof(MainWindow)
+                    .GetField("_config", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+                config.SetRunning("strata-upstream", new ServerSession { ProcessId = 999999, EnginePath = "strata.exe", ModelPath = "m.gguf", Port = 8091 });
+                InvokeStatusRefresh(window);
                 Program.Check(((Button)window.FindName("StartButton")).IsEnabled == false, "start button stayed enabled while Strata runs");
                 Program.Check(((Button)window.FindName("SpeedTestButton")).IsEnabled == false, "speed test stayed enabled while Strata runs");
                 Program.Check(((Button)window.FindName("EmbeddingToggleButton")).IsEnabled == false, "embedding toggle stayed enabled while Strata runs");

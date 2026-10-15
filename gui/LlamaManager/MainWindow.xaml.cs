@@ -17,7 +17,7 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
     private DispatcherTimer? _statusTimer;
     private List<ModelInfo> _models = [];
     private bool _loaded, _parsingArgs, _refreshing, _serverStarting, _serverStopping, _embeddingStarting, _speedTesting, _selecting, _scanning;
-    private int _updateCount, _statusVersion, _strataUpdate;
+    private int _updateCount, _statusVersion;
     private string? _lastLogText;
 
     /// <summary>The built-in llama.cpp backend, resolved once from the registry.</summary>
@@ -40,7 +40,6 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
             var recovery = ConfigService.RecoveryWarning;
             await RefreshModelsAsync();
             ApplyConfig();
-            await ApplyStrataConfigAsync();
             await ApplyEngineConfigAsync();
             _loaded = true;
             if (recovery != null) MessageBox.Show(recovery, "配置恢复");
