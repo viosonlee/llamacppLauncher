@@ -44,7 +44,8 @@ internal static class StrataCompatibilityRegression
                 "unsupported head accepted: " + type);
         }
         Check(StrataCompatibility.Analyze(Read(Fixtures.StrataGguf(embedType: 30))).IsPackable, "BF16 embedding rejected");
-        foreach (uint type in new uint[] { 0, 1, 2 })
+        Check(StrataCompatibility.Analyze(Read(Fixtures.StrataGguf(embedType: 2))).IsPackable, "Q4_0 embedding rejected");
+        foreach (uint type in new uint[] { 0, 1 })
         {
             var r = StrataCompatibility.Analyze(Read(Fixtures.StrataGguf(embedType: type)));
             Check(!r.IsPackable && r.Blockers.Any(b => b.Contains("token_embd.weight")), "unsupported embedding accepted");
@@ -69,6 +70,16 @@ internal static class StrataCompatibilityRegression
                 f.Prefill == StrataCompatibility.Grade.Fallback), "native decode with prefill fallback rejected");
             Check(StrataCompatibility.Summary(r).Contains("fp16"), "prefill fallback missing from status");
         }
+        // Q4_0/Q4_1 experts are native on both roles (upstream 16bdc707); neither has a prefill MMQ kernel.
+        foreach (uint gu in new uint[] { 2, 3 })
+            foreach (uint d in new uint[] { 2, 3 })
+            {
+                var r = StrataCompatibility.Analyze(Read(Fixtures.StrataGguf(gateType: gu, downType: d, sharedType: 8)));
+                Check(r.IsPackable, $"Q4_0/Q4_1 expert pair rejected ({gu}/{d}): " + string.Join("; ", r.Blockers));
+                Check(r.Findings.Where(f => f.Role is "gate/up" or "down")
+                    .All(f => f.Decode == StrataCompatibility.Grade.Native && f.Prefill == StrataCompatibility.Grade.Fallback),
+                    $"Q4_0/Q4_1 ({gu}/{d}) must be decode native with prefill fallback");
+            }
         var mismatch = StrataCompatibility.Analyze(Read(Fixtures.StrataGguf(upType: 18)));
         Check(!mismatch.IsPackable && mismatch.Blockers.Any(b => b.Contains("blk.0") && b.Contains("不一致")),
             "gate/up mismatch lost its layer-specific blocker");

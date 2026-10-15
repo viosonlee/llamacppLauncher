@@ -32,16 +32,16 @@ public static class StrataCompatibility
         public bool IsPackable => StructureOk && Blockers.Count == 0;
     }
 
-    // gate/up decode: iq_kernels.cu STRATA_GU_FMTS — 16,17,18,21,22,23,29,42,12,13,11,6,8
-    private static readonly HashSet<uint> GuDecode = [16, 17, 18, 21, 22, 23, 29, 42, 12, 13, 11, 6, 8];
-    // down decode: STRATA_D_FMTS — 20,23,42,7,6,8,14,12,13,11,22,18
-    private static readonly HashSet<uint> DownDecode = [20, 23, 42, 7, 6, 8, 14, 12, 13, 11, 22, 18];
+    // gate/up decode: iq_kernels.cu STRATA_GU_FMTS — 16,17,18,21,22,23,29,42,12,13,11,6,2,3,8
+    private static readonly HashSet<uint> GuDecode = [16, 17, 18, 21, 22, 23, 29, 42, 12, 13, 11, 6, 2, 3, 8];
+    // down decode: STRATA_D_FMTS — 20,23,42,7,6,2,3,8,14,12,13,11,22,18
+    private static readonly HashSet<uint> DownDecode = [20, 23, 42, 7, 6, 2, 3, 8, 14, 12, 13, 11, 22, 18];
     // NativeHead::load and NativeDense use native_mmvq_supported, which also includes Q4_0 and Q6_K.
     private static readonly HashSet<uint> NativeMmvq = [2, 6, 7, 8, 11, 12, 13, 14, 20, 23, 42, 16, 17, 18, 21, 22, 29];
-    // prefill MMQ (release build: STRATA_MMQ_KQUANTS=ON, STRATA_ORCA_Q4KS_MMQ=OFF → no Q5_0)
+    // prefill MMQ (release build: STRATA_MMQ_KQUANTS=ON, STRATA_ORCA_Q4KS_MMQ=OFF → no Q5_0/Q4_0/Q4_1)
     private static readonly HashSet<uint> PrefillMmq = [42, 16, 17, 22, 18, 21, 20, 23, 8, 12, 13, 7, 14, 11];
     // is_iq: the dequant dispatch set (iq_kernels.cu:1789)
-    private static readonly HashSet<uint> IsIq = [16, 17, 18, 20, 21, 22, 23, 29, 42, 11, 12, 13, 14, 7, 6, 8];
+    private static readonly HashSet<uint> IsIq = [16, 17, 18, 20, 21, 22, 23, 29, 42, 11, 12, 13, 14, 7, 6, 2, 3, 8];
 
     private static readonly Dictionary<uint, string> Names = new()
     {
