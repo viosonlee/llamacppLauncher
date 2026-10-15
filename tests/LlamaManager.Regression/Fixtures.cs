@@ -6,6 +6,22 @@ using LlamaManager.Services;
 
 internal static class Fixtures
 {
+    /// <summary>Counts stream reads so a test can prove a parser works in bulk.</summary>
+    public sealed class CountingStream(Stream inner) : Stream
+    {
+        public long ReadCalls { get; private set; }
+        public override bool CanRead => inner.CanRead;
+        public override bool CanSeek => inner.CanSeek;
+        public override bool CanWrite => false;
+        public override long Length => inner.Length;
+        public override long Position { get => inner.Position; set => inner.Position = value; }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) { ReadCalls++; return inner.Read(buffer, offset, count); }
+        public override long Seek(long offset, SeekOrigin origin) => inner.Seek(offset, origin);
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
     public static int FreePort()
     {
         using var listener = new TcpListener(IPAddress.Loopback, 0);
@@ -13,7 +29,7 @@ internal static class Fixtures
         return ((IPEndPoint)listener.LocalEndpoint).Port;
     }
 
-    public static byte[] Gguf(bool prism = false, uint type = 0, bool moe = true, int layers = 64, int context = 8192, bool mtp = false)
+    public static byte[] Gguf(bool prism = false, uint type = 0, bool moe = true, int layers = 64, int context = 8192, bool mtp = false, int vocabSize = 2)
     {
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true);
@@ -22,7 +38,8 @@ internal static class Fixtures
         writer.Write(0x46554747u); writer.Write(3u); writer.Write(1UL); writer.Write((ulong)((prism ? 7 : 6) + (mtp ? 1 : 0)));
         String("general.architecture"); writer.Write(8u); String("qwen3");
         // Architecture fields deliberately follow tokenizer metadata: KV ordering is not specified.
-        String("tokenizer.ggml.tokens"); writer.Write(9u); writer.Write(8u); writer.Write(2UL); String("hello"); String("世界");
+        String("tokenizer.ggml.tokens"); writer.Write(9u); writer.Write(8u); writer.Write((ulong)vocabSize);
+        for (var i = 0; i < vocabSize; i++) String($"tok-{i:D6}-xxxxxxxxxxxxxxxx");
         Number("qwen3.block_count", (uint)layers);
         Number("qwen3.context_length", (uint)context);
         Number("qwen3.expert_count", moe ? 8u : 0u);

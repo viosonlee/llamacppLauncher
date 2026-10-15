@@ -255,6 +255,19 @@ internal static class Program
                 using var plainStream = new MemoryStream(Fixtures.Gguf(moe: false));
                 Check(!GgufService.Read(plainStream).HasMtp, "plain model flagged as MTP");
             }));
+            await Test("GGUF: large string arrays are skipped without losing alignment", () => Run(() =>
+            {
+                using var stream = new MemoryStream(Fixtures.Gguf(moe: false, vocabSize: 5000));
+                var meta = GgufService.Read(stream);
+                Equal(64, meta.LayerCount); Equal(8192, meta.ContextLength);
+                Equal(stream.Length, stream.Position); // consumed exactly the metadata, nothing more
+            }));
+            await Test("GGUF: large string arrays are read in bulk, not per string", () => Run(() =>
+            {
+                using var counting = new Fixtures.CountingStream(new MemoryStream(Fixtures.Gguf(moe: false, vocabSize: 5000)));
+                Equal(64, GgufService.Read(counting).LayerCount);
+                Check(counting.ReadCalls < 50, $"metadata parsing issued {counting.ReadCalls} stream reads");
+            }));
             await Test("GGUF: truncated and invalid data are bounded; changed files invalidate cache", () => Run(() =>
             {
                 var bytes = Fixtures.Gguf();

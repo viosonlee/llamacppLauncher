@@ -40,6 +40,8 @@ public static class GgufService
 {
     private sealed record Entry(long Length, long Modified, GgufMetadata? Metadata);
     private static readonly ConcurrentDictionary<string, Entry> Cache = new();
+    [ThreadStatic] private static byte[]? _skipScratch;
+    [ThreadStatic] private static byte[]? _bulkScratch;
 
     public static GgufMetadata? TryRead(string path)
     {
@@ -53,7 +55,7 @@ public static class GgufService
             GgufMetadata? result;
             try
             {
-                using var stream = file.Open(FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1 << 16);
                 result = Read(stream);
             }
             catch (Exception ex) when (ex is IOException or InvalidDataException or ArgumentException or OverflowException) { result = null; }
@@ -132,11 +134,69 @@ public static class GgufService
         return Encoding.UTF8.GetString(reader.ReadBytes((int)length));
     }
 
+    /// <summary>
+    /// Advances past an array of strings without materialising it. Tokenizer
+    /// vocabularies hold hundreds of thousands of short strings, so walking the
+    /// lengths through a 64 KiB buffer turns a per-string virtual call into a
+    /// per-buffer one.
+    /// </summary>
+    private static void SkipStringArray(BinaryReader reader, ulong count)
+    {
+        var buffer = _bulkScratch ??= new byte[1 << 16];
+        var streamLength = reader.BaseStream.Length;
+        var start = 0;
+        var end = 0;
+        for (ulong i = 0; i < count; i++)
+        {
+            if (end - start < 8)
+            {
+                if (start > 0) { Buffer.BlockCopy(buffer, start, buffer, 0, end - start); end -= start; start = 0; }
+                while (end < 8)
+                {
+                    var read = reader.Read(buffer, end, buffer.Length - end);
+                    if (read <= 0) throw new EndOfStreamException("GGUF 文件被截断。");
+                    end += read;
+                }
+            }
+            var stringLength = BitConverter.ToUInt64(buffer, start);
+            start += 8;
+            if (stringLength > (ulong)streamLength) throw new InvalidDataException("GGUF 字符串长度无效。");
+            var remaining = (long)stringLength;
+            while (remaining > 0)
+            {
+                if (start == end)
+                {
+                    start = 0; end = 0;
+                    var read = reader.Read(buffer, 0, buffer.Length);
+                    if (read <= 0) throw new EndOfStreamException("GGUF 文件被截断。");
+                    end = read;
+                }
+                var take = (int)Math.Min(end - start, remaining);
+                start += take;
+                remaining -= take;
+            }
+        }
+        // The last refill read past the array into the next metadata entry; hand
+        // those bytes back so the caller keeps parsing from the right offset.
+        if (end > start) reader.BaseStream.Seek(-(end - start), SeekOrigin.Current);
+    }
+
     private static void Skip(BinaryReader reader, ulong length)
     {
         if (length > (ulong)(reader.BaseStream.Length - reader.BaseStream.Position))
             throw new EndOfStreamException("GGUF 文件被截断。");
-        reader.BaseStream.Seek((long)length, SeekOrigin.Current);
+        // Read forward instead of Seek: tokenizer metadata holds arrays with
+        // hundreds of thousands of short strings, and every Seek discards the
+        // stream buffer, so seeking once per string made reads ~100x slower.
+        // The scratch buffer is reused per thread to avoid pool traffic per string.
+        var remaining = (long)length;
+        var scratch = _skipScratch ??= new byte[8192];
+        while (remaining > 0)
+        {
+            var read = reader.Read(scratch, 0, (int)Math.Min(scratch.Length, remaining));
+            if (read <= 0) throw new EndOfStreamException("GGUF 文件被截断。");
+            remaining -= read;
+        }
     }
 
     private static long? ReadValue(BinaryReader reader, uint type, int depth = 0)
@@ -159,6 +219,7 @@ public static class GgufService
                 if (count > 10_000_000) throw new InvalidDataException("GGUF 数组过大。");
                 var size = element switch { 0 or 1 or 7 => 1, 2 or 3 => 2, 4 or 5 or 6 => 4, 10 or 11 or 12 => 8, _ => 0 };
                 if (size > 0) Skip(reader, checked(count * (ulong)size));
+                else if (element == 8) SkipStringArray(reader, count);
                 else for (ulong i = 0; i < count; i++) ReadValue(reader, element, depth + 1);
                 return null;
             case 10: return (long)Math.Min(reader.ReadUInt64(), long.MaxValue);

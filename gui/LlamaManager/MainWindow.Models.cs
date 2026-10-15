@@ -12,7 +12,7 @@ public partial class MainWindow
     {
         if (_scanning || _selecting) return;
         _scanning = true;
-        ConfigurationTabs.IsEnabled = false;
+        ModelCountText.Text = "正在扫描模型…";
         try
         {
             var directory = string.IsNullOrEmpty(_config.ModelsDirectory) ? Path.Combine(ConfigService.GetRoot(), "models") : _config.ModelsDirectory;
@@ -20,7 +20,7 @@ public partial class MainWindow
             {
                 if (!Directory.Exists(directory)) return new List<ModelInfo>();
                 var options = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true };
-                return Directory.EnumerateFiles(directory, "*.gguf", options)
+                var list = Directory.EnumerateFiles(directory, "*.gguf", options)
                     .Where(f => !Path.GetFileName(f).StartsWith("mmproj-", StringComparison.OrdinalIgnoreCase))
                     .OrderBy(f => f).Select(f =>
                     {
@@ -28,12 +28,14 @@ public partial class MainWindow
                         return new ModelInfo { FullName = Path.GetFullPath(f), FileName = Path.GetFileName(f),
                             RelativePath = Path.GetRelativePath(directory, f), SizeBytes = new FileInfo(f).Length };
                     }).ToList();
+                // Preset rebinding samples file signatures, so keep it off the dispatcher too.
+                ConfigService.RebindOrphanPresets(_config, list.Select(m => m.FullName), save: true);
+                return list;
             });
             if (_lifetime.IsCancellationRequested) return;
             _selecting = true;
             try
             {
-                ConfigService.RebindOrphanPresets(_config, models.Select(m => m.FullName), save: true);
                 _models = models;
                 ModelListBox.ItemsSource = _models;
                 ModelListBox.SelectedItem = _models.FirstOrDefault(m => PathIdentity.Equals(m.FullName, _config.ModelPath));
@@ -41,7 +43,7 @@ public partial class MainWindow
             }
             finally { _selecting = false; }
         }
-        finally { _scanning = false; ConfigurationTabs.IsEnabled = true; }
+        finally { _scanning = false; }
     }
 
     private void UpdateSelectedModelText()
