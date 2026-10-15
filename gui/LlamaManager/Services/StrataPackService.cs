@@ -102,10 +102,15 @@ public static class StrataPackService
         if (string.IsNullOrWhiteSpace(options.ModelPath) || !File.Exists(options.ModelPath))
             throw new FileNotFoundException("请先选择已下载完成的 GGUF 模型。");
         var model = Path.GetFullPath(options.ModelPath);
-        var md = GgufService.TryRead(model) ?? throw new InvalidDataException("无法读取 GGUF 元数据。");
-        if (md.Architecture != "qwen35moe" || md.LayerCount is not (40 or 41) || md.EmbeddingLength != 2048 ||
-            md.AttentionHeads != 16 || md.KvHeads != 2 || md.ExpertCount is < 1 or > 512 || md.ExpertUsedCount < 1)
-            throw new NotSupportedException("当前 Strata 打包入口支持 qwen35moe 的 40 层主干（含 MTP 时 41 层）、hidden=2048、attention heads=16 / KV heads=2 的变种；该文件结构不匹配。");
+        var md = GgufService.TryReadShards(model) ?? throw new InvalidDataException("无法读取 GGUF 元数据。");
+        var report = StrataCompatibility.Analyze(md);
+        if (!report.IsPackable)
+        {
+            var detail = report.StructureOk
+                ? "结构匹配，但专家/嵌入格式超出引擎 GPU 支持范围：\n" + string.Join("\n", report.Blockers)
+                : "当前 Strata 打包入口支持 qwen35moe 的 40 层主干（含 MTP 时 41 层）、hidden=2048、attention heads=16 / KV heads=2 的变种；该文件结构不匹配：\n" + report.StructureNote;
+            throw new NotSupportedException(detail + "\n\n" + StrataCompatibility.Summary(report));
+        }
         var tools = Path.GetFullPath(Path.Combine(options.PackageRoot, "tools"));
         foreach (var tool in Tools)
             if (!File.Exists(Path.Combine(tools, tool))) throw new FileNotFoundException("Strata 包缺少 tools/" + tool + "，请使用包含打包工具的完整运行包。");

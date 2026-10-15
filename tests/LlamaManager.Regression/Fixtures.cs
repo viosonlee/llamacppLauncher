@@ -50,6 +50,43 @@ internal static class Fixtures
         return stream.ToArray(); // No weight data: the reader must stop at tensor descriptors.
     }
 
+    /// <summary>Builds a minimal qwen35moe GGUF exercising the Strata compatibility analyzer.</summary>
+    public static byte[] StrataGguf(uint gateType = 11, uint? upType = null, uint downType = 11,
+        uint sharedType = 13, uint embedType = 11, uint headType = 14, bool mtp = false,
+        uint experts = 256, uint layers = 40, uint hidden = 2048, string arch = "qwen35moe")
+    {
+        upType ??= gateType;
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true);
+        void String(string value) { var bytes = Encoding.UTF8.GetBytes(value); writer.Write((ulong)bytes.Length); writer.Write(bytes); }
+        void Number(string key, uint value) { String(key); writer.Write(4u); writer.Write(value); }
+        void Tensor(string name, uint type)
+        { String(name); writer.Write(2u); writer.Write(256UL); writer.Write(256UL); writer.Write(type); writer.Write(0UL); }
+        var tensorCount = 2u + layers * 6u; // embedding + head + (gate,up,down,shexp,gate_inp,gate_inp_shexp) per layer
+        writer.Write(0x46554747u); writer.Write(3u); writer.Write((ulong)tensorCount); writer.Write(8UL + (mtp ? 1UL : 0UL));
+        String("general.architecture"); writer.Write(8u); String(arch);
+        Number(arch + ".block_count", layers + (mtp ? 1u : 0u));
+        Number(arch + ".context_length", 4096);
+        Number(arch + ".embedding_length", hidden);
+        Number(arch + ".attention.head_count", 16);
+        Number(arch + ".attention.head_count_kv", 2);
+        Number(arch + ".expert_count", experts);
+        Number(arch + ".expert_used_count", 8);
+        if (mtp) Number(arch + ".nextn_predict_layers", 1);
+        Tensor("token_embd.weight", embedType);
+        Tensor("output.weight", headType);
+        for (var i = 0; i < layers; i++)
+        {
+            Tensor($"blk.{i}.ffn_gate_exps.weight", gateType);
+            Tensor($"blk.{i}.ffn_up_exps.weight", upType.Value);
+            Tensor($"blk.{i}.ffn_down_exps.weight", downType);
+            Tensor($"blk.{i}.ffn_gate_shexp.weight", sharedType);
+            Tensor($"blk.{i}.ffn_gate_inp.weight", 0);
+            Tensor($"blk.{i}.ffn_gate_inp_shexp.weight", 0);
+        }
+        return stream.ToArray();
+    }
+
     public static void CopyRuntime(string directory)
     {
         Directory.CreateDirectory(directory);

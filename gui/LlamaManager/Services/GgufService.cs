@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.IO;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace LlamaManager.Services;
 
@@ -20,6 +21,8 @@ public sealed record GgufMetadata
     public bool HasHadamard { get; init; }
     public bool HasMtp { get; init; }
     public IReadOnlyDictionary<uint, int> TensorTypes { get; init; } = new Dictionary<uint, int>();
+    /// <summary>Types of the tensors the Strata packer and engine inspect by name (roles, embedding, head, router).</summary>
+    public IReadOnlyDictionary<string, uint> TensorFormats { get; init; } = new Dictionary<string, uint>();
     public bool RequiresPrism => HasHadamard || TensorTypes.ContainsKey(142) || TensorTypes.ContainsKey(143);
     public bool HasTq1 => TensorTypes.ContainsKey(34);
     public string CompatibilityNote
@@ -68,6 +71,30 @@ public static class GgufService
     public static bool? TryDetectIsMoe(string path) => TryRead(path)?.IsMoE;
     public static string? GetArchitecture(string path) => TryRead(path)?.Architecture;
 
+    /// <summary>
+    /// Reads metadata from every shard of a split GGUF. Scalar metadata lives in the
+    /// first shard; tensor descriptors are distributed, so role formats need all shards.
+    /// </summary>
+    public static GgufMetadata? TryReadShards(string path)
+    {
+        var single = TryRead(path);
+        if (single == null) return null;
+        var match = Regex.Match(Path.GetFullPath(path), @"^(.*)-(?<part>\d{5})-of-(?<total>\d{5})\.gguf$", RegexOptions.IgnoreCase);
+        if (!match.Success) return single;
+        var count = int.Parse(match.Groups["total"].Value);
+        if (match.Groups["part"].Value != "00001" || count is < 2 or > 1024) return single;
+        var types = new Dictionary<uint, int>(single.TensorTypes);
+        var formats = new Dictionary<string, uint>(single.TensorFormats);
+        for (var i = 2; i <= count; i++)
+        {
+            var shard = TryRead($"{match.Groups[1].Value}-{i:D5}-of-{count:D5}.gguf");
+            if (shard == null) return null;
+            foreach (var (t, n) in shard.TensorTypes) types[t] = types.GetValueOrDefault(t) + n;
+            foreach (var (name, t) in shard.TensorFormats) formats.TryAdd(name, t);
+        }
+        return single with { TensorTypes = types, TensorFormats = formats };
+    }
+
     public static GgufMetadata Read(Stream stream)
     {
         using var reader = new BinaryReader(stream, Encoding.UTF8, leaveOpen: true);
@@ -102,6 +129,7 @@ public static class GgufService
             }
         }
         var types = new Dictionary<uint, int>();
+        var formats = new Dictionary<string, uint>();
         for (ulong i = 0; i < tensors; i++)
         {
             var tensorName = ReadString(reader, 4096);
@@ -113,6 +141,7 @@ public static class GgufService
             var type = reader.ReadUInt32();
             _ = reader.ReadUInt64();
             types[type] = types.GetValueOrDefault(type) + 1;
+            if (RoleTensor.IsMatch(tensorName)) formats[tensorName] = type;
         }
         int Number(string suffix) => (int)Math.Clamp(scalars.GetValueOrDefault(architecture + "." + suffix), 0, int.MaxValue);
         return new GgufMetadata
@@ -122,9 +151,14 @@ public static class GgufService
             ExpertCount = Number("expert_count"), ExpertUsedCount = Number("expert_used_count"),
             KvHeads = Number("attention.head_count_kv"), KeyLength = Number("attention.key_length"),
             ValueLength = Number("attention.value_length"), IsMoE = moe || architecture.Contains("moe", StringComparison.OrdinalIgnoreCase),
-            HasHadamard = hadamard, HasMtp = nextn, TensorTypes = types
+            HasHadamard = hadamard, HasMtp = nextn, TensorTypes = types, TensorFormats = formats
         };
     }
+
+    /// <summary>Tensor names the Strata engine and packer inspect by role (experts, shared experts, embedding, head, router).</summary>
+    private static readonly Regex RoleTensor =
+        new(@"^(token_embd|output)\.weight$|^blk\.\d+\.ffn_(gate|up|down)(_exps|_shexp)?(_w\d+)?\.weight$|^blk\.\d+\.ffn_gate_inp(_shexp)?\.weight$",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static string ReadString(BinaryReader reader, int maximum)
     {

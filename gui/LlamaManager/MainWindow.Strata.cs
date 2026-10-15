@@ -259,6 +259,29 @@ public partial class MainWindow
             StrataPackStatusText.Text = "新模型需要对应的 Pack；点击一键生成可创建或复用缓存。";
         }
         finally { _strataUpdate--; }
+        _ = UpdateStrataCompatAsync(model);
+    }
+
+    /// <summary>Shows the engine-format verdict for the selected GGUF without blocking the UI.</summary>
+    private async Task UpdateStrataCompatAsync(string model)
+    {
+        if (string.IsNullOrWhiteSpace(model)) return;
+        try
+        {
+            var report = await Task.Run(() =>
+            {
+                var md = GgufService.TryReadShards(model);
+                return md == null ? null : StrataCompatibility.Analyze(md);
+            });
+            if (report == null || !PathIdentity.Equals(_config.Strata.ModelPath, model)) return;
+            await Dispatcher.InvokeAsync(() =>
+            {
+                if (!PathIdentity.Equals(_config.Strata.ModelPath, model)) return;
+                StrataPackStatusText.Text = (report.IsPackable ? "" : "⚠ ") + StrataCompatibility.Summary(report) +
+                    "  （点击一键生成可在打包前再次校验）";
+            });
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException) { }
     }
 
     private async void StrataGeneratePackButton_Click(object sender, RoutedEventArgs e)
