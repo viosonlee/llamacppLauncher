@@ -9,15 +9,14 @@ using LlamaManager.Services;
 namespace LlamaManager;
 
 /// <summary>
-/// The backend-agnostic engine page. It lists every registered backend, generates its
-/// parameter controls from the declared schema, starts/stops the service and shows the
-/// base URL an agent (pi, Claude Code, Codex) can attach to.
+/// The backend picker and the schema-driven parameter panel. The lifecycle buttons live in
+/// the shared top bar (see MainWindow.Runtime.cs), so this file only selects the engine,
+/// builds its parameter controls and shows/hides the engine-specific panels.
 /// </summary>
 public partial class MainWindow
 {
-    private bool _engineRunning, _engineBusy, _engineUpdate;
+    private bool _engineUpdate;
     private readonly Dictionary<string, TextBox> _engineParameterBoxes = new(StringComparer.OrdinalIgnoreCase);
-    private EngineSession? _engineSession;
 
     private async Task ApplyEngineConfigAsync()
     {
@@ -30,6 +29,7 @@ public partial class MainWindow
             EngineBackendBox.SelectedIndex = index >= 0 ? index : 0;
         }
         finally { _engineUpdate = false; }
+        ApplyEnginePanelVisibility();
         RebuildEngineParameters();
         await RefreshEngineAsync();
     }
@@ -41,6 +41,19 @@ public partial class MainWindow
         return index >= 0 && index < all.Count ? all[index] : null;
     }
 
+    private IServerBackend? SelectedServerBackend() => SelectedEngineBackend() as IServerBackend;
+
+    /// <summary>The session slot a backend records under (llama.cpp keeps the "main" slot).</summary>
+    private static string SlotFor(string backendId) => backendId == "llamacpp" ? ManagerConfig.SlotMain : backendId;
+
+    private ServerSession? SelectedSession()
+    {
+        var backend = SelectedEngineBackend();
+        return backend == null ? null : _config.GetRunning(SlotFor(backend.Descriptor.Id));
+    }
+
+    private bool IsLlamaCppSelected() => SelectedEngineBackend()?.Descriptor.Id == "llamacpp";
+
     private async void EngineBackendBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_engineUpdate) return;
@@ -50,32 +63,39 @@ public partial class MainWindow
             _config.ActiveBackendId = backend.Descriptor.Id;
             ConfigService.SaveActiveBackend(_config, backend.Descriptor.Id);
         }
+        ApplyEnginePanelVisibility();
         RebuildEngineParameters();
-        await RefreshEngineAsync();
-    }
-
-    private async void EngineBootstrapButton_Click(object sender, RoutedEventArgs e)
-    {
-        var backend = SelectedEngineBackend();
-        if (backend == null || _engineBusy) return;
-        _engineBusy = true;
-        RefreshEngineButtons();
-        EngineOutputBox.Clear();
-        try
+        // Reflect the newly selected engine's model in the model list.
+        if (backend != null)
         {
-            await BootstrapService.RunAsync(backend.Descriptor.Id, new DelegateLogSink(AppendEngineOutput), _lifetime.Token);
-            AppendEngineOutput("初始化完成。");
+            var selected = EngineModelFor(backend);
+            _selecting = true;
+            try { ModelListBox.SelectedItem = _models.FirstOrDefault(m => PathIdentity.Equals(m.FullName, selected)); }
+            finally { _selecting = false; }
+            UpdateSelectedModelText();
         }
-        catch (OperationCanceledException) { AppendEngineOutput("已取消。"); }
-        catch (Exception ex) { ShowError("初始化失败", ex); }
-        finally { _engineBusy = false; await RefreshEngineAsync(); RefreshEngineButtons(); }
+        _statusVersion++;
+        await RefreshEngineAsync();
+        await RefreshStatusAsync();
     }
 
     private async void EngineRefreshButton_Click(object sender, RoutedEventArgs e)
     {
-        EngineBackendBox.ItemsSource = BackendRegistry.All().Select(b => b.Descriptor.DisplayName).ToArray();
-        RebuildEngineParameters();
+        CudaService.Invalidate();
+        await RefreshModelsAsync();
         await RefreshEngineAsync();
+        await RefreshStatusAsync();
+    }
+
+    /// <summary>llama.cpp has hand-written panels; other engines get the schema-driven ones.</summary>
+    private void ApplyEnginePanelVisibility()
+    {
+        var llamacpp = IsLlamaCppSelected();
+        LlamaCppParamsScroll.Visibility = llamacpp ? Visibility.Visible : Visibility.Collapsed;
+        EngineParamsScroll.Visibility = llamacpp ? Visibility.Collapsed : Visibility.Visible;
+        LlamaCppAdvancedPanel.Visibility = llamacpp ? Visibility.Visible : Visibility.Collapsed;
+        EngineAdvancedPanel.Visibility = llamacpp ? Visibility.Collapsed : Visibility.Visible;
+        EmbeddingPanel.Visibility = llamacpp ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void RebuildEngineParameters()
@@ -86,7 +106,7 @@ public partial class MainWindow
             _engineParameterBoxes.Clear();
             EngineParametersPanel.Children.Clear();
             var backend = SelectedEngineBackend();
-            if (backend == null) return;
+            if (backend == null || backend.Parameters.Count == 0) return;
             var settings = _config.Engines.GetValueOrDefault(backend.Descriptor.Id);
             foreach (var group in backend.Parameters.GroupBy(p => p.Group))
             {
@@ -123,7 +143,6 @@ public partial class MainWindow
                     Grid.SetColumn(control, 1);
                     if (spec.Type is ParamType.FilePath or ParamType.FolderPath && control is TextBox pathBox)
                     {
-                        // A path parameter gets a browse button beside the text box.
                         var pathRow = new DockPanel();
                         var browse = new Button { Content = "浏览…", Padding = new Thickness(8, 3, 8, 3), Margin = new Thickness(6, 0, 0, 0) };
                         var folder = spec.Type == ParamType.FolderPath;
@@ -139,7 +158,6 @@ public partial class MainWindow
                                 var dialog = new Microsoft.Win32.OpenFileDialog { Title = spec.Label, Filter = "可执行文件|*.exe|所有文件|*.*" };
                                 if (dialog.ShowDialog() == true) pathBox.Text = dialog.FileName;
                             }
-                            pathBox.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
                         };
                         DockPanel.SetDock(browse, Dock.Right);
                         pathRow.Children.Add(browse);
@@ -174,112 +192,49 @@ public partial class MainWindow
             EngineStatusText.Text = status.Available
                 ? $"{backend.Descriptor.DisplayName} 可用：{status.ExecutablePath}{(status.Version != null ? $"（{status.Version}）" : "")}"
                 : $"不可用：{status.Problem}";
-            var running = _config.GetRunning(backend.Descriptor.Id) != null || _config.RunningServer != null && backend.Descriptor.Id == "llamacpp";
-            _engineRunning = running;
-            EngineStartButton.IsEnabled = status.Available && !_engineBusy;
-            EngineStopButton.IsEnabled = running && !_engineBusy;
-            EngineBaseUrlTextBox.Text = running
-                ? $"http://127.0.0.1:{ResolveDisplayPort(backend)}/v1"
-                : "";
-            var model = backend.Descriptor.Id == "llamacpp" ? _config.ModelPath
-                : _config.Engines.GetValueOrDefault(backend.Descriptor.Id)?.ModelPath ?? "";
-            // Legacy fallback: an install configured before the engine page kept the model in StrataConfig.
-            if (string.IsNullOrWhiteSpace(model) && backend.Descriptor.Id == "strata-upstream")
-                model = _config.Strata.ModelPath;
-            EngineModelTextBox.Text = model;
+            var model = EngineModelFor(backend);
             if (!string.IsNullOrWhiteSpace(model) && File.Exists(model))
             {
                 var report = await backend.InspectAsync(model, _lifetime.Token);
                 EngineCompatText.Text = report.Summary + (report.Estimate != null ? "\n" + report.Estimate.Note : "");
                 EngineCompatText.ToolTip = report.Blockers.Count > 0 ? string.Join("\n", report.Blockers) : null;
-                EngineStartButton.IsEnabled = status.Available && report.Runnable && !_engineBusy;
             }
-            else EngineCompatText.Text = "选择模型后检查兼容性。";
+            else EngineCompatText.Text = "在「模型」页选择模型后，这里显示该引擎的兼容性。";
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { EngineStatusText.Text = "探测失败：" + ex.Message; }
     }
 
-    private int ResolveDisplayPort(IEngineBackend backend)
+    private string EngineModelFor(IEngineBackend backend) => backend.Descriptor.Id == "llamacpp"
+        ? _config.ModelPath
+        : _config.Engines.GetValueOrDefault(backend.Descriptor.Id)?.ModelPath ?? "";
+
+    /// <summary>Persists the schema panel's values before a start.</summary>
+    private void SaveEngineParameters(IEngineBackend backend)
     {
-        if (backend is IServerBackend server) return server.ResolvePort(new EngineStartRequest { Config = _config });
-        return 0;
+        if (_engineUpdate || backend.Parameters.Count == 0) return;
+        var settings = _config.Engines.GetValueOrDefault(backend.Descriptor.Id) ?? new EngineSettings();
+        foreach (var spec in backend.Parameters)
+            if (_engineParameterBoxes.TryGetValue(spec.Key, out var box))
+                settings.Parameters[spec.Key] = box.Text;
+        if (string.IsNullOrEmpty(settings.ModelPath)) settings.ModelPath = EngineModelFor(backend);
+        _config.Engines[backend.Descriptor.Id] = settings;
+        ConfigService.SaveEngineSettings(_config, backend.Descriptor.Id, settings);
     }
 
-    private void EngineModelButton_Click(object sender, RoutedEventArgs e)
-    {
-        var dialog = new Microsoft.Win32.OpenFileDialog { Title = "选择模型 (.gguf)", Filter = "GGUF 模型|*.gguf" };
-        if (dialog.ShowDialog() != true) return;
-        EngineModelTextBox.Text = dialog.FileName;
-        var backend = SelectedEngineBackend();
-        if (backend == null) return;
-        if (backend.Descriptor.Id == "llamacpp") _config.ModelPath = dialog.FileName;
-        else
-        {
-            // Every non-llama.cpp backend (Strata, plugins) keeps its model in its own settings.
-            var settings = _config.Engines.GetValueOrDefault(backend.Descriptor.Id) ?? new EngineSettings();
-            settings.ModelPath = dialog.FileName;
-            _config.Engines[backend.Descriptor.Id] = settings;
-            ConfigService.SaveEngineSettings(_config, backend.Descriptor.Id, settings);
-        }
-        _ = RefreshEngineAsync();
-    }
-
-    private async void EngineStartButton_Click(object sender, RoutedEventArgs e)
+    private async void EngineBootstrapButton_Click(object sender, RoutedEventArgs e)
     {
         var backend = SelectedEngineBackend();
-        if (backend is not IServerBackend server || _engineBusy || _engineRunning) return;
-        SaveEngineParameters(backend);
-        // GPU mutual exclusion: a GPU-heavy engine cannot start while another holds the GPU.
-        var conflict = EngineArbiter.ConflictFor(_config, backend.Descriptor.Id);
-        if (conflict != null)
-        {
-            var decision = MessageBox.Show(
-                $"{EngineArbiter.DisplayName(conflict)} 正在运行，两者共享显卡。\n\n现在停止它并继续启动 {backend.Descriptor.DisplayName} 吗？",
-                "显存冲突", MessageBoxButton.OKCancel, MessageBoxImage.Warning);
-            if (decision != MessageBoxResult.OK) return;
-            try
-            {
-                var other = BackendRegistry.ServerById(conflict)!;
-                var otherSession = _config.GetRunning(conflict) ?? _config.RunningServer;
-                await other.StopAsync(otherSession != null ? LlamaCppBackend.ToEngineSession(otherSession) : new EngineSession { BackendId = conflict },
-                    new DelegateLogSink(LogService.Write));
-            }
-            catch (Exception ex) { ShowError("停止冲突引擎失败", ex); return; }
-        }
-        _engineBusy = true;
-        RefreshEngineButtons();
+        if (backend == null || _serverStarting || _serverStopping) return;
         EngineOutputBox.Clear();
         try
         {
-            _engineSession = await server.StartAsync(new EngineStartRequest { Config = _config }, new DelegateLogSink(AppendEngineOutput), _lifetime.Token);
-            _config = ConfigService.ReadConfig();
-            EngineRunStatusText.Text = $"服务已启动：http://127.0.0.1:{_engineSession.Port}/v1";
-            EngineBaseUrlTextBox.Text = $"http://127.0.0.1:{_engineSession.Port}/v1";
+            await BootstrapService.RunAsync(backend.Descriptor.Id, new DelegateLogSink(AppendEngineOutput), _lifetime.Token);
+            AppendEngineOutput("初始化完成。");
         }
         catch (OperationCanceledException) { AppendEngineOutput("已取消。"); }
-        catch (Exception ex) { ShowError("启动引擎失败", ex); AppendEngineOutput("失败：" + ex.Message); }
-        finally { _engineBusy = false; await RefreshEngineAsync(); RefreshEngineButtons(); }
-    }
-
-    private async void EngineStopButton_Click(object sender, RoutedEventArgs e)
-    {
-        var backend = SelectedEngineBackend();
-        if (backend is not IServerBackend server || _engineBusy) return;
-        _engineBusy = true;
-        RefreshEngineButtons();
-        try
-        {
-            EngineSession? session = _config.GetRunning(backend.Descriptor.Id) is { } slot ? LlamaCppBackend.ToEngineSession(slot) : null;
-            if (session == null && backend.Descriptor.Id == "llamacpp" && _config.RunningServer is { } main)
-                session = LlamaCppBackend.ToEngineSession(main);
-            session ??= _engineSession ?? new EngineSession { BackendId = backend.Descriptor.Id };
-            await server.StopAsync(session, new DelegateLogSink(AppendEngineOutput));
-            _config = ConfigService.ReadConfig();
-            EngineRunStatusText.Text = "服务已停止。";
-        }
-        catch (Exception ex) { ShowError("停止引擎失败", ex); }
-        finally { _engineBusy = false; await RefreshEngineAsync(); RefreshEngineButtons(); }
+        catch (Exception ex) { ShowError("初始化失败", ex); }
+        finally { await RefreshEngineAsync(); }
     }
 
     private void EngineCopyUrlButton_Click(object sender, RoutedEventArgs e)
@@ -289,31 +244,6 @@ public partial class MainWindow
         catch (Exception ex) { ShowError("复制失败", ex); }
     }
 
-    private void SaveEngineParameters(IEngineBackend backend)
-    {
-        if (_engineUpdate || backend.Parameters.Count == 0) return;
-        var settings = _config.Engines.GetValueOrDefault(backend.Descriptor.Id) ?? new EngineSettings();
-        var panel = EngineParametersPanel;
-        var index = 0;
-        foreach (var spec in backend.Parameters)
-        {
-            if (!_engineParameterBoxes.TryGetValue(spec.Key, out var box)) { index++; continue; }
-            settings.Parameters[spec.Key] = box.Text;
-        }
-        if (settings.ModelPath.Length == 0) settings.ModelPath = EngineModelTextBox.Text;
-        _config.Engines[backend.Descriptor.Id] = settings;
-        ConfigService.SaveEngineSettings(_config, backend.Descriptor.Id, settings);
-    }
-
-    private void AppendEngineOutput(string text)
-    {
+    private void AppendEngineOutput(string text) =>
         Dispatcher.BeginInvoke(() => { EngineOutputBox.AppendText(text + "\n"); EngineOutputBox.ScrollToEnd(); });
-    }
-
-    private void RefreshEngineButtons()
-    {
-        EngineStartButton.Content = _engineBusy ? "处理中…" : "启动服务";
-        EngineStartButton.IsEnabled = !_engineBusy;
-        EngineStopButton.IsEnabled = !_engineBusy && _engineRunning;
-    }
 }

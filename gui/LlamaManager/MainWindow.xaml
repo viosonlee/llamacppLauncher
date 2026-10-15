@@ -3,8 +3,8 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
         Title="Llama.cpp Manager"
-        Width="760" Height="700"
-        MinWidth="620" MinHeight="480"
+        Width="780" Height="720"
+        MinWidth="640" MinHeight="520"
         WindowBackdropType="Mica"
         WindowCornerPreference="Round"
         ExtendsContentIntoTitleBar="True"
@@ -15,6 +15,7 @@
     <Grid TextElement.Foreground="{DynamicResource TextFillColorPrimaryBrush}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
@@ -23,53 +24,100 @@
                      Height="42" ShowMinimize="True" ShowMaximize="True"
                      CanMaximize="True"/>
 
-        <Grid Grid.Row="1" Margin="14">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-        </Grid.RowDefinitions>
-
-        <!-- App Bar: read-only runtime state, always visible -->
-        <ui:Card Grid.Row="0" Padding="14,10" Margin="0,0,0,10" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" VerticalAlignment="Stretch">
+        <!-- Unified control bar: one engine picker and one set of lifecycle buttons for every engine. -->
+        <ui:Card Grid.Row="1" Padding="14,10" Margin="14,14,14,10"
+                 HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch">
             <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                    <Ellipse x:Name="StatusDot" Width="12" Height="12" Fill="{DynamicResource SystemFillColorCriticalBrush}" Margin="0,0,8,0"/>
-                    <TextBlock x:Name="StatusText" Text="已停止" FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                    <TextBlock x:Name="ActionStatusText" Text="选择模型后启动服务" FontSize="11" Margin="10,0,0,0"
-                               VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                               TextTrimming="CharacterEllipsis" MaxWidth="280"
-                               ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
-                    <TextBlock x:Name="LiveSpeedText" Text="" FontSize="13" FontWeight="SemiBold"
-                               Foreground="{DynamicResource SystemFillColorSuccessBrush}" Margin="14,0,0,0"
-                               VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="220"
-                               ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
-                </StackPanel>
-                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0">
-                    <TextBlock x:Name="CudaText" Text="CUDA: 检测中..." FontSize="11" Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                               Margin="0,0,10,0" TextTrimming="CharacterEllipsis" MaxWidth="160"
-                               ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
-                    <TextBlock x:Name="PortText" Text=":8080" FontSize="11" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,0,10,0"/>
-                    <TextBlock x:Name="ActionEndpointText" Text="未监听" FontSize="11" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,0,10,0"/>
-                    <TextBlock x:Name="ApiStatusBadge" Text="API: 离线" FontSize="11" FontWeight="SemiBold"
-                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
-                </StackPanel>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <!-- Row 0: engine + live status -->
+                <Grid Grid.Row="0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock Grid.Column="0" Text="引擎:" FontSize="12" VerticalAlignment="Center"
+                               Margin="0,0,6,0" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                    <ComboBox Grid.Column="1" x:Name="EngineBackendBox" Style="{StaticResource FluentComboBox}"
+                              FontSize="12" MinWidth="180" VerticalAlignment="Center"
+                              SelectionChanged="EngineBackendBox_SelectionChanged"/>
+                    <ui:Button Grid.Column="2" x:Name="EngineRefreshButton" Content="刷新"
+                               Click="EngineRefreshButton_Click" Margin="6,0,0,0" Padding="8,3" FontSize="11"
+                               ToolTip="重新探测所有引擎并刷新设备检测"/>
+
+                    <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0,0,0">
+                        <Ellipse x:Name="StatusDot" Width="12" Height="12" Fill="{DynamicResource SystemFillColorCriticalBrush}" Margin="0,0,8,0"/>
+                        <TextBlock x:Name="StatusText" Text="已停止" FontSize="13" FontWeight="SemiBold"
+                                   VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                        <TextBlock x:Name="ActionStatusText" Text="选择模型后启动服务" FontSize="11" Margin="10,0,0,0"
+                                   VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                   TextTrimming="CharacterEllipsis" MaxWidth="300"
+                                   ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
+                        <TextBlock x:Name="LiveSpeedText" Text="" FontSize="13" FontWeight="SemiBold"
+                                   Foreground="{DynamicResource SystemFillColorSuccessBrush}" Margin="14,0,0,0"
+                                   VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="200"
+                                   ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
+                    </StackPanel>
+
+                    <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0">
+                        <TextBlock x:Name="CudaText" Text="CUDA: 检测中..." FontSize="11"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,0,10,0"
+                                   TextTrimming="CharacterEllipsis" MaxWidth="150"
+                                   ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
+                        <TextBlock x:Name="PortText" Text=":8080" FontSize="11"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,0,10,0"/>
+                        <TextBlock x:Name="ActionEndpointText" Text="未监听" FontSize="11"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,0,10,0"/>
+                        <TextBlock x:Name="ApiStatusBadge" Text="API: 离线" FontSize="11" FontWeight="SemiBold"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                    </StackPanel>
+                </Grid>
+
+                <!-- Row 1: lifecycle buttons (shared by every engine) -->
+                <Grid Grid.Row="1" Margin="0,10,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <ui:Button Grid.Column="0" x:Name="StartButton" Appearance="Primary" HorizontalAlignment="Stretch"
+                               HorizontalContentAlignment="Center" Icon="{ui:SymbolIcon Symbol=Play24}"
+                               Content="启动服务" Click="StartButton_Click" Margin="0,0,4,0" Padding="10,9"
+                               FontSize="13" FontWeight="SemiBold"/>
+                    <ui:Button Grid.Column="1" x:Name="StopButton" HorizontalAlignment="Stretch"
+                               HorizontalContentAlignment="Center" Icon="{ui:SymbolIcon Symbol=Stop24}"
+                               Content="停止服务" Click="StopButton_Click" Margin="3,0,3,0" Padding="10,9"
+                               FontSize="13" IsEnabled="False"/>
+                    <ui:Button Grid.Column="2" x:Name="OpenButton" HorizontalAlignment="Stretch"
+                               HorizontalContentAlignment="Center" Icon="{ui:SymbolIcon Symbol=Globe24}"
+                               Content="打开页面" Click="OpenButton_Click" Margin="3,0,3,0" Padding="10,9"
+                               FontSize="13" IsEnabled="False"/>
+                    <ui:Button Grid.Column="3" x:Name="SpeedTestButton" HorizontalAlignment="Stretch"
+                               HorizontalContentAlignment="Center" Icon="{ui:SymbolIcon Symbol=Gauge24}"
+                               Content="测速" Click="SpeedTestButton_Click" Margin="4,0,0,0" Padding="10,9"
+                               FontSize="13" IsEnabled="False"
+                               ToolTip="实测推理速度：首Token延迟(TTFT) 与解码速度(tok/s)"/>
+                </Grid>
             </Grid>
         </ui:Card>
 
-        <!-- Main Tabs (left icon rail) -->
-        <TabControl x:Name="ConfigurationTabs" Grid.Row="1" Margin="0,0,0,10"
+        <!-- Main Tabs (left icon rail): 模型 / 参数 / 高级 / 日志 -->
+        <TabControl x:Name="ConfigurationTabs" Grid.Row="2" Margin="14,0,14,14"
                     Background="Transparent" BorderThickness="0"
                     TabStripPlacement="Left"
                     Template="{DynamicResource NavTabControlTemplate}"
                     ItemContainerStyle="{DynamicResource NavTabItem}">
-            <!-- Model Selection Tab -->
-            <TabItem ToolTip="模型选择">
+
+            <!-- ===================== 模型 ===================== -->
+            <TabItem ToolTip="模型">
                 <TabItem.Header>
                     <ui:SymbolIcon Symbol="Cube24" FontSize="20"/>
                 </TabItem.Header>
@@ -81,7 +129,6 @@
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
 
-                    <!-- Models Directory Row -->
                     <Grid Grid.Row="0" Margin="0,0,0,8">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto"/>
@@ -119,8 +166,7 @@
                                     <Border Grid.Column="1" CornerRadius="3" Padding="4,1" Margin="0,0,6,0"
                                             BorderBrush="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type ListBoxItem}}}" BorderThickness="1"
                                             ToolTip="{Binding Category}" VerticalAlignment="Center">
-                                        <TextBlock Text="{Binding ModelTypeDisplay}" FontSize="10"
-                                                  />
+                                        <TextBlock Text="{Binding ModelTypeDisplay}" FontSize="10"/>
                                     </Border>
                                     <TextBlock Grid.Column="2" Text="{Binding DisplayName}" TextTrimming="CharacterEllipsis"
                                                FontSize="12" VerticalAlignment="Center"/>
@@ -147,305 +193,30 @@
                                    Text="共 0 个模型" FontSize="11" Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                                    Margin="8,0,0,0"/>
                     </Grid>
-                    
+
                     <TextBlock Grid.Row="3" x:Name="ModelInfoText"
                                FontSize="10" Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                                Margin="0,2,0,0" TextWrapping="Wrap" MaxHeight="65" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
                 </Grid>
             </TabItem>
 
-            <!-- Common Parameters Tab -->
-            <TabItem ToolTip="常用参数">
+            <!-- ===================== 参数 ===================== -->
+            <TabItem ToolTip="参数">
                 <TabItem.Header>
                     <ui:SymbolIcon Symbol="Options24" FontSize="20"/>
                 </TabItem.Header>
                 <Grid Margin="12,8">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                    </Grid.RowDefinitions>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="*"/>
-                    </Grid.ColumnDefinitions>
-
-                    <!-- Context Length -->
-                    <Grid Grid.Row="0" Grid.Column="0" Margin="0,0,6,6">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="110"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="30"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="上下文长度 (-c)" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                        <ui:TextBox x:Name="ContextLengthBox" Grid.Column="1" Text="8192" FontSize="12"
-                                 VerticalContentAlignment="Center" TextChanged="ContextLength_TextChanged"/>
-                        <ui:Button Grid.Column="2" Icon="{ui:SymbolIcon Symbol=QuestionCircle24}" FontSize="11" Width="24" Height="22"
-                                Padding="0" Margin="4,0,0,0" Click="InfoButton_Click"
-                                Tag="context_length"/>
-                    </Grid>
-
-                    <!-- K Quantization -->
-                    <Grid Grid.Row="0" Grid.Column="1" Margin="6,0,0,6">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="110"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="30"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="K 量化 (-ctk)" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                        <ComboBox Style="{StaticResource FluentComboBox}" x:Name="ContextQuantKBox" Grid.Column="1" FontSize="12"
-                                  SelectedIndex="0" SelectionChanged="ContextQuant_SelectionChanged">
-                            <ComboBoxItem Content="默认 (未量化/f16)"/>
-                            <ComboBoxItem Content="q8_0 (8-bit)"/>
-                            <ComboBoxItem Content="q4_0 (4-bit)"/>
-                            <ComboBoxItem Content="q4_1 (4-bit)"/>
-                            <ComboBoxItem Content="f16"/>
-                        </ComboBox>
-                        <ui:Button Grid.Column="2" Icon="{ui:SymbolIcon Symbol=QuestionCircle24}" FontSize="11" Width="24" Height="22"
-                                Padding="0" Margin="4,0,0,0" Click="InfoButton_Click"
-                                Tag="context_quant"/>
-                    </Grid>
-
-                    <!-- Offload Layers -->
-                    <Grid Grid.Row="1" Grid.Column="0" Margin="0,0,6,6">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="110"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="30"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="卸载层数 (-ngl)" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                        <ComboBox Style="{StaticResource FluentComboBox}" x:Name="OffloadLayersBox" Grid.Column="1" FontSize="12"
-                                  IsEditable="True" Text="all" SelectionChanged="OffloadLayers_SelectionChanged"
-                                  LostFocus="OffloadLayers_LostFocus">
-                            <ComboBoxItem Content="all"/>
-                            <ComboBoxItem Content="auto"/>
-                            <ComboBoxItem Content="0"/>
-                        </ComboBox>
-                        <ui:Button Grid.Column="2" Icon="{ui:SymbolIcon Symbol=QuestionCircle24}" FontSize="11" Width="24" Height="22"
-                                Padding="0" Margin="4,0,0,0" Click="InfoButton_Click"
-                                Tag="offload_layers"/>
-                    </Grid>
-
-                    <!-- V Quantization -->
-                    <Grid Grid.Row="1" Grid.Column="1" Margin="6,0,0,6">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="110"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="30"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="V 量化 (-ctv)" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                        <ComboBox Style="{StaticResource FluentComboBox}" x:Name="ContextQuantVBox" Grid.Column="1" FontSize="12"
-                                  SelectedIndex="0" SelectionChanged="ContextQuant_SelectionChanged">
-                            <ComboBoxItem Content="默认 (未量化/f16)"/>
-                            <ComboBoxItem Content="q8_0 (8-bit)"/>
-                            <ComboBoxItem Content="q4_0 (4-bit)"/>
-                            <ComboBoxItem Content="q4_1 (4-bit)"/>
-                            <ComboBoxItem Content="f16"/>
-                        </ComboBox>
-                        <ui:Button Grid.Column="2" Icon="{ui:SymbolIcon Symbol=QuestionCircle24}" FontSize="11" Width="24" Height="22"
-                                Padding="0" Margin="4,0,0,0" Click="InfoButton_Click"
-                                Tag="context_quant_v"/>
-                    </Grid>
-
-                    <!-- CPU Cores -->
-                    <Grid Grid.Row="2" Grid.Column="1" Margin="6,0,0,6">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="110"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="30"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="CPU 核心数 (-t)" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                        <ComboBox Style="{StaticResource FluentComboBox}" x:Name="CpuCoresBox" Grid.Column="1" FontSize="12"
-                                  SelectionChanged="CpuCores_SelectionChanged"/>
-                        <ui:Button Grid.Column="2" Icon="{ui:SymbolIcon Symbol=QuestionCircle24}" FontSize="11" Width="24" Height="22"
-                                Padding="0" Margin="4,0,0,0" Click="InfoButton_Click"
-                                Tag="cpu_cores"/>
-                    </Grid>
-
-                    <!-- Reasoning -->
-                    <Grid Grid.Row="2" Grid.Column="0" Margin="0,0,6,6">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="110"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="30"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="思考模式" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                        <ComboBox Style="{StaticResource FluentComboBox}" x:Name="ReasoningBox" Grid.Column="1" FontSize="12"
-                                  SelectedIndex="0" SelectionChanged="Reasoning_SelectionChanged">
-                            <ComboBoxItem Content="默认"/>
-                            <ComboBoxItem Content="off (关闭)"/>
-                            <ComboBoxItem Content="on (开启)"/>
-                            <ComboBoxItem Content="auto"/>
-                        </ComboBox>
-                        <ui:Button Grid.Column="2" Icon="{ui:SymbolIcon Symbol=QuestionCircle24}" FontSize="11" Width="24" Height="22"
-                                Padding="0" Margin="4,0,0,0" Click="InfoButton_Click"
-                                Tag="reasoning"/>
-                    </Grid>
-
-                    <!-- Flash Attention -->
-                    <Grid Grid.Row="4" Grid.Column="1" Margin="6,0,0,6">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="110"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="30"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="Flash Attention" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                        <ComboBox Style="{StaticResource FluentComboBox}" x:Name="FlashAttentionBox" Grid.Column="1" FontSize="12"
-                                  SelectedIndex="0" SelectionChanged="FlashAttention_SelectionChanged">
-                            <ComboBoxItem Content="默认"/>
-                            <ComboBoxItem Content="off (关闭)"/>
-                            <ComboBoxItem Content="on (开启)"/>
-                            <ComboBoxItem Content="auto"/>
-                        </ComboBox>
-                        <ui:Button Grid.Column="2" Icon="{ui:SymbolIcon Symbol=QuestionCircle24}" FontSize="11" Width="24" Height="22"
-                                Padding="0" Margin="4,0,0,0" Click="InfoButton_Click"
-                                Tag="flash_attention"/>
-                    </Grid>
-
-                    <!-- Batch Size -->
-                    <Grid Grid.Row="3" Grid.Column="0" Margin="0,0,6,6">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="110"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="30"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="批处理大小 (-b)" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                        <ComboBox Style="{StaticResource FluentComboBox}" x:Name="BatchSizeBox" Grid.Column="1" FontSize="12"
-                                  IsEditable="True" Text="2048" SelectionChanged="BatchSize_SelectionChanged"
-                                  LostFocus="BatchSize_LostFocus">
-                            <ComboBoxItem Content="2048"/>
-                            <ComboBoxItem Content="1024"/>
-                            <ComboBoxItem Content="512"/>
-                        </ComboBox>
-                        <ui:Button Grid.Column="2" Icon="{ui:SymbolIcon Symbol=QuestionCircle24}" FontSize="11" Width="24" Height="22"
-                                Padding="0" Margin="4,0,0,0" Click="InfoButton_Click" Tag="batch_size"/>
-                    </Grid>
-
-                    <!-- UBatch Size -->
-                    <Grid Grid.Row="3" Grid.Column="1" Margin="6,0,0,6">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="110"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="30"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="物理批大小 (-ub)" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                        <ComboBox Style="{StaticResource FluentComboBox}" x:Name="UBatchSizeBox" Grid.Column="1" FontSize="12"
-                                  IsEditable="True" Text="512" SelectionChanged="UBatchSize_SelectionChanged"
-                                  LostFocus="UBatchSize_LostFocus">
-                            <ComboBoxItem Content="512"/>
-                            <ComboBoxItem Content="256"/>
-                            <ComboBoxItem Content="128"/>
-                        </ComboBox>
-                        <ui:Button Grid.Column="2" Icon="{ui:SymbolIcon Symbol=QuestionCircle24}" FontSize="11" Width="24" Height="22"
-                                Padding="0" Margin="4,0,0,0" Click="InfoButton_Click" Tag="ubatch_size"/>
-                    </Grid>
-
-                    <!-- Verbose Logging -->
-                    <Grid Grid.Row="4" Grid.Column="0" Margin="0,0,6,6">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="110"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="30"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="详细调用日志" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                        <ComboBox Style="{StaticResource FluentComboBox}" x:Name="VerboseLogBox" Grid.Column="1" FontSize="12"
-                                  SelectedIndex="0" SelectionChanged="VerboseLog_SelectionChanged">
-                            <ComboBoxItem Content="关闭 (默认)"/>
-                            <ComboBoxItem Content="开启 (-v / 详细)"/>
-                        </ComboBox>
-                        <ui:Button Grid.Column="2" Icon="{ui:SymbolIcon Symbol=QuestionCircle24}" FontSize="11" Width="24" Height="22"
-                                Padding="0" Margin="4,0,0,0" Click="InfoButton_Click"
-                                Tag="verbose_log"/>
-                    </Grid>
-
-                    <!-- Speculative Decoding Type -->
-                    <Grid Grid.Row="5" Grid.Column="0" Margin="0,0,6,6">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="110"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="30"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="投机解码" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                        <ComboBox Style="{StaticResource FluentComboBox}" x:Name="SpecTypeBox" Grid.Column="1" FontSize="12"
-                                  SelectedIndex="0" SelectionChanged="SpecType_SelectionChanged">
-                            <ComboBoxItem Content="默认 (不传)"/>
-                            <ComboBoxItem Content="draft-mtp"/>
-                            <ComboBoxItem Content="draft-simple"/>
-                            <ComboBoxItem Content="draft-eagle3"/>
-                            <ComboBoxItem Content="ngram-mod"/>
-                            <ComboBoxItem Content="none"/>
-                        </ComboBox>
-                        <ui:Button Grid.Column="2" Icon="{ui:SymbolIcon Symbol=QuestionCircle24}" FontSize="11" Width="24" Height="22"
-                                Padding="0" Margin="4,0,0,0" Click="InfoButton_Click"
-                                Tag="spec_type"/>
-                    </Grid>
-
-                    <!-- Reasoning Budget -->
-                    <Grid Grid.Row="5" Grid.Column="1" Margin="6,0,0,6">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="110"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="30"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="思考上限 (tokens)" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                        <ComboBox Style="{StaticResource FluentComboBox}" x:Name="ReasoningBudgetBox" Grid.Column="1" FontSize="12"
-                                  IsEditable="True" Text="默认" SelectionChanged="ReasoningBudget_SelectionChanged"
-                                  LostFocus="ReasoningBudget_LostFocus">
-                            <ComboBoxItem Content="默认"/>
-                            <ComboBoxItem Content="-1 (无限制)"/>
-                            <ComboBoxItem Content="0 (零预算)"/>
-                            <ComboBoxItem Content="1024"/>
-                            <ComboBoxItem Content="2048"/>
-                            <ComboBoxItem Content="4096"/>
-                            <ComboBoxItem Content="8192"/>
-                        </ComboBox>
-                        <ui:Button Grid.Column="2" Icon="{ui:SymbolIcon Symbol=QuestionCircle24}" FontSize="11" Width="24" Height="22"
-                                Padding="0" Margin="4,0,0,0" Click="InfoButton_Click"
-                                Tag="reasoning_budget"/>
-                    </Grid>
-
-                    <!-- Speculative Draft Model -->
-                    <Grid Grid.Row="6" Grid.ColumnSpan="2" Margin="0,0,0,6">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="110"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="30"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="草稿模型 (-md)" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                        <ui:TextBox x:Name="DraftModelBox" Grid.Column="1" FontSize="12"
-                                 VerticalContentAlignment="Center"
-                                 ToolTip="投机解码草稿模型路径；与上方投机解码选项配合使用"
-                                 TextChanged="DraftModel_TextChanged" LostFocus="DraftModel_LostFocus"/>
-                        <ui:Button Grid.Column="2" Content="浏览..." FontSize="11"
-                                Padding="8,0" Margin="6,0,0,0" Click="DraftModelBrowse_Click"/>
-                        <ui:Button Grid.Column="3" Icon="{ui:SymbolIcon Symbol=QuestionCircle24}" FontSize="11" Width="24" Height="22"
-                                Padding="0" Margin="4,0,0,0" Click="InfoButton_Click"
-                                Tag="draft_model"/>
-                    </Grid>
-
-                    <!-- Built-in MTP (auto-detected from GGUF metadata) -->
-                    <Border x:Name="MtpSection" Grid.Row="8" Grid.ColumnSpan="2" BorderThickness="1,0,0,0"
-                            BorderBrush="{DynamicResource TextFillColorSecondaryBrush}" Padding="8,6,0,4" Margin="0,4,0,0"
-                            Visibility="Collapsed"
-                            ToolTip="该模型的 GGUF 内置 MTP（多 Token 预测）头；开启后使用 draft-mtp 投机解码，无需单独草稿文件">
-                        <ui:ToggleSwitch x:Name="MtpCheckbox" Content="启用内置 MTP 投机解码 (--spec-type draft-mtp)"
-                                  FontSize="11" VerticalAlignment="Center"
-                                  Checked="MtpCheckbox_Changed" Unchecked="MtpCheckbox_Changed"/>
-                    </Border>
-
-                    <!-- MoE Section (auto-hide for dense models) -->
-                    <Border x:Name="MoeSection" Grid.Row="7" Grid.ColumnSpan="2" BorderThickness="1,0,0,0"
-                            BorderBrush="{DynamicResource TextFillColorSecondaryBrush}" Padding="8,6,0,4" Margin="0,4,0,0"
-                            ToolTip="以下设置仅对MoE（混合专家）模型生效">
-                        <Grid>
+                    <!-- llama.cpp: hand-written panel -->
+                    <ui:DynamicScrollViewer x:Name="LlamaCppParamsScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                        <Grid Margin="0,0,10,0">
                             <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="Auto"/>
                             </Grid.RowDefinitions>
@@ -454,133 +225,375 @@
                                 <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
 
-                            <!-- MoE CPU Offload -->
+                            <!-- Context Length -->
                             <Grid Grid.Row="0" Grid.Column="0" Margin="0,0,6,6">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="110"/>
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="30"/>
                                 </Grid.ColumnDefinitions>
-                                <TextBlock Grid.Column="0" Text="MoE卸载" ToolTip="--n-cpu-moe：强制在 CPU 上计算的专家层数" FontSize="11" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                <ComboBox Style="{StaticResource FluentComboBox}" x:Name="MoeOffloadBox" Grid.Column="1" FontSize="12"
-                                          IsEditable="True" Text="默认" SelectionChanged="MoeOffload_SelectionChanged"
-                                          LostFocus="MoeOffload_LostFocus">
-                            <ComboBoxItem Content="默认"/>
-                            <ComboBoxItem Content="0 (不强制)"/>
-                            <ComboBoxItem Content="1"/>
-                            <ComboBoxItem Content="2"/>
-                            <ComboBoxItem Content="4"/>
-                            <ComboBoxItem Content="8"/>
-                            <ComboBoxItem Content="16"/>
-                            <ComboBoxItem Content="32"/>
-                        </ComboBox>
+                                <TextBlock Grid.Column="0" Text="上下文长度 (-c)" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                <ui:TextBox x:Name="ContextLengthBox" Grid.Column="1" Text="8192" FontSize="12"
+                                         VerticalContentAlignment="Center" TextChanged="ContextLength_TextChanged"/>
                                 <ui:Button Grid.Column="2" Icon="{ui:SymbolIcon Symbol=QuestionCircle24}" FontSize="11" Width="24" Height="22"
-                                        Padding="0" Margin="4,0,0,0" Click="InfoButton_Click" Tag="n_cpu_moe"/>
+                                        Padding="0" Margin="4,0,0,0" Click="InfoButton_Click" Tag="context_length"/>
                             </Grid>
 
-                            <!-- CPU MoE Toggle -->
+                            <!-- K Quantization -->
                             <Grid Grid.Row="0" Grid.Column="1" Margin="6,0,0,6">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="110"/>
                                     <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="30"/>
                                 </Grid.ColumnDefinitions>
-                                <ui:ToggleSwitch x:Name="CpuMoeCheckbox" Grid.Column="0" Content="CPU MoE (--cpu-moe)"
-                                          FontSize="11" VerticalAlignment="Center"
-                                          ToolTip="强制MoE混合专家模型在CPU上计算专家层（而非GPU）"
-                                          Checked="CpuMoeCheckbox_Changed" Unchecked="CpuMoeCheckbox_Changed"/>
+                                <TextBlock Grid.Column="0" Text="K 量化 (-ctk)" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                <ComboBox Style="{StaticResource FluentComboBox}" x:Name="ContextQuantKBox" Grid.Column="1" FontSize="12"
+                                          SelectedIndex="0" SelectionChanged="ContextQuant_SelectionChanged">
+                                    <ComboBoxItem Content="默认 (未量化/f16)"/>
+                                    <ComboBoxItem Content="q8_0 (8-bit)"/>
+                                    <ComboBoxItem Content="q4_0 (4-bit)"/>
+                                    <ComboBoxItem Content="q4_1 (4-bit)"/>
+                                    <ComboBoxItem Content="f16"/>
+                                </ComboBox>
+                                <ui:Button Grid.Column="2" Icon="{ui:SymbolIcon Symbol=QuestionCircle24}" FontSize="11" Width="24" Height="22"
+                                        Padding="0" Margin="4,0,0,0" Click="InfoButton_Click" Tag="context_quant"/>
                             </Grid>
+
+                            <!-- Offload Layers -->
+                            <Grid Grid.Row="1" Grid.Column="0" Margin="0,0,6,6">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="110"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="30"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="卸载层数 (-ngl)" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                <ComboBox Style="{StaticResource FluentComboBox}" x:Name="OffloadLayersBox" Grid.Column="1" FontSize="12"
+                                          IsEditable="True" Text="all" SelectionChanged="OffloadLayers_SelectionChanged"
+                                          LostFocus="OffloadLayers_LostFocus">
+                                    <ComboBoxItem Content="all"/>
+                                    <ComboBoxItem Content="auto"/>
+                                    <ComboBoxItem Content="0"/>
+                                </ComboBox>
+                                <ui:Button Grid.Column="2" Icon="{ui:SymbolIcon Symbol=QuestionCircle24}" FontSize="11" Width="24" Height="22"
+                                        Padding="0" Margin="4,0,0,0" Click="InfoButton_Click" Tag="offload_layers"/>
+                            </Grid>
+
+                            <!-- V Quantization -->
+                            <Grid Grid.Row="1" Grid.Column="1" Margin="6,0,0,6">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="110"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="30"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="V 量化 (-ctv)" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                <ComboBox Style="{StaticResource FluentComboBox}" x:Name="ContextQuantVBox" Grid.Column="1" FontSize="12"
+                                          SelectedIndex="0" SelectionChanged="ContextQuant_SelectionChanged">
+                                    <ComboBoxItem Content="默认 (未量化/f16)"/>
+                                    <ComboBoxItem Content="q8_0 (8-bit)"/>
+                                    <ComboBoxItem Content="q4_0 (4-bit)"/>
+                                    <ComboBoxItem Content="q4_1 (4-bit)"/>
+                                    <ComboBoxItem Content="f16"/>
+                                </ComboBox>
+                                <ui:Button Grid.Column="2" Icon="{ui:SymbolIcon Symbol=QuestionCircle24}" FontSize="11" Width="24" Height="22"
+                                        Padding="0" Margin="4,0,0,0" Click="InfoButton_Click" Tag="context_quant_v"/>
+                            </Grid>
+
+                            <!-- Reasoning -->
+                            <Grid Grid.Row="2" Grid.Column="0" Margin="0,0,6,6">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="110"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="30"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="思考模式" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                <ComboBox Style="{StaticResource FluentComboBox}" x:Name="ReasoningBox" Grid.Column="1" FontSize="12"
+                                          SelectedIndex="0" SelectionChanged="Reasoning_SelectionChanged">
+                                    <ComboBoxItem Content="默认"/>
+                                    <ComboBoxItem Content="off (关闭)"/>
+                                    <ComboBoxItem Content="on (开启)"/>
+                                    <ComboBoxItem Content="auto"/>
+                                </ComboBox>
+                                <ui:Button Grid.Column="2" Icon="{ui:SymbolIcon Symbol=QuestionCircle24}" FontSize="11" Width="24" Height="22"
+                                        Padding="0" Margin="4,0,0,0" Click="InfoButton_Click" Tag="reasoning"/>
+                            </Grid>
+
+                            <!-- CPU Cores -->
+                            <Grid Grid.Row="2" Grid.Column="1" Margin="6,0,0,6">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="110"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="30"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="CPU 核心数 (-t)" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                <ComboBox Style="{StaticResource FluentComboBox}" x:Name="CpuCoresBox" Grid.Column="1" FontSize="12"
+                                          SelectionChanged="CpuCores_SelectionChanged"/>
+                                <ui:Button Grid.Column="2" Icon="{ui:SymbolIcon Symbol=QuestionCircle24}" FontSize="11" Width="24" Height="22"
+                                        Padding="0" Margin="4,0,0,0" Click="InfoButton_Click" Tag="cpu_cores"/>
+                            </Grid>
+
+                            <!-- Batch Size -->
+                            <Grid Grid.Row="3" Grid.Column="0" Margin="0,0,6,6">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="110"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="30"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="批处理大小 (-b)" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                <ComboBox Style="{StaticResource FluentComboBox}" x:Name="BatchSizeBox" Grid.Column="1" FontSize="12"
+                                          IsEditable="True" Text="2048" SelectionChanged="BatchSize_SelectionChanged"
+                                          LostFocus="BatchSize_LostFocus">
+                                    <ComboBoxItem Content="2048"/>
+                                    <ComboBoxItem Content="1024"/>
+                                    <ComboBoxItem Content="512"/>
+                                </ComboBox>
+                                <ui:Button Grid.Column="2" Icon="{ui:SymbolIcon Symbol=QuestionCircle24}" FontSize="11" Width="24" Height="22"
+                                        Padding="0" Margin="4,0,0,0" Click="InfoButton_Click" Tag="batch_size"/>
+                            </Grid>
+
+                            <!-- UBatch Size -->
+                            <Grid Grid.Row="3" Grid.Column="1" Margin="6,0,0,6">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="110"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="30"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="物理批大小 (-ub)" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                <ComboBox Style="{StaticResource FluentComboBox}" x:Name="UBatchSizeBox" Grid.Column="1" FontSize="12"
+                                          IsEditable="True" Text="512" SelectionChanged="UBatchSize_SelectionChanged"
+                                          LostFocus="UBatchSize_LostFocus">
+                                    <ComboBoxItem Content="512"/>
+                                    <ComboBoxItem Content="256"/>
+                                    <ComboBoxItem Content="128"/>
+                                </ComboBox>
+                                <ui:Button Grid.Column="2" Icon="{ui:SymbolIcon Symbol=QuestionCircle24}" FontSize="11" Width="24" Height="22"
+                                        Padding="0" Margin="4,0,0,0" Click="InfoButton_Click" Tag="ubatch_size"/>
+                            </Grid>
+
+                            <!-- Verbose Logging -->
+                            <Grid Grid.Row="4" Grid.Column="0" Margin="0,0,6,6">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="110"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="30"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="详细调用日志" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                <ComboBox Style="{StaticResource FluentComboBox}" x:Name="VerboseLogBox" Grid.Column="1" FontSize="12"
+                                          SelectedIndex="0" SelectionChanged="VerboseLog_SelectionChanged">
+                                    <ComboBoxItem Content="关闭 (默认)"/>
+                                    <ComboBoxItem Content="开启 (-v / 详细)"/>
+                                </ComboBox>
+                                <ui:Button Grid.Column="2" Icon="{ui:SymbolIcon Symbol=QuestionCircle24}" FontSize="11" Width="24" Height="22"
+                                        Padding="0" Margin="4,0,0,0" Click="InfoButton_Click" Tag="verbose_log"/>
+                            </Grid>
+
+                            <!-- Flash Attention -->
+                            <Grid Grid.Row="4" Grid.Column="1" Margin="6,0,0,6">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="110"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="30"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Flash Attention" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                <ComboBox Style="{StaticResource FluentComboBox}" x:Name="FlashAttentionBox" Grid.Column="1" FontSize="12"
+                                          SelectedIndex="0" SelectionChanged="FlashAttention_SelectionChanged">
+                                    <ComboBoxItem Content="默认"/>
+                                    <ComboBoxItem Content="off (关闭)"/>
+                                    <ComboBoxItem Content="on (开启)"/>
+                                    <ComboBoxItem Content="auto"/>
+                                </ComboBox>
+                                <ui:Button Grid.Column="2" Icon="{ui:SymbolIcon Symbol=QuestionCircle24}" FontSize="11" Width="24" Height="22"
+                                        Padding="0" Margin="4,0,0,0" Click="InfoButton_Click" Tag="flash_attention"/>
+                            </Grid>
+
+                            <!-- Speculative Decoding Type -->
+                            <Grid Grid.Row="5" Grid.Column="0" Margin="0,0,6,6">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="110"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="30"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="投机解码" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                <ComboBox Style="{StaticResource FluentComboBox}" x:Name="SpecTypeBox" Grid.Column="1" FontSize="12"
+                                          SelectedIndex="0" SelectionChanged="SpecType_SelectionChanged">
+                                    <ComboBoxItem Content="默认 (不传)"/>
+                                    <ComboBoxItem Content="draft-mtp"/>
+                                    <ComboBoxItem Content="draft-simple"/>
+                                    <ComboBoxItem Content="draft-eagle3"/>
+                                    <ComboBoxItem Content="ngram-mod"/>
+                                    <ComboBoxItem Content="none"/>
+                                </ComboBox>
+                                <ui:Button Grid.Column="2" Icon="{ui:SymbolIcon Symbol=QuestionCircle24}" FontSize="11" Width="24" Height="22"
+                                        Padding="0" Margin="4,0,0,0" Click="InfoButton_Click" Tag="spec_type"/>
+                            </Grid>
+
+                            <!-- Reasoning Budget -->
+                            <Grid Grid.Row="5" Grid.Column="1" Margin="6,0,0,6">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="110"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="30"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="思考上限 (tokens)" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                <ComboBox Style="{StaticResource FluentComboBox}" x:Name="ReasoningBudgetBox" Grid.Column="1" FontSize="12"
+                                          IsEditable="True" Text="默认" SelectionChanged="ReasoningBudget_SelectionChanged"
+                                          LostFocus="ReasoningBudget_LostFocus">
+                                    <ComboBoxItem Content="默认"/>
+                                    <ComboBoxItem Content="-1 (无限制)"/>
+                                    <ComboBoxItem Content="0 (零预算)"/>
+                                    <ComboBoxItem Content="1024"/>
+                                    <ComboBoxItem Content="2048"/>
+                                    <ComboBoxItem Content="4096"/>
+                                    <ComboBoxItem Content="8192"/>
+                                </ComboBox>
+                                <ui:Button Grid.Column="2" Icon="{ui:SymbolIcon Symbol=QuestionCircle24}" FontSize="11" Width="24" Height="22"
+                                        Padding="0" Margin="4,0,0,0" Click="InfoButton_Click" Tag="reasoning_budget"/>
+                            </Grid>
+
+                            <!-- Speculative Draft Model -->
+                            <Grid Grid.Row="6" Grid.ColumnSpan="2" Margin="0,0,0,6">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="110"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="30"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="草稿模型 (-md)" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                <ui:TextBox x:Name="DraftModelBox" Grid.Column="1" FontSize="12"
+                                         VerticalContentAlignment="Center"
+                                         ToolTip="投机解码草稿模型路径；与上方投机解码选项配合使用"
+                                         TextChanged="DraftModel_TextChanged" LostFocus="DraftModel_LostFocus"/>
+                                <ui:Button Grid.Column="2" Content="浏览..." FontSize="11"
+                                        Padding="8,0" Margin="6,0,0,0" Click="DraftModelBrowse_Click"/>
+                                <ui:Button Grid.Column="3" Icon="{ui:SymbolIcon Symbol=QuestionCircle24}" FontSize="11" Width="24" Height="22"
+                                        Padding="0" Margin="4,0,0,0" Click="InfoButton_Click" Tag="draft_model"/>
+                            </Grid>
+
+                            <!-- MoE Section (auto-hide for dense models) -->
+                            <Border x:Name="MoeSection" Grid.Row="7" Grid.ColumnSpan="2" BorderThickness="1,0,0,0"
+                                    BorderBrush="{DynamicResource TextFillColorSecondaryBrush}" Padding="8,6,0,4" Margin="0,4,0,0"
+                                    ToolTip="以下设置仅对MoE（混合专家）模型生效">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+
+                                    <Grid Grid.Row="0" Grid.Column="0" Margin="0,0,6,6">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="110"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="30"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="MoE卸载" ToolTip="--n-cpu-moe：强制在 CPU 上计算的专家层数" FontSize="11" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                        <ComboBox Style="{StaticResource FluentComboBox}" x:Name="MoeOffloadBox" Grid.Column="1" FontSize="12"
+                                                  IsEditable="True" Text="默认" SelectionChanged="MoeOffload_SelectionChanged"
+                                                  LostFocus="MoeOffload_LostFocus">
+                                            <ComboBoxItem Content="默认"/>
+                                            <ComboBoxItem Content="0 (不强制)"/>
+                                            <ComboBoxItem Content="1"/>
+                                            <ComboBoxItem Content="2"/>
+                                            <ComboBoxItem Content="4"/>
+                                            <ComboBoxItem Content="8"/>
+                                            <ComboBoxItem Content="16"/>
+                                            <ComboBoxItem Content="32"/>
+                                        </ComboBox>
+                                        <ui:Button Grid.Column="2" Icon="{ui:SymbolIcon Symbol=QuestionCircle24}" FontSize="11" Width="24" Height="22"
+                                                Padding="0" Margin="4,0,0,0" Click="InfoButton_Click" Tag="n_cpu_moe"/>
+                                    </Grid>
+
+                                    <Grid Grid.Row="0" Grid.Column="1" Margin="6,0,0,6">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="110"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <ui:ToggleSwitch x:Name="CpuMoeCheckbox" Grid.Column="0" Content="CPU MoE (--cpu-moe)"
+                                                  FontSize="11" VerticalAlignment="Center"
+                                                  ToolTip="强制MoE混合专家模型在CPU上计算专家层（而非GPU）"
+                                                  Checked="CpuMoeCheckbox_Changed" Unchecked="CpuMoeCheckbox_Changed"/>
+                                    </Grid>
+                                </Grid>
+                            </Border>
+
+                            <!-- Built-in MTP (auto-detected from GGUF metadata) -->
+                            <Border x:Name="MtpSection" Grid.Row="8" Grid.ColumnSpan="2" BorderThickness="1,0,0,0"
+                                    BorderBrush="{DynamicResource TextFillColorSecondaryBrush}" Padding="8,6,0,4" Margin="0,4,0,0"
+                                    Visibility="Collapsed"
+                                    ToolTip="该模型的 GGUF 内置 MTP（多 Token 预测）头；开启后使用 draft-mtp 投机解码，无需单独草稿文件">
+                                <ui:ToggleSwitch x:Name="MtpCheckbox" Content="启用内置 MTP 投机解码 (--spec-type draft-mtp)"
+                                          FontSize="11" VerticalAlignment="Center"
+                                          Checked="MtpCheckbox_Changed" Unchecked="MtpCheckbox_Changed"/>
+                            </Border>
                         </Grid>
-                    </Border>
-                </Grid>
-            </TabItem>
+                    </ui:DynamicScrollViewer>
 
-            <!-- Advanced Options Tab -->
-            <TabItem ToolTip="高级选项">
-                <TabItem.Header>
-                    <ui:SymbolIcon Symbol="CodeBlock24" FontSize="20"/>
-                </TabItem.Header>
-                <Grid Margin="12,8">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/>
-                        <RowDefinition Height="Auto"/>
-                    </Grid.RowDefinitions>
-
-                    <TextBlock Grid.Row="0" Text="自定义启动参数 (llama-server 命令行):" Margin="0,0,0,6" FontSize="12" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-
-                    <ui:TextBox x:Name="ArgsTextBox" Grid.Row="1"
-                             AcceptsReturn="True" TextWrapping="Wrap"
-                             VerticalScrollBarVisibility="Auto" MinHeight="100"
-                             FontFamily="Consolas" FontSize="11"
-                             VerticalContentAlignment="Top"
-                             TextChanged="ArgsTextBox_TextChanged"/>
-
-                    <Grid Grid.Row="2" Margin="0,6,0,0">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <ui:Button Grid.Column="0" Content="重新生成预设参数" Click="RegenerateButton_Click"
-                                HorizontalAlignment="Left" Padding="12,5" FontSize="11"/>
-                        <TextBlock Grid.Column="1" Text="端口:" Margin="8,0,6,0" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                        <ui:TextBox x:Name="PortTextBox" Grid.Column="2" Width="60" FontSize="12"
-                                 VerticalContentAlignment="Center" Text="8080" LostFocus="PortTextBox_LostFocus"/>
-                    </Grid>
-                </Grid>
-            </TabItem>
-
-            <!-- Engine Tab: backend-agnostic; parameters are generated from the backend schema. -->
-            <TabItem ToolTip="引擎（插件）">
-                <TabItem.Header>
-                    <ui:SymbolIcon Symbol="PlugConnected24" FontSize="20"/>
-                </TabItem.Header>
-                <Grid Margin="12,8">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/>
-                        <RowDefinition Height="Auto"/>
-                    </Grid.RowDefinitions>
-
-                    <Grid Grid.Row="0" Margin="0,0,0,8">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="引擎:" VerticalAlignment="Center" FontSize="12" Margin="0,0,8,0" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                        <ComboBox Grid.Column="1" x:Name="EngineBackendBox" Style="{StaticResource FluentComboBox}" FontSize="12"
-                                  SelectionChanged="EngineBackendBox_SelectionChanged"/>
-                        <ui:Button Grid.Column="2" x:Name="EngineBootstrapButton" Content="初始化环境" Click="EngineBootstrapButton_Click" Margin="6,0,0,0" Padding="8,4" FontSize="11" ToolTip="探测并安装该引擎所需的运行时（如 Python 依赖、引擎二进制）。"/>
-                        <ui:Button Grid.Column="3" x:Name="EngineRefreshButton" Content="刷新" Click="EngineRefreshButton_Click" Margin="6,0,0,0" Padding="8,4" FontSize="11"/>
-                    </Grid>
-
-                    <ui:DynamicScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <!-- Other engines: parameters generated from the backend schema -->
+                    <ui:DynamicScrollViewer x:Name="EngineParamsScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Visibility="Collapsed">
                         <StackPanel Margin="0,0,10,0">
                             <TextBlock x:Name="EngineStatusText" Text="正在探测引擎…" FontSize="11" TextWrapping="Wrap"
                                        Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,0,0,8"/>
-
-                            <TextBlock Text="模型" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,0,6"/>
-                            <DockPanel Margin="0,0,0,4">
-                                <ui:Button DockPanel.Dock="Right" Content="浏览…" Click="EngineModelButton_Click" Margin="6,0,0,0" Padding="8,3"/>
-                                <ui:TextBox x:Name="EngineModelTextBox" FontSize="11"/>
-                            </DockPanel>
                             <TextBlock x:Name="EngineCompatText" Text="" FontSize="11" TextWrapping="Wrap"
-                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,4,0,8"/>
-
-                            <TextBlock Text="参数" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,10,0,6"/>
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,0,0,10"/>
                             <StackPanel x:Name="EngineParametersPanel"/>
+                        </StackPanel>
+                    </ui:DynamicScrollViewer>
+                </Grid>
+            </TabItem>
 
-                            <TextBlock Text="接入地址（供 pi / Claude Code / Codex 使用）" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,14,0,6"/>
-                            <DockPanel Margin="0,0,0,6">
-                                <ui:Button DockPanel.Dock="Right" x:Name="EngineCopyUrlButton" Content="复制" Click="EngineCopyUrlButton_Click" Margin="6,0,0,0" Padding="8,3" FontSize="11"/>
+            <!-- ===================== 高级 ===================== -->
+            <TabItem ToolTip="高级">
+                <TabItem.Header>
+                    <ui:SymbolIcon Symbol="CodeBlock24" FontSize="20"/>
+                </TabItem.Header>
+                <ui:DynamicScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="12,8">
+                    <StackPanel Margin="0,0,10,0">
+                        <!-- llama.cpp: raw args and port -->
+                        <StackPanel x:Name="LlamaCppAdvancedPanel">
+                            <TextBlock Text="自定义启动参数 (llama-server 命令行):" Margin="0,0,0,6" FontSize="12" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                            <ui:TextBox x:Name="ArgsTextBox" AcceptsReturn="True" TextWrapping="Wrap"
+                                     VerticalScrollBarVisibility="Auto" MinHeight="120" MaxHeight="260"
+                                     FontFamily="Consolas" FontSize="11"
+                                     VerticalContentAlignment="Top"
+                                     TextChanged="ArgsTextBox_TextChanged"/>
+                            <Grid Margin="0,6,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <ui:Button Grid.Column="0" Content="重新生成预设参数" Click="RegenerateButton_Click"
+                                        HorizontalAlignment="Left" Padding="12,5" FontSize="11"/>
+                                <TextBlock Grid.Column="1" Text="端口:" Margin="8,0,6,0" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                <ui:TextBox x:Name="PortTextBox" Grid.Column="2" Width="60" FontSize="12"
+                                         VerticalContentAlignment="Center" Text="8080" LostFocus="PortTextBox_LostFocus"/>
+                            </Grid>
+                            <ui:ToggleSwitch x:Name="AutoOpenBrowserCheckBox" Content="启动成功后自动打开页面 (多模型切换调试建议保持关闭)"
+                                      FontSize="11" Margin="0,10,0,0" VerticalAlignment="Center"
+                                      Checked="AutoOpenBrowserCheckBox_Changed" Unchecked="AutoOpenBrowserCheckBox_Changed"/>
+                        </StackPanel>
+
+                        <!-- Other engines: bootstrap + endpoint + output -->
+                        <StackPanel x:Name="EngineAdvancedPanel" Visibility="Collapsed">
+                            <TextBlock Text="引擎环境" FontSize="13" FontWeight="SemiBold" Margin="0,0,0,6" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                            <DockPanel Margin="0,0,0,10">
+                                <ui:Button DockPanel.Dock="Left" x:Name="EngineBootstrapButton" Content="初始化环境"
+                                           Click="EngineBootstrapButton_Click" Padding="12,5" FontSize="11"
+                                           ToolTip="探测并安装该引擎所需的运行时（如 Python 依赖、引擎二进制）。"/>
+                                <TextBlock x:Name="EngineRunStatusText" Text="" FontSize="11" TextWrapping="Wrap"
+                                           Margin="10,0,0,0" VerticalAlignment="Center"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                            </DockPanel>
+                            <TextBlock Text="接入地址（供 pi / Claude Code / Codex 使用）" FontSize="12" FontWeight="SemiBold" Margin="0,4,0,6" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                            <DockPanel Margin="0,0,0,10">
+                                <ui:Button DockPanel.Dock="Right" x:Name="EngineCopyUrlButton" Content="复制"
+                                           Click="EngineCopyUrlButton_Click" Margin="6,0,0,0" Padding="8,3" FontSize="11"/>
                                 <ui:TextBox x:Name="EngineBaseUrlTextBox" IsReadOnly="True" FontSize="11"/>
                             </DockPanel>
-
-                            <TextBlock x:Name="EngineRunStatusText" Text="" FontSize="11" TextWrapping="Wrap"
-                                       Foreground="{DynamicResource SystemFillColorSuccessBrush}" Margin="0,10,0,4"/>
-                            <Border CornerRadius="6" Padding="8" MinHeight="120" MaxHeight="260"
+                            <TextBlock Text="运行输出" FontSize="12" FontWeight="SemiBold" Margin="0,4,0,6" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                            <Border CornerRadius="6" Padding="8" MinHeight="140" MaxHeight="320"
                                     Background="{DynamicResource CardBackgroundFillColorSecondaryBrush}"
                                     BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1">
                                 <ui:TextBox x:Name="EngineOutputBox" IsReadOnly="True" Background="Transparent" BorderThickness="0"
@@ -588,22 +601,50 @@
                                             VerticalScrollBarVisibility="Auto" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
                             </Border>
                         </StackPanel>
-                    </ui:DynamicScrollViewer>
 
-                    <Grid Grid.Row="2" Margin="0,8,0,0" HorizontalAlignment="Left">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <ui:Button Grid.Column="0" x:Name="EngineStartButton" Appearance="Primary" Content="启动服务" Icon="{ui:SymbolIcon Symbol=Play24}" Click="EngineStartButton_Click"
-                                   Margin="0,0,8,0" Padding="16,8" FontSize="13" FontWeight="SemiBold"/>
-                        <ui:Button Grid.Column="1" x:Name="EngineStopButton" Content="停止" Icon="{ui:SymbolIcon Symbol=Stop24}" Click="EngineStopButton_Click"
-                                   Padding="16,8" FontSize="13" IsEnabled="False"/>
-                    </Grid>
-                </Grid>
+                        <!-- Shared: autostart -->
+                        <Border BorderThickness="1,0,0,0" BorderBrush="{DynamicResource TextFillColorSecondaryBrush}"
+                                Padding="0,10,0,0" Margin="0,16,0,0">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="开机自启:" FontSize="12" VerticalAlignment="Center"
+                                           Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                <TextBlock Grid.Column="1" x:Name="AutostartStatusText" Text="检测中..."
+                                           FontSize="11" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                           Margin="8,0,0,0" TextTrimming="CharacterEllipsis"/>
+                                <ui:Button Grid.Column="2" x:Name="AutostartButton" Click="AutostartButton_Click"
+                                        Padding="12,4" FontSize="11"/>
+                            </Grid>
+                        </Border>
+
+                        <!-- llama.cpp only: embedding service -->
+                        <Border x:Name="EmbeddingPanel" BorderThickness="1,0,0,0" BorderBrush="{DynamicResource TextFillColorSecondaryBrush}"
+                                Padding="0,10,0,0" Margin="0,12,0,0">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <Ellipse Grid.Column="0" x:Name="EmbeddingStatusDot" Width="10" Height="10"
+                                         Fill="{DynamicResource SystemFillColorCriticalBrush}" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                <TextBlock Grid.Column="1" x:Name="EmbeddingStatusText" Text="嵌入服务: 检测中..."
+                                           FontSize="11" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                           TextTrimming="CharacterEllipsis"/>
+                                <ui:Button Grid.Column="2" x:Name="EmbeddingToggleButton"
+                                        Content="启动" Click="EmbeddingToggleButton_Click"
+                                        Padding="12,4" FontSize="11"/>
+                            </Grid>
+                        </Border>
+                    </StackPanel>
+                </ui:DynamicScrollViewer>
             </TabItem>
 
-            <!-- Log Tab -->
+            <!-- ===================== 日志 ===================== -->
             <TabItem ToolTip="日志">
                 <TabItem.Header>
                     <ui:SymbolIcon Symbol="Notebook24" FontSize="20"/>
@@ -644,117 +685,9 @@
 
                     <TextBlock Grid.Row="2" Margin="0,6,0,0" FontSize="10"
                                Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                               Text="显示 llama-manager 与 llama-server 的最近日志（自动刷新，滚动到底部）"/>
+                               Text="显示 llama-manager 与所选引擎的最近日志（自动刷新，滚动到底部）"/>
                 </Grid>
             </TabItem>
         </TabControl>
-
-        <!-- Action Buttons & Status -->
-        <ui:Card Grid.Row="2" Padding="14,10" Margin="0,0,0,8" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" VerticalAlignment="Stretch">
-            <StackPanel>
-                <TextBlock Text="服务控制与运行状态" FontSize="13" FontWeight="SemiBold" Margin="0,0,0,10"/>
-                <Grid>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                </Grid.RowDefinitions>
-
-                <!-- Status Card inside Action Area -->
-                <Border Grid.Row="0" Background="{DynamicResource CardBackgroundFillColorSecondaryBrush}"
-                        BorderBrush="{DynamicResource ControlFillColorSecondaryBrush}" BorderThickness="1"
-                        CornerRadius="4" Padding="10,6" Margin="0,0,0,8">
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <Ellipse x:Name="ActionStatusDot" Grid.Column="0" Width="10" Height="10"
-                                 Fill="{DynamicResource SystemFillColorCriticalBrush}" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                        <TextBlock Grid.Column="1" x:Name="TabActionStatusText"
-                                   Text="服务已停止，点击【启动服务】开始运行"
-                                   FontSize="12" VerticalAlignment="Center" FontWeight="Medium"
-                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
-                        <TextBlock Grid.Column="2" x:Name="TabActionEndpointText"
-                                   Text="未监听" FontSize="11" Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                                   FontWeight="SemiBold" VerticalAlignment="Center"/>
-                    </Grid>
-                </Border>
-
-                <!-- Action Buttons -->
-                <Grid Grid.Row="1">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="*"/>
-                    </Grid.ColumnDefinitions>
-
-                    <ui:Button Grid.Column="0" x:Name="StartButton" Appearance="Primary" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Icon="{ui:SymbolIcon Symbol=Play24}"
-                            Content="启动服务" Click="StartButton_Click"
-                            Margin="0,0,4,0" Padding="10,9" FontSize="13" FontWeight="SemiBold"/>
-                    <ui:Button Grid.Column="1" x:Name="StopButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Icon="{ui:SymbolIcon Symbol=Stop24}"
-                            Content="停止服务" Click="StopButton_Click"
-                            Margin="3,0,3,0" Padding="10,9" FontSize="13" IsEnabled="False"/>
-                    <ui:Button Grid.Column="2" x:Name="OpenButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Icon="{ui:SymbolIcon Symbol=Globe24}"
-                            Content="Web UI" Click="OpenButton_Click"
-                            Margin="3,0,3,0" Padding="10,9" FontSize="13" IsEnabled="False"/>
-                    <ui:Button Grid.Column="3" x:Name="SpeedTestButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Icon="{ui:SymbolIcon Symbol=Gauge24}"
-                            Content="测速" Click="SpeedTestButton_Click"
-                            Margin="4,0,0,0" Padding="10,9" FontSize="13" IsEnabled="False"
-                            ToolTip="实测推理速度：首Token延迟(TTFT) 与解码速度(tok/s)"/>
-                </Grid>
-
-                <!-- Options Row: Auto-open Checkbox & API Status -->
-                <Grid Grid.Row="2" Margin="0,6,0,0">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
-                    <ui:ToggleSwitch Grid.Column="0" x:Name="AutoOpenBrowserCheckBox"
-                              Content="启动成功后自动打开 Web UI 前端 (多模型切换调试建议保持关闭)"
-                              FontSize="11" VerticalAlignment="Center"
-                              Checked="AutoOpenBrowserCheckBox_Changed" Unchecked="AutoOpenBrowserCheckBox_Changed"/>
-                    <TextBlock Grid.Column="1" x:Name="TabApiStatusBadge"
-                               Text="API: 离线" FontSize="11"
-                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" VerticalAlignment="Center"/>
-                </Grid>
-                </Grid>
-            </StackPanel>
-        </ui:Card>
-
-        <!-- Autostart + embedding service -->
-        <ui:Card Grid.Row="3" Padding="14,9" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" VerticalAlignment="Stretch">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="32"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-                <TextBlock Grid.Column="0" Text="开机自启:" FontSize="11" VerticalAlignment="Center"
-                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
-                <TextBlock Grid.Column="1" x:Name="AutostartStatusText" Text="检测中..."
-                           FontSize="11" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                           Margin="4,0,0,0" TextTrimming="CharacterEllipsis"/>
-                <ui:Button Grid.Column="2" x:Name="AutostartButton" Click="AutostartButton_Click"
-                        Padding="12,4" FontSize="11"/>
-                <Ellipse Grid.Column="4" x:Name="EmbeddingStatusDot" Width="10" Height="10"
-                         Fill="{DynamicResource SystemFillColorCriticalBrush}" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                <TextBlock Grid.Column="5" x:Name="EmbeddingStatusText" Text="嵌入服务: 检测中..."
-                           FontSize="11" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                           TextTrimming="CharacterEllipsis"/>
-                <ui:Button Grid.Column="7" x:Name="EmbeddingToggleButton"
-                        Content="启动" Click="EmbeddingToggleButton_Click"
-                        Padding="12,4" FontSize="11"/>
-            </Grid>
-        </ui:Card>
-
-        </Grid>
     </Grid>
 </ui:FluentWindow>

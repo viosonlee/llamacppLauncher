@@ -14,6 +14,10 @@
 
 `EngineSession` 是会话身份（后端 id + PID + 创建时间 + 可执行路径），与 `ServerSession` 双向映射。会话持久化在 `ManagerConfig.Running` 的槽位中；旧版的 `RunningServer`/`RunningEmbedding` 与 PID 提示在读取时折叠进槽位，保存后删除（迁移即删）。
 
+## 界面
+
+顶部固定一条控制条：引擎下拉、状态、以及一套启动/停止/打开页面/测速按钮，所有引擎共用，避免多套按钮。标签页按功能分为模型 / 参数 / 高级 / 日志。llama.cpp 使用手写参数与高级面板；其它引擎的参数由后端 schema 动态生成，llama.cpp 专属控件（嵌入服务等）在选中其它引擎时隐藏。会话记录按后端各自的槽位保存，llama.cpp 仍用 `main` 槽。
+
 ## 运行实例
 
 `ManagerConfig` 的 ModelPath/Args/Port 描述下一次启动的选择。

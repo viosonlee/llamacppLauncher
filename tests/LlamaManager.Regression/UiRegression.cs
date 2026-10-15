@@ -53,6 +53,9 @@ internal static class UiRegression
             try
             {
                 var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+                // The real app runs a dispatcher loop; async continuations must post back to this
+                // STA thread instead of resuming on the thread pool (which would touch WPF off-thread).
+                SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(Dispatcher.CurrentDispatcher));
                 // Mirror App.xaml: WPF-UI owns control appearance, Brushes.xaml
                 // supplies legacy tokens. Missing any of them reproduces the
                 // StaticResourceException users would hit at runtime.
@@ -107,13 +110,13 @@ internal static class UiRegression
                 ((TextBlock)window.FindName("SelectedModelText")).Text = "Sakura-Micro-Bonsai-2-GSQ-RCO.gguf";
                 ((TextBlock)window.FindName("ModelInfoText")).Text = "qwen3 · 64 层 · 原生上下文 32768\n含 TQ1_0 张量；部分引擎的 CUDA 后端不支持此类型，可能回退 CPU。请以加载日志中的 GPU 权重为准。";
                 var logTab = tabs.Items.Count - 1;
-                Program.Check(tabs.Items.Count == 5, $"expected 5 nav pages, found {tabs.Items.Count}");
+                Program.Check(tabs.Items.Count == 4, $"expected 4 nav pages, found {tabs.Items.Count}");
                 Program.Check(((TextBlock)window.FindName("ProcessInfoText")).Text == "进程: 无", "log tab lost process info");
                 Program.Check(window.FindName("LogScrollViewer") is ScrollViewer, "log scroll viewer missing");
-                Program.Check(window.FindName("AutoOpenBrowserCheckBox") != null, "auto-open checkbox missing from advanced page");
                 Program.Check(window.FindName("EngineBackendBox") != null, "engine backend selector missing");
                 Program.Check(window.FindName("EngineBaseUrlTextBox") != null, "engine base URL field missing");
-                foreach (var tab in new[] { 0, 1, 2, 3, 4 })
+                Program.Check(window.FindName("AutoOpenBrowserCheckBox") != null, "auto-open checkbox missing");
+                foreach (var tab in new[] { 0, 1, 2, 3 })
                 {
                     tabs.SelectedIndex = tab;
                     content.Measure(new Size(690, 775)); content.Arrange(new Rect(0, 0, 690, 775)); content.UpdateLayout();
@@ -180,18 +183,46 @@ internal static class UiRegression
                 Program.Check(comboPopup.IsOpen && comboPopup.Child is FrameworkElement, "combo dropdown did not open");
                 comboProbe.IsDropDownOpen = false;
                 comboHost.Close();
-                // A GPU-heavy backend other than llama.cpp holding the GPU must lock the footer
-                // lifecycle controls. Record a Strata session in its own slot and refresh status.
-                // RefreshStatusAsync bails out while _loaded is false, so re-enable it.
+                // The top bar is the single control surface: one set of lifecycle buttons.
+                // Selecting a non-llama.cpp engine swaps the parameter panels and keeps the
+                // same buttons (llama.cpp-only controls hide).
                 SetFlag(window, "_loaded", true);
-                var config = (ManagerConfig)typeof(MainWindow)
-                    .GetField("_config", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
-                config.SetRunning("strata-upstream", new ServerSession { ProcessId = 999999, EnginePath = "strata.exe", ModelPath = "m.gguf", Port = 8091 });
-                InvokeStatusRefresh(window);
-                Program.Check(((Button)window.FindName("StartButton")).IsEnabled == false, "start button stayed enabled while Strata runs");
-                Program.Check(((Button)window.FindName("SpeedTestButton")).IsEnabled == false, "speed test stayed enabled while Strata runs");
-                Program.Check(((Button)window.FindName("EmbeddingToggleButton")).IsEnabled == false, "embedding toggle stayed enabled while Strata runs");
-                Program.Check(((TextBlock)window.FindName("ActionStatusText")).Text.Contains("Strata"), "status line does not explain the Strata lock");
+                // The engine list is populated on load; invoke it and pump the dispatcher.
+                var applyEngine = typeof(MainWindow).GetMethod("ApplyEngineConfigAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                window.Dispatcher.Invoke(() => applyEngine.Invoke(window, null));
+                for (var i = 0; i < 40; i++) window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+                var engineBox = (ComboBox)window.FindName("EngineBackendBox");
+                var llamaParams = (FrameworkElement)window.FindName("LlamaCppParamsScroll");
+                var engineParams = (FrameworkElement)window.FindName("EngineParamsScroll");
+                var llamaAdv = (FrameworkElement)window.FindName("LlamaCppAdvancedPanel");
+                var engineAdv = (FrameworkElement)window.FindName("EngineAdvancedPanel");
+                var embeddingPanel = (FrameworkElement)window.FindName("EmbeddingPanel");
+                var startButton = (Button)window.FindName("StartButton");
+                var stopButton = (Button)window.FindName("StopButton");
+                Program.Check(startButton != null && stopButton != null, "top bar lifecycle buttons missing");
+                var items = engineBox.ItemsSource!.Cast<string>().ToList();
+                var llamaIndex = items.FindIndex(n => n.Contains("llama.cpp"));
+                var strataIndex = items.FindIndex(n => n.Contains("Strata"));
+                Program.Check(llamaIndex >= 0 && strataIndex >= 0, "engine list missing llamacpp or Strata");
+
+                engineBox.SelectedIndex = llamaIndex;
+                window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+                Program.Check(llamaParams.Visibility == Visibility.Visible, "llamacpp params hidden for llamacpp");
+                Program.Check(engineParams.Visibility == Visibility.Collapsed, "schema params shown for llamacpp");
+                Program.Check(llamaAdv.Visibility == Visibility.Visible, "llamacpp advanced hidden for llamacpp");
+                Program.Check(embeddingPanel.Visibility == Visibility.Visible, "embedding panel hidden for llamacpp");
+
+                engineBox.SelectedIndex = strataIndex;
+                window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+                Program.Check(llamaParams.Visibility == Visibility.Collapsed, "llamacpp params shown for Strata");
+                Program.Check(engineParams.Visibility == Visibility.Visible, "schema params hidden for Strata");
+                Program.Check(llamaAdv.Visibility == Visibility.Collapsed, "llamacpp advanced shown for Strata");
+                Program.Check(engineAdv.Visibility == Visibility.Visible, "engine advanced hidden for Strata");
+                Program.Check(embeddingPanel.Visibility == Visibility.Collapsed, "embedding panel shown for Strata (llama.cpp only)");
+
+                // Leave the persisted active backend as llama.cpp so later tests start clean.
+                ConfigService.SaveActiveBackend(ConfigService.ReadConfig(), "llamacpp");
+
                 app.Shutdown();
                 complete.SetResult();
             }

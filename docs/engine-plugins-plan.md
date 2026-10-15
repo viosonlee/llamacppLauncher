@@ -84,12 +84,16 @@
 
 ## 阶段 6：动态参数 UI + 引擎标签页
 
-- [x] 引擎标签页（第 6 个导航页）：后端下拉、模型选择、参数按 `ParameterSpec.Group` 动态生成。
+- [x] **统一顶部控制条**：引擎下拉 + 状态 + 一套启动/停止/打开页面/测速按钮，所有引擎共用（消除底部卡片与引擎页两套按钮）。
+- [x] **标签页按功能分**：模型 / 参数 / 高级 / 日志。
+  - 参数页：llama.cpp 用手写面板；其它引擎按 `ParameterSpec.Group` 动态生成。
+  - 高级页：llama.cpp 显示原始参数、端口、自动打开、嵌入服务；其它引擎显示初始化、接入地址、运行输出。
+  - llama.cpp 专属控件（嵌入服务等）在选中其它引擎时隐藏。
+- [x] 模型页对所选引擎生效（llama.cpp 走预设/参数管线；其它引擎写入 `EngineSettings.ModelPath`）。
 - [x] 参数值存 `EngineSettings.Parameters`；`ConfigService.SaveEngineSettings` 持久化。
-- [x] 状态区：可用性、兼容性、运行状态、**可复制的 base URL**（供 pi/Claude Code/Codex）。
 - [x] 启动/停止经 `IServerBackend` + `EngineArbiter` GPU 互斥（统一冲突确认）。
 - [x] 初始化按钮（`BootstrapService`）。
-- [x] UI 回归：5 个导航页、引擎控件存在、离屏渲染 5 张 PNG（**48/48**）。
+- [x] UI 回归：4 个导航页、顶部按钮存在、引擎切换显示/隐藏面板、离屏渲染 4 张 PNG（**48/48**）。
 
 ## 阶段 7：CLI / autostart 走注册表
 

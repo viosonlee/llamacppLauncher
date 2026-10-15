@@ -517,7 +517,8 @@ internal static class Program
             });
             await Test("CLI: detached server survives parent exit and GUI settings edits", async () =>
             {
-                var config = Config(Fixtures.FreePort()); ConfigService.SaveConfig(config);
+                var config = Config(Fixtures.FreePort()); config.ActiveBackendId = "llamacpp"; ConfigService.SaveConfig(config);
+                ConfigService.SaveActiveBackend(config, "llamacpp");
                 await ProcessProbe.RunAsync(Environment.ProcessPath!, "--invoke-cli --start", TimeSpan.FromSeconds(10));
                 var latest = ConfigService.ReadConfig();
                 using var server = ServerService.GetManagedProcess(latest);
@@ -530,7 +531,8 @@ internal static class Program
             });
             await Test("CLI: separate processes serialize concurrent starts", async () =>
             {
-                var config = Config(Fixtures.FreePort()); ConfigService.SaveConfig(config);
+                var config = Config(Fixtures.FreePort()); config.ActiveBackendId = "llamacpp"; ConfigService.SaveConfig(config);
+                ConfigService.SaveActiveBackend(config, "llamacpp");
                 await Task.WhenAll(
                     ProcessProbe.RunAsync(Environment.ProcessPath!, "--invoke-cli --start", TimeSpan.FromSeconds(10)),
                     ProcessProbe.RunAsync(Environment.ProcessPath!, "--invoke-cli --start", TimeSpan.FromSeconds(10)));

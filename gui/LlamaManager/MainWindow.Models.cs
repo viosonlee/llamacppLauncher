@@ -39,7 +39,8 @@ public partial class MainWindow
             {
                 _models = models;
                 ModelListBox.ItemsSource = _models;
-                ModelListBox.SelectedItem = _models.FirstOrDefault(m => PathIdentity.Equals(m.FullName, _config.ModelPath));
+                var selected = SelectedEngineModelPath();
+                ModelListBox.SelectedItem = _models.FirstOrDefault(m => PathIdentity.Equals(m.FullName, selected));
                 ModelCountText.Text = $"共 {_models.Count} 个模型";
                 EmptyModelsHint.Visibility = _models.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
             }
@@ -48,12 +49,21 @@ public partial class MainWindow
         finally { _scanning = false; }
     }
 
+    /// <summary>The model the currently selected engine is configured with.</summary>
+    private string SelectedEngineModelPath()
+    {
+        var backend = SelectedEngineBackend();
+        if (backend == null || backend.Descriptor.Id == "llamacpp") return _config.ModelPath;
+        return _config.Engines.GetValueOrDefault(backend.Descriptor.Id)?.ModelPath ?? "";
+    }
+
     private void UpdateSelectedModelText()
     {
-        if (string.IsNullOrEmpty(_config.ModelPath)) { SelectedModelText.Text = "未选择模型"; ModelInfoText.Text = ""; return; }
-        SelectedModelText.Text = Path.GetFileName(_config.ModelPath);
-        var metadata = GgufService.TryRead(_config.ModelPath);
-        MoeSection.Visibility = ModelInfo.DetectIsMoE(_config.ModelPath) ? Visibility.Visible : Visibility.Collapsed;
+        var path = SelectedEngineModelPath();
+        if (string.IsNullOrEmpty(path)) { SelectedModelText.Text = "未选择模型"; ModelInfoText.Text = ""; return; }
+        SelectedModelText.Text = Path.GetFileName(path);
+        var metadata = GgufService.TryRead(path);
+        MoeSection.Visibility = ModelInfo.DetectIsMoE(path) ? Visibility.Visible : Visibility.Collapsed;
         MtpSection.Visibility = metadata is { HasMtp: true } ? Visibility.Visible : Visibility.Collapsed;
         ModelInfoText.Text = metadata == null ? "无法读取 GGUF 元数据，请检查文件。" :
             $"{metadata.Architecture} · {metadata.LayerCount} 层 · 原生上下文 {metadata.ContextLength}\n{metadata.CompatibilityNote}";
@@ -61,7 +71,34 @@ public partial class MainWindow
 
     private async Task SelectModelAsync(string path)
     {
-        if (_selecting || _scanning || PathIdentity.Equals(path, _config.ModelPath)) return;
+        if (_selecting || _scanning) return;
+        var backend = SelectedEngineBackend();
+        var backendId = backend?.Descriptor.Id ?? "llamacpp";
+
+        // Non-llama.cpp engines keep their model in their own settings; no preset/args pipeline.
+        if (backendId != "llamacpp")
+        {
+            if (PathIdentity.Equals(path, SelectedEngineModelPath())) return;
+            _selecting = true;
+            ConfigurationTabs.IsEnabled = false;
+            try
+            {
+                var settings = _config.Engines.GetValueOrDefault(backendId) ?? new EngineSettings();
+                settings.ModelPath = path;
+                _config.Engines[backendId] = settings;
+                ConfigService.SaveEngineSettings(_config, backendId, settings);
+                LogService.Write($"已为 {backend!.Descriptor.DisplayName} 选择 {Path.GetFileName(path)}。");
+                UpdateSelectedModelText();
+                _statusVersion++;
+            }
+            catch (Exception ex) { ShowError("选择模型失败", ex); }
+            finally { _selecting = false; ConfigurationTabs.IsEnabled = true; }
+            await RefreshEngineAsync();
+            await RefreshStatusAsync();
+            return;
+        }
+
+        if (PathIdentity.Equals(path, _config.ModelPath)) return;
         _selecting = true;
         ConfigurationTabs.IsEnabled = false;
         var previousPath = _config.ModelPath;
