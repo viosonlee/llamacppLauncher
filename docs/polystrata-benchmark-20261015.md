@@ -59,6 +59,34 @@ python polystrata.py benchmark --model ornith --prompt-tokens 512,2000,8000 --js
 - **专家缓存命中 41–77%**：6GB 卡只放得下约 2.5 GiB 专家（约 2300/10496 个），其余在 CPU 上算，
   所以整机 CPU 占用 42–80%。
 
+## llama.cpp 对照（同一模型、同一上下文）
+
+```powershell
+llama-server.exe -m C:\PolyStrata-models\Ornith-1.5-35B-A3B-APEX-MTP-I-Mini.gguf `
+  --host 127.0.0.1 --port 8080 -c 32768 -b 2048 -ub 512 -t 8 `
+  -ngl all --n-cpu-moe 32 --fit on --fit-target 1024 `
+  -ctk q8_0 -ctv q8_0 -fa on --jinja
+```
+
+| 提示 | 输入 token | llama.cpp prefill | llama.cpp decode | PolyStrata prefill | PolyStrata decode |
+|---|---:|---:|---:|---:|---:|
+| short | 21 | 17.0 | 26.2 | 35.0* | **55.9** |
+| long-512 | 800 | 187.2 | 28.8 | **335.8** | **53.7** |
+| long-2000 | 2578 / 2862 | 285.9 | 31.3 | **600.7** | **49.5** |
+| long-8000 | 8641 / 10987 | 282.1 | 30.8 | **896.3** | **50.5** |
+
+（两边的输入 token 数略有差异：两个 benchmark 的长提示文本与截断方式不同。）
+
+**要点**
+
+- **decode：PolyStrata 是 llama.cpp 的 1.7–2.1 倍**（50–56 vs 26–31 tok/s）。主因是 MTP 草稿：
+  PolyStrata 用文件自带的 `blk.40` 草稿块，接受率 0.60–0.84；llama.cpp 这条路径**没有用它**——
+  加载日志里 `blk.40.*` 全部是 `unused tensor ... ignoring`。
+- **prefill：PolyStrata 是 llama.cpp 的 1.8–3.2 倍**（336–896 vs 187–286 tok/s）。
+- 显存：llama.cpp 4751 MiB（`--n-cpu-moe 32`），PolyStrata 约 5 GiB。
+- 这是**同机同模型**的实测，两边参数按各自推荐值给（llama.cpp `--n-cpu-moe 32` + q8_0 KV + fa；
+  PolyStrata `--vram-reserve-mib 256` + 自带 MTP）。
+
 ## 观察：显存与核显/独显
 
 ### 显存占用
