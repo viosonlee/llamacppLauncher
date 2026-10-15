@@ -20,8 +20,13 @@ public sealed record GgufMetadata
     public bool IsMoE { get; init; }
     public bool HasHadamard { get; init; }
     public bool HasMtp { get; init; }
+    public int? MtpLayerCount { get; init; }
+    public int TensorCount { get; init; }
+    public long? SplitCount { get; init; }
+    public long? SplitNumber { get; init; }
+    public long? SplitTensorCount { get; init; }
     public IReadOnlyDictionary<uint, int> TensorTypes { get; init; } = new Dictionary<uint, int>();
-    /// <summary>Types of the tensors the Strata packer and engine inspect by name (roles, embedding, head, router).</summary>
+    /// <summary>GGML types by tensor name, from the bounded descriptor table (no weight data).</summary>
     public IReadOnlyDictionary<string, uint> TensorFormats { get; init; } = new Dictionary<string, uint>();
     public bool RequiresPrism => HasHadamard || TensorTypes.ContainsKey(142) || TensorTypes.ContainsKey(143);
     public bool HasTq1 => TensorTypes.ContainsKey(34);
@@ -43,6 +48,8 @@ public static class GgufService
 {
     private sealed record Entry(long Length, long Modified, GgufMetadata? Metadata);
     private static readonly ConcurrentDictionary<string, Entry> Cache = new();
+    private static readonly Regex ShardName = new(@"^(.*)-(?<part>\d{5})-of-(?<total>\d{5})\.gguf$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     [ThreadStatic] private static byte[]? _skipScratch;
     [ThreadStatic] private static byte[]? _bulkScratch;
 
@@ -71,28 +78,77 @@ public static class GgufService
     public static bool? TryDetectIsMoe(string path) => TryRead(path)?.IsMoE;
     public static string? GetArchitecture(string path) => TryRead(path)?.Architecture;
 
-    /// <summary>
-    /// Reads metadata from every shard of a split GGUF. Scalar metadata lives in the
-    /// first shard; tensor descriptors are distributed, so role formats need all shards.
-    /// </summary>
+    /// <summary>Expands a first-shard filename; shared by header inspection and pack identity checks.</summary>
+    public static IReadOnlyList<string> ShardPaths(string path)
+    {
+        var model = Path.GetFullPath(path);
+        var match = ShardName.Match(model);
+        if (!match.Success) return [model];
+        var count = int.Parse(match.Groups["total"].Value, System.Globalization.CultureInfo.InvariantCulture);
+        if (match.Groups["part"].Value != "00001" || count is < 1 or > 1024)
+            throw new ArgumentException("分片模型请选择 -00001-of-xxxxx.gguf；所有分片须在同一目录。");
+        return Enumerable.Range(1, count).Select(i => $"{match.Groups[1].Value}-{i:D5}-of-{count:D5}.gguf").ToArray();
+    }
+
+    /// <summary>Best-effort counterpart of ReadShards; malformed or incomplete shard sets return null.</summary>
     public static GgufMetadata? TryReadShards(string path)
     {
-        var single = TryRead(path);
-        if (single == null) return null;
-        var match = Regex.Match(Path.GetFullPath(path), @"^(.*)-(?<part>\d{5})-of-(?<total>\d{5})\.gguf$", RegexOptions.IgnoreCase);
-        if (!match.Success) return single;
-        var count = int.Parse(match.Groups["total"].Value);
-        if (match.Groups["part"].Value != "00001" || count is < 2 or > 1024) return single;
-        var types = new Dictionary<uint, int>(single.TensorTypes);
-        var formats = new Dictionary<string, uint>(single.TensorFormats);
-        for (var i = 2; i <= count; i++)
+        try { return ReadShards(path); }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or ArgumentException or UnauthorizedAccessException or OverflowException)
+        { return null; }
+    }
+
+    /// <summary>
+    /// Reads every shard's descriptors, keeping scalar geometry from shard 1. Later shards
+    /// may omit that geometry, but must agree on split identity and any architecture name.
+    /// </summary>
+    public static GgufMetadata ReadShards(string path, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        var paths = ShardPaths(path);
+        GgufMetadata? first = null;
+        var types = new Dictionary<uint, int>();
+        var formats = new Dictionary<string, uint>(StringComparer.Ordinal);
+        var tensors = 0;
+        var hasMtp = false;
+        var hadamard = false;
+        var moe = false;
+        for (var i = 0; i < paths.Count; i++)
         {
-            var shard = TryRead($"{match.Groups[1].Value}-{i:D5}-of-{count:D5}.gguf");
-            if (shard == null) return null;
+            ct.ThrowIfCancellationRequested();
+            var file = paths[i];
+            if (!File.Exists(file)) throw new FileNotFoundException("模型分片缺失。", file);
+            var shard = TryRead(file) ?? throw new InvalidDataException("无法读取 GGUF 元数据：" + file);
+            first ??= shard;
+            if (paths.Count > 1)
+            {
+                if (shard.SplitCount != paths.Count || shard.SplitNumber != i || shard.SplitTensorCount is not > 0 ||
+                    shard.SplitTensorCount != first.SplitTensorCount)
+                    throw new InvalidDataException("GGUF 分片元数据不一致（split.count / split.no / split.tensors.count）：" + file);
+            }
+            else if (shard.SplitCount is > 1 || shard.SplitNumber is > 0)
+                throw new InvalidDataException("该 GGUF 属于分片模型，请保留分片文件名并选择第一片：" + file);
+            if (shard.Architecture.Length > 0 && shard.Architecture != first.Architecture)
+                throw new InvalidDataException("GGUF 分片架构与第一片不一致：" + file);
+            if (i > 0 && shard.MtpLayerCount.HasValue && shard.MtpLayerCount != first.MtpLayerCount)
+                throw new InvalidDataException("GGUF 分片的 nextn_predict_layers 与第一片不一致：" + file);
+            tensors = checked(tensors + shard.TensorCount);
+            if (tensors > 1_000_000) throw new InvalidDataException("GGUF 分片的张量总数过多。");
             foreach (var (t, n) in shard.TensorTypes) types[t] = types.GetValueOrDefault(t) + n;
-            foreach (var (name, t) in shard.TensorFormats) formats.TryAdd(name, t);
+            foreach (var (name, t) in shard.TensorFormats)
+                if (!formats.TryAdd(name, t)) throw new InvalidDataException("GGUF 分片包含重复张量：" + name + "（" + file + "）");
+            hasMtp |= shard.HasMtp;
+            hadamard |= shard.HasHadamard;
+            moe |= shard.IsMoE;
         }
-        return single with { TensorTypes = types, TensorFormats = formats };
+        ct.ThrowIfCancellationRequested();
+        if (first!.SplitTensorCount is { } expected && expected != tensors)
+            throw new InvalidDataException($"GGUF 分片张量总数不匹配：声明 {expected}，读取 {tensors}。");
+        return first with
+        {
+            TensorTypes = types, TensorFormats = formats, TensorCount = tensors,
+            HasMtp = hasMtp, HasHadamard = hadamard, IsMoE = moe
+        };
     }
 
     public static GgufMetadata Read(Stream stream)
@@ -129,7 +185,7 @@ public static class GgufService
             }
         }
         var types = new Dictionary<uint, int>();
-        var formats = new Dictionary<string, uint>();
+        var formats = new Dictionary<string, uint>(StringComparer.Ordinal);
         for (ulong i = 0; i < tensors; i++)
         {
             var tensorName = ReadString(reader, 4096);
@@ -141,9 +197,10 @@ public static class GgufService
             var type = reader.ReadUInt32();
             _ = reader.ReadUInt64();
             types[type] = types.GetValueOrDefault(type) + 1;
-            if (RoleTensor.IsMatch(tensorName)) formats[tensorName] = type;
+            if (!formats.TryAdd(tensorName, type)) throw new InvalidDataException("GGUF 包含重复张量：" + tensorName);
         }
         int Number(string suffix) => (int)Math.Clamp(scalars.GetValueOrDefault(architecture + "." + suffix), 0, int.MaxValue);
+        long? Optional(string key) => scalars.TryGetValue(key, out var value) ? value : null;
         return new GgufMetadata
         {
             Architecture = architecture, LayerCount = Number("block_count"), ContextLength = Number("context_length"),
@@ -151,14 +208,12 @@ public static class GgufService
             ExpertCount = Number("expert_count"), ExpertUsedCount = Number("expert_used_count"),
             KvHeads = Number("attention.head_count_kv"), KeyLength = Number("attention.key_length"),
             ValueLength = Number("attention.value_length"), IsMoE = moe || architecture.Contains("moe", StringComparison.OrdinalIgnoreCase),
-            HasHadamard = hadamard, HasMtp = nextn, TensorTypes = types, TensorFormats = formats
+            HasHadamard = hadamard, HasMtp = nextn,
+            MtpLayerCount = Optional(architecture + ".nextn_predict_layers") is { } mtp ? checked((int)mtp) : null,
+            TensorCount = (int)tensors, SplitCount = Optional("split.count"), SplitNumber = Optional("split.no"),
+            SplitTensorCount = Optional("split.tensors.count"), TensorTypes = types, TensorFormats = formats
         };
     }
-
-    /// <summary>Tensor names the Strata engine and packer inspect by role (experts, shared experts, embedding, head, router).</summary>
-    private static readonly Regex RoleTensor =
-        new(@"^(token_embd|output)\.weight$|^blk\.\d+\.ffn_(gate|up|down)(_exps|_shexp)?(_w\d+)?\.weight$|^blk\.\d+\.ffn_gate_inp(_shexp)?\.weight$",
-            RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static string ReadString(BinaryReader reader, int maximum)
     {

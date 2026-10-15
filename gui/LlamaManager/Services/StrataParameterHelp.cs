@@ -9,6 +9,8 @@ public static class StrataParameterHelp
         3. 点击“一键生成 / 复用 Pack”。首次需要 Python 3.10+；缺少 numpy、regex、gguf 时会联网安装到独立环境。
         4. 成功后自动关联 Pack 和初始 Profile。原 GGUF 必须保留；只移动同一份文件可重新选择已有 Pack。
         5. 换量化、微调或模型变种需要对应的 Pack；当前入口仅接受受支持的 qwen35moe 40 层主干。
+        选择模型或恢复已保存的模型后会读取全部分片进行兼容性预检；状态行的提示框可查看完整报告。
+        打包前会再次校验，报告也会写入 Pack 日志。预检只读取头部，不读取权重或运行 GPU。
         Pack 生成不使用 GPU，也不会停止正在运行的模型服务。停止按钮可以取消准备任务。
 
         Pack 复用条件与存放位置

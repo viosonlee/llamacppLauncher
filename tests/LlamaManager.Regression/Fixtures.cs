@@ -53,37 +53,69 @@ internal static class Fixtures
     /// <summary>Builds a minimal qwen35moe GGUF exercising the Strata compatibility analyzer.</summary>
     public static byte[] StrataGguf(uint gateType = 11, uint? upType = null, uint downType = 11,
         uint sharedType = 13, uint embedType = 11, uint headType = 14, bool mtp = false,
-        uint experts = 256, uint layers = 40, uint hidden = 2048, string arch = "qwen35moe")
+        uint experts = 256, uint layers = 40, uint hidden = 2048, string arch = "qwen35moe",
+        IEnumerable<KeyValuePair<string, uint>>? tensors = null, bool includeGeometry = true,
+        (uint Count, uint Number, uint Tensors)? split = null, bool prism = false)
     {
         upType ??= gateType;
+        var descriptors = new List<(string Name, uint Type)>();
+        if (tensors != null) descriptors.AddRange(tensors.Select(p => (p.Key, p.Value)));
+        else
+        {
+            descriptors.Add(("token_embd.weight", embedType));
+            descriptors.Add(("output.weight", headType));
+            for (var i = 0; i < layers + (mtp ? 1 : 0); i++)
+            {
+                descriptors.Add(($"blk.{i}.ffn_gate_exps.weight", gateType));
+                descriptors.Add(($"blk.{i}.ffn_up_exps.weight", upType.Value));
+                descriptors.Add(($"blk.{i}.ffn_down_exps.weight", downType));
+                foreach (var role in new[] { "gate", "up", "down" })
+                    descriptors.Add(($"blk.{i}.ffn_{role}_shexp.weight", sharedType));
+                descriptors.Add(($"blk.{i}.ffn_gate_inp.weight", 0));
+                descriptors.Add(($"blk.{i}.ffn_gate_inp_shexp.weight", 0));
+            }
+            if (mtp)
+                foreach (var role in new[] { "eh_proj", "enorm", "hnorm", "shared_head_norm" })
+                    descriptors.Add(($"blk.{layers}.nextn.{role}.weight", 30));
+        }
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true);
         void String(string value) { var bytes = Encoding.UTF8.GetBytes(value); writer.Write((ulong)bytes.Length); writer.Write(bytes); }
         void Number(string key, uint value) { String(key); writer.Write(4u); writer.Write(value); }
         void Tensor(string name, uint type)
-        { String(name); writer.Write(2u); writer.Write(256UL); writer.Write(256UL); writer.Write(type); writer.Write(0UL); }
-        var tensorCount = 2u + layers * 6u; // embedding + head + (gate,up,down,shexp,gate_inp,gate_inp_shexp) per layer
-        writer.Write(0x46554747u); writer.Write(3u); writer.Write((ulong)tensorCount); writer.Write(8UL + (mtp ? 1UL : 0UL));
-        String("general.architecture"); writer.Write(8u); String(arch);
-        Number(arch + ".block_count", layers + (mtp ? 1u : 0u));
-        Number(arch + ".context_length", 4096);
-        Number(arch + ".embedding_length", hidden);
-        Number(arch + ".attention.head_count", 16);
-        Number(arch + ".attention.head_count_kv", 2);
-        Number(arch + ".expert_count", experts);
-        Number(arch + ".expert_used_count", 8);
-        if (mtp) Number(arch + ".nextn_predict_layers", 1);
-        Tensor("token_embd.weight", embedType);
-        Tensor("output.weight", headType);
-        for (var i = 0; i < layers; i++)
         {
-            Tensor($"blk.{i}.ffn_gate_exps.weight", gateType);
-            Tensor($"blk.{i}.ffn_up_exps.weight", upType.Value);
-            Tensor($"blk.{i}.ffn_down_exps.weight", downType);
-            Tensor($"blk.{i}.ffn_gate_shexp.weight", sharedType);
-            Tensor($"blk.{i}.ffn_gate_inp.weight", 0);
-            Tensor($"blk.{i}.ffn_gate_inp_shexp.weight", 0);
+            ulong[] shape = name.EndsWith("_exps.weight")
+                ? name.Contains("ffn_down") ? [512, hidden, experts] : [hidden, 512, experts]
+                : name.EndsWith("_shexp.weight")
+                    ? name.Contains("gate_inp") ? [hidden] : name.Contains("ffn_down") ? [512, hidden] : [hidden, 512]
+                    : name.EndsWith("ffn_gate_inp.weight") ? [hidden, experts]
+                    : name is "token_embd.weight" or "output.weight" ? [hidden, 248320]
+                    : name.EndsWith("nextn.eh_proj.weight") ? [2UL * hidden, hidden] : [hidden];
+            String(name); writer.Write((uint)shape.Length);
+            foreach (var dimension in shape) writer.Write(dimension);
+            writer.Write(type); writer.Write(0UL);
         }
+        var kvCount = (arch.Length > 0 ? 1UL : 0UL) + (includeGeometry ? 7UL + (mtp ? 1UL : 0UL) : 0UL) +
+            (split.HasValue ? 3UL : 0UL) + (prism ? 1UL : 0UL);
+        writer.Write(0x46554747u); writer.Write(3u); writer.Write((ulong)descriptors.Count); writer.Write(kvCount);
+        if (arch.Length > 0) { String("general.architecture"); writer.Write(8u); String(arch); }
+        if (includeGeometry)
+        {
+            Number(arch + ".block_count", layers + (mtp ? 1u : 0u));
+            Number(arch + ".context_length", 4096);
+            Number(arch + ".embedding_length", hidden);
+            Number(arch + ".attention.head_count", 16);
+            Number(arch + ".attention.head_count_kv", 2);
+            Number(arch + ".expert_count", experts);
+            Number(arch + ".expert_used_count", 8);
+            if (mtp) Number(arch + ".nextn_predict_layers", 1);
+        }
+        if (split is { } parts)
+        {
+            Number("split.count", parts.Count); Number("split.no", parts.Number); Number("split.tensors.count", parts.Tensors);
+        }
+        if (prism) Number("prism.hadamard.block_size", 128);
+        foreach (var (name, type) in descriptors) Tensor(name, type);
         return stream.ToArray();
     }
 

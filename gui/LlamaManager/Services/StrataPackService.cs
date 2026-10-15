@@ -33,7 +33,7 @@ public static class StrataPackService
 
     private static async Task<Result> PrepareCoreAsync(Options options, Action<string>? progress, CancellationToken ct)
     {
-        var (model, metadata, sources, tools, identity) = await Task.Run(() => Inspect(options), ct).ConfigureAwait(false);
+        var (model, metadata, report, sources, tools, identity) = await Task.Run(() => Inspect(options, ct), ct).ConfigureAwait(false);
         var cache = Path.GetFullPath(string.IsNullOrWhiteSpace(options.CacheDirectory) ? DefaultCacheDirectory : options.CacheDirectory);
         Directory.CreateDirectory(cache);
         // Serializes shared environment installation and publication across launcher instances.
@@ -52,6 +52,8 @@ public static class StrataPackService
         string? staging = null;
         try
         {
+            ct.ThrowIfCancellationRequested();
+            Log(StrataCompatibility.Describe(report));
             ct.ThrowIfCancellationRequested();
             if (IsComplete(target, identity, metadata.ExpertCount))
             {
@@ -97,41 +99,28 @@ public static class StrataPackService
         }
     }
 
-    private static (string Model, GgufMetadata Metadata, Source[] Sources, string Tools, string Identity) Inspect(Options options)
+    private static (string Model, GgufMetadata Metadata, StrataCompatibility.Report Report, Source[] Sources, string Tools, string Identity)
+        Inspect(Options options, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(options.ModelPath) || !File.Exists(options.ModelPath))
             throw new FileNotFoundException("请先选择已下载完成的 GGUF 模型。");
         var model = Path.GetFullPath(options.ModelPath);
-        var md = GgufService.TryReadShards(model) ?? throw new InvalidDataException("无法读取 GGUF 元数据。");
+        var md = GgufService.ReadShards(model, ct);
         var report = StrataCompatibility.Analyze(md);
         if (!report.IsPackable)
-        {
-            var detail = report.StructureOk
-                ? "结构匹配，但专家/嵌入格式超出引擎 GPU 支持范围：\n" + string.Join("\n", report.Blockers)
-                : "当前 Strata 打包入口支持 qwen35moe 的 40 层主干（含 MTP 时 41 层）、hidden=2048、attention heads=16 / KV heads=2 的变种；该文件结构不匹配：\n" + report.StructureNote;
-            throw new NotSupportedException(detail + "\n\n" + StrataCompatibility.Summary(report));
-        }
+            throw new NotSupportedException(StrataCompatibility.Summary(report) + "\n\n" + StrataCompatibility.Describe(report));
         var tools = Path.GetFullPath(Path.Combine(options.PackageRoot, "tools"));
         foreach (var tool in Tools)
             if (!File.Exists(Path.Combine(tools, tool))) throw new FileNotFoundException("Strata 包缺少 tools/" + tool + "，请使用包含打包工具的完整运行包。");
         var sources = ReadSources(model);
         var toolHashes = Tools.Select(t => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(Path.Combine(tools, t)))));
         var identity = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(sources) + string.Join(";", toolHashes))));
-        return (model, md, sources, tools, identity);
+        return (model, md, report, sources, tools, identity);
     }
 
     private static Source[] ReadSources(string model)
     {
-        var match = Regex.Match(model, @"^(.*)-(?<part>\d{5})-of-(?<total>\d{5})\.gguf$", RegexOptions.IgnoreCase);
-        var paths = new List<string> { model };
-        if (match.Success)
-        {
-            var count = int.Parse(match.Groups["total"].Value);
-            if (match.Groups["part"].Value != "00001" || count is < 1 or > 1024)
-                throw new ArgumentException("分片模型请选择 -00001-of-xxxxx.gguf；所有分片须在同一目录。");
-            paths = Enumerable.Range(1, count).Select(i => $"{match.Groups[1].Value}-{i:D5}-of-{count:D5}.gguf").ToList();
-        }
-        return paths.Select(path =>
+        return GgufService.ShardPaths(model).Select(path =>
         {
             var info = new FileInfo(path);
             if (!info.Exists) throw new FileNotFoundException("模型分片缺失。", path);

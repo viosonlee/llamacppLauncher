@@ -16,7 +16,7 @@ internal static class Program
         if (!EqualityComparer<T>.Default.Equals(expected, actual)) throw new Exception($"Expected <{expected}>, got <{actual}>");
     }
     internal static void Check(bool condition, string message) { if (!condition) throw new Exception(message); }
-    private static void Throws<T>(Action action) where T : Exception
+    internal static void Throws<T>(Action action) where T : Exception
     {
         try { action(); } catch (T) { return; }
         throw new Exception("Expected " + typeof(T).Name);
@@ -229,37 +229,10 @@ internal static class Program
                 StrataRegression.RunAsync(_root, _model));
             await Test("strata: pack preparation refuses unsupported models and missing files", () =>
                 StrataRegression.RunPackServiceAsync(_root));
-            await Test("strata: compatibility report mirrors engine format tables", () => Run(() =>
-            {
-                using var stream = new MemoryStream(Fixtures.StrataGguf());
-                var md = GgufService.Read(stream);
-                var report = StrataCompatibility.Analyze(md);
-                Check(report.IsPackable, "Occamy-like fixture (Q3_K experts) must be packable: " + string.Join("; ", report.Blockers));
-                Check(report.Findings.Any(f => f.Role == "gate/up" && f.TypeName == "Q3_K" && f.Decode == StrataCompatibility.Grade.Native), "gate/up Q3_K native missing");
-                Check(report.Findings.Any(f => f.Role == "down" && f.TypeName == "Q3_K" && f.Decode == StrataCompatibility.Grade.Native), "down Q3_K native missing");
-                Check(report.Findings.Any(f => f.Role == "shared" && f.TypeName == "Q5_K"), "shared Q5_K finding missing");
-                // IQ1_M down: engine refuses at startup — the report must name the role and format.
-                using var badDown = new MemoryStream(Fixtures.StrataGguf(gateType: 22, downType: 29, sharedType: 12));
-                var downReport = StrataCompatibility.Analyze(GgufService.Read(badDown));
-                Check(!downReport.IsPackable, "IQ1_M down must be blocked");
-                Check(downReport.Blockers.Any(b => b.Contains("IQ1_M") && b.Contains("down")), "down blocker must name IQ1_M: " + string.Join("; ", downReport.Blockers));
-                // gate/up mismatch: packer requires one type per layer.
-                using var mismatch = new MemoryStream(Fixtures.StrataGguf(gateType: 11, upType: 18));
-                var mismatchReport = StrataCompatibility.Analyze(GgufService.Read(mismatch));
-                Check(!mismatchReport.IsPackable, "gate/up mismatch must be blocked");
-                Check(mismatchReport.Blockers.Any(b => b.Contains("不一致")), "mismatch blocker missing: " + string.Join("; ", mismatchReport.Blockers));
-                // IQ1_M gate/up: decode native, prefill falls back — packable with a note.
-                using var fallback = new MemoryStream(Fixtures.StrataGguf(gateType: 29, downType: 12, sharedType: 12));
-                var fbReport = StrataCompatibility.Analyze(GgufService.Read(fallback));
-                Check(fbReport.IsPackable, "IQ1_M gate/up is decode-native, must stay packable: " + string.Join("; ", fbReport.Blockers));
-                Check(fbReport.Findings.Any(f => f.Role == "gate/up" && f.Decode == StrataCompatibility.Grade.Native && f.Prefill == StrataCompatibility.Grade.Fallback),
-                    "IQ1_M gate/up should be decode native + prefill fallback");
-                // Structure mismatch keeps the old contract (NotSupportedException from the pack entry).
-                using var wrongArch = new MemoryStream(Fixtures.Gguf());
-                var wrongReport = StrataCompatibility.Analyze(GgufService.Read(wrongArch));
-                Check(!wrongReport.IsPackable && !wrongReport.StructureOk, "qwen3 fixture must fail structure");
-                Check(!StrataCompatibility.Summary(report).StartsWith("⚠"), "summary must not warn on a good model");
-            }));
+            await Test("strata: compatibility roles, native heads, required tensors and MTP structure", () =>
+                Run(StrataCompatibilityRegression.RunFormats));
+            await Test("strata: complete GGUF shards, duplicate detection and cancellation", () =>
+                Run(() => StrataCompatibilityRegression.RunShards(_root)));
             await Test("presets: reject a known signature mismatch on identical names", () => Run(() =>
             {
                 var config = new ManagerConfig();

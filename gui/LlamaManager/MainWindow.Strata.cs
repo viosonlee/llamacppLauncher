@@ -13,6 +13,7 @@ public partial class MainWindow
     private string? _strataLogPath;
     private CancellationTokenSource? _strataRunCancellation;
     private CancellationTokenSource? _strataPreparationCancellation;
+    private int _strataCompatGeneration;
 
     private async Task ApplyStrataConfigAsync()
     {
@@ -57,6 +58,7 @@ public partial class MainWindow
         _strataLogPath = StrataService.ResolvePathsSafe(_config) is { } paths ? paths.LastRunLog : null;
         StrataOpenLogButton.IsEnabled = _strataLogPath != null && File.Exists(_strataLogPath);
         RefreshStrataButtons();
+        if (!string.IsNullOrWhiteSpace(s.ModelPath)) _ = UpdateStrataCompatAsync(s.ModelPath);
     }
 
     private bool SaveStrataSettings()
@@ -198,6 +200,7 @@ public partial class MainWindow
             _strataUpdate++;
             StrataModelTextBox.Text = _config.Strata.ModelPath = "";
             _strataUpdate--;
+            _ = UpdateStrataCompatAsync("");
             SaveStrataSettings();
         }
         catch (Exception ex) { ShowError("保存失败", ex); }
@@ -249,7 +252,11 @@ public partial class MainWindow
 
     private void SelectStrataModel(string model)
     {
-        if (PathIdentity.Equals(_config.Strata.ModelPath, model)) return;
+        if (PathIdentity.Equals(_config.Strata.ModelPath, model))
+        {
+            _ = UpdateStrataCompatAsync(model);
+            return;
+        }
         _strataUpdate++;
         try
         {
@@ -265,23 +272,32 @@ public partial class MainWindow
     /// <summary>Shows the engine-format verdict for the selected GGUF without blocking the UI.</summary>
     private async Task UpdateStrataCompatAsync(string model)
     {
-        if (string.IsNullOrWhiteSpace(model)) return;
+        var generation = ++_strataCompatGeneration;
+        if (_lifetime.IsCancellationRequested || _strataPreparing || _strataRunning || _strataStopping) return;
+        var ct = _lifetime.Token;
+        StrataPackStatusText.ToolTip = null;
+        if (string.IsNullOrWhiteSpace(model))
+        {
+            StrataPackStatusText.Text = "未选择 GGUF；请选择模型后检查兼容性。";
+            return;
+        }
+        StrataPackStatusText.Text = "正在读取 GGUF 兼容性…";
+        bool Current() => !ct.IsCancellationRequested && generation == _strataCompatGeneration &&
+            !_strataPreparing && !_strataRunning && !_strataStopping && PathIdentity.Equals(_config.Strata.ModelPath, model);
         try
         {
-            var report = await Task.Run(() =>
-            {
-                var md = GgufService.TryReadShards(model);
-                return md == null ? null : StrataCompatibility.Analyze(md);
-            });
-            if (report == null || !PathIdentity.Equals(_config.Strata.ModelPath, model)) return;
-            await Dispatcher.InvokeAsync(() =>
-            {
-                if (!PathIdentity.Equals(_config.Strata.ModelPath, model)) return;
-                StrataPackStatusText.Text = (report.IsPackable ? "" : "⚠ ") + StrataCompatibility.Summary(report) +
-                    "  （点击一键生成可在打包前再次校验）";
-            });
+            var report = await Task.Run(() => StrataCompatibility.Analyze(GgufService.ReadShards(model, ct)), ct);
+            if (!Current()) return;
+            StrataPackStatusText.Text = StrataCompatibility.Summary(report);
+            StrataPackStatusText.ToolTip = StrataCompatibility.Describe(report);
         }
-        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException) { }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException)
+        {
+            if (!Current()) return;
+            StrataPackStatusText.Text = "兼容性检查失败：" + ex.Message;
+            StrataPackStatusText.ToolTip = ex.Message;
+        }
     }
 
     private async void StrataGeneratePackButton_Click(object sender, RoutedEventArgs e)
@@ -289,6 +305,8 @@ public partial class MainWindow
         if (_strataPreparing || _strataRunning || _strataStopping) return;
         try { SaveStrataSettings(); }
         catch (Exception ex) { ShowError("Strata 参数无效", ex); return; }
+        // Invalidate a model-selection check even if it finishes AFTER this preparation.
+        _strataCompatGeneration++;
         _strataPreparing = true;
         _strataPreparationCancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
         var s = _config.Strata;
@@ -296,6 +314,7 @@ public partial class MainWindow
         RefreshStrataButtons();
         StrataOutputBox.Clear();
         StrataPackStatusText.Text = "准备中；可点击停止取消。已有模型服务无需停止。";
+        StrataPackStatusText.ToolTip = null;
         try
         {
             var result = await StrataPackService.PrepareAsync(options, message =>
@@ -318,8 +337,9 @@ public partial class MainWindow
         catch (OperationCanceledException) { StrataPackStatusText.Text = "准备已取消；原有 Pack 未改动。"; }
         catch (Exception ex)
         {
-            StrataPackStatusText.Text = "准备失败：" + ex.Message;
-            AppendStrataOutput(StrataPackStatusText.Text);
+            StrataPackStatusText.Text = "准备失败：" + ex.Message.Split('\n')[0];
+            StrataPackStatusText.ToolTip = ex.Message;
+            AppendStrataOutput("准备失败：" + ex.Message);
             if (!_lifetime.IsCancellationRequested) ShowError("生成 Pack 失败", ex);
         }
         finally
