@@ -63,21 +63,6 @@ internal static class UiRegression
                 });
                 var window = new MainWindow();
                 typeof(MainWindow).GetField("_loaded", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(window, true);
-                // WPF clamps out-of-range Grid.Row to the last row silently, which
-                // stacks siblings on top of each other (footer borders once covered
-                // the service-control buttons). Guard every direct child of every
-                // grid in the window.
-                foreach (var grid in FindDescendants<System.Windows.Controls.Grid>(window))
-                {
-                    var rows = grid.RowDefinitions.Count;
-                    foreach (var child in grid.Children.OfType<UIElement>())
-                    {
-                        var row = System.Windows.Controls.Grid.GetRow(child);
-                        var rowSpan = System.Windows.Controls.Grid.GetRowSpan(child);
-                        Program.Check(row + Math.Max(1, rowSpan) <= Math.Max(rows, 1) || rows == 0,
-                            $"{grid.Name ?? "?"} child {child.GetType().Name} row {row}+{rowSpan} outside {rows} rows");
-                    }
-                }
                 // Guard contrast: labels must not render light-on-light.
                 var probeLabel = (TextBlock)window.FindName("SelectedModelText");
                 Program.Check(probeLabel.Foreground is SolidColorBrush { Color: var c } && (c.R + c.G + c.B) / 3 < 128,
@@ -148,6 +133,50 @@ internal static class UiRegression
                         Program.Check(viewer.ActualHeight > 200, $"log tab has no room to show logs: {viewer.ActualHeight}");
                     }
                 }
+                // The grid guard must run after layout: before Measure/Arrange the
+                // footer borders are not in the visual tree, so a missing
+                // RowDefinition (footer stacked on the service buttons) slipped
+                // through the parse-time tree.
+                // WPF clamps out-of-range Grid.Row to the last row silently, which
+                // stacks siblings on top of each other (footer borders once covered
+                // the service-control buttons). Guard every direct child of every
+                // grid in the window.
+                foreach (var grid in FindDescendants<System.Windows.Controls.Grid>(content))
+                {
+                    var rows = grid.RowDefinitions.Count;
+                    foreach (var child in grid.Children.OfType<UIElement>())
+                    {
+                        var row = System.Windows.Controls.Grid.GetRow(child);
+                        var rowSpan = System.Windows.Controls.Grid.GetRowSpan(child);
+                        Program.Check(row + Math.Max(1, rowSpan) <= Math.Max(rows, 1) || rows == 0,
+                            $"{grid.Name ?? "?"} child {child.GetType().Name} row {row}+{rowSpan} outside {rows} rows");
+                    }
+                }
+
+                // The custom ComboBox must open from a real click anywhere on its
+                // surface, including the chevron. A decorative icon over the toggle
+                // swallows those clicks, so hit-test a live (offscreen) instance.
+                var comboHost = new Window { Width = 320, Height = 220, Opacity = 0, ShowInTaskbar = false, WindowStyle = WindowStyle.None, ShowActivated = false };
+                var comboProbe = new ComboBox { Style = (Style)app.FindResource("FluentComboBox"), Width = 220, Height = 30 };
+                comboProbe.Items.Add("one"); comboProbe.Items.Add("two"); comboProbe.SelectedIndex = 0;
+                comboHost.Content = comboProbe;
+                comboHost.Show();
+                for (var i = 0; i < 10; i++) comboHost.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+                var comboPopup = (System.Windows.Controls.Primitives.Popup)comboProbe.Template.FindName("PART_Popup", comboProbe)!;
+                foreach (var fraction in new[] { 0.15, 0.5, 0.95 })
+                {
+                    var point = new Point(comboProbe.ActualWidth * fraction, comboProbe.ActualHeight * 0.5);
+                    var hit = comboProbe.InputHitTest(point) as DependencyObject;
+                    var reachesToggle = false;
+                    for (var current = hit; current != null; current = VisualTreeHelper.GetParent(current))
+                        if (current is System.Windows.Controls.Primitives.ToggleButton) { reachesToggle = true; break; }
+                    Program.Check(reachesToggle, $"combo click at x={fraction:0.00} never reaches the toggle (dead chevron)");
+                }
+                comboProbe.IsDropDownOpen = true;
+                for (var i = 0; i < 10; i++) comboHost.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+                Program.Check(comboPopup.IsOpen && comboPopup.Child is FrameworkElement, "combo dropdown did not open");
+                comboProbe.IsDropDownOpen = false;
+                comboHost.Close();
                 // Strata and llama-server share VRAM: simulating a running Strata
                 // must lock the footer lifecycle controls, not just the Strata buttons.
                 // RefreshStatusAsync bails out while _loaded is false, so re-enable it.
