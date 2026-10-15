@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Windows.Media;
+using LlamaManager.Engines;
 using LlamaManager.Models;
 using LlamaManager.Services;
 
@@ -103,9 +104,10 @@ public partial class MainWindow
             var launch = new ManagerConfig { ModelPath = _config.ModelPath, Args = _config.Args, Port = _config.Port };
             var open = _config.AutoOpenBrowser;
             using var running = ServerService.GetManagedProcess(_config);
-            if (running != null) await ServerService.StopAsync(_config, LogService.Write);
+            if (running != null) await MainBackend.StopAsync(LlamaCppBackend.ToEngineSession(_config.RunningServer!), new DelegateLogSink(LogService.Write));
             _startCancellation.Token.ThrowIfCancellationRequested();
-            await ServerService.StartAsync(launch, open, LogService.Write, _startCancellation.Token);
+            await MainBackend.StartAsync(new EngineStartRequest { Config = launch, OpenBrowser = open },
+                new DelegateLogSink(LogService.Write), _startCancellation.Token);
         }
         catch (OperationCanceledException) { LogService.Write("已结束此次启动等待。"); }
         catch (Exception ex) { ShowError("启动失败", ex); }
@@ -125,7 +127,14 @@ public partial class MainWindow
         StopButton.IsEnabled = false;
         _startCancellation?.Cancel();
         _speedCancellation?.Cancel();
-        try { await ServerService.StopAsync(_config, LogService.Write); }
+        try
+        {
+            // Stop whatever the main slot records, even if the process is already gone
+            // (ServerService.StopAsync clears the stale record in that case).
+            var session = _config.RunningServer;
+            var target = session != null ? LlamaCppBackend.ToEngineSession(session) : new EngineSession { BackendId = "llamacpp" };
+            await MainBackend.StopAsync(target, new DelegateLogSink(LogService.Write));
+        }
         catch (Exception ex) { ShowError("停止失败", ex); }
         finally { _serverStopping = false; _statusVersion++; await RefreshStatusAsync(); }
     }
@@ -180,7 +189,7 @@ public partial class MainWindow
         if (_embeddingStarting)
         {
             _embeddingCancellation?.Cancel();
-            try { await ServerService.StopEmbeddingAsync(_config, LogService.Write); }
+            try { await MainBackend.StopAsync(new EngineSession { BackendId = "llamacpp", Extra = { ["embedding"] = "1" } }, new DelegateLogSink(LogService.Write)); }
             catch (Exception ex) { ShowError("停止嵌入服务失败", ex); }
             return;
         }
@@ -188,13 +197,14 @@ public partial class MainWindow
         try
         {
             using var running = ServerService.GetEmbeddingProcess(_config);
-            if (running != null) await ServerService.StopEmbeddingAsync(_config, LogService.Write);
+            if (running != null) await MainBackend.StopAsync(new EngineSession { BackendId = "llamacpp", Extra = { ["embedding"] = "1" } }, new DelegateLogSink(LogService.Write));
             else
             {
                 _embeddingStarting = true;
                 _embeddingCancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
                 EmbeddingToggleButton.Content = "终止启动";
-                await ServerService.StartEmbeddingAsync(_config, LogService.Write, _embeddingCancellation.Token);
+                await MainBackend.StartAsync(new EngineStartRequest { Config = _config, Embedding = true },
+                    new DelegateLogSink(LogService.Write), _embeddingCancellation.Token);
             }
         }
         catch (OperationCanceledException) { }

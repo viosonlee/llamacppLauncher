@@ -42,6 +42,31 @@ public static class StrataPackService
         return vocab;
     }
 
+    /// <summary>
+    /// Prepare the tokenizer directory the Strata HTTP service reads (vocab.json / merges.txt /
+    /// token_type.json / chat_template.jinja) from the GGUF, reusing it per model. Requires the
+    /// Strata source tree (tools/strata_tokenizer.py) and Python 3.10+.
+    /// </summary>
+    public static async Task<string> EnsureTokenizerDirAsync(string serveRoot, string model, string tokenizerDir,
+        string pythonPath = "", Action<string>? progress = null, CancellationToken ct = default)
+    {
+        var marker = Path.Combine(tokenizerDir, "vocab.json");
+        var source = new FileInfo(model);
+        if (File.Exists(marker) && source.Exists && File.GetLastWriteTimeUtc(marker) >= source.LastWriteTimeUtc)
+            return tokenizerDir;
+        var tools = Path.Combine(Path.GetFullPath(serveRoot), "tools");
+        var tool = Path.Combine(tools, "strata_tokenizer.py");
+        if (!File.Exists(tool)) throw new FileNotFoundException("Strata 源码缺少 tools/strata_tokenizer.py，无法准备分词表。", tool);
+        var logPath = Path.Combine(ConfigService.GetManagerRoot(), "logs", "strata-tokenizer-" + Guid.NewGuid().ToString("N") + ".log");
+        var options = new Options(serveRoot, model, pythonPath, DefaultCacheDirectory);
+        var python = await EnsurePythonAsync(options, tools, DefaultCacheDirectory, logPath, progress ?? (_ => { }), ct).ConfigureAwait(false);
+        Directory.CreateDirectory(tokenizerDir);
+        await RunCheckedAsync(PythonStart(python.Executable, ["-u", tool, "--gguf", model, "--out", tokenizerDir], python.GgufRoot),
+            logPath, "tokenizer", progress ?? (_ => { }), ct).ConfigureAwait(false);
+        if (!File.Exists(marker)) throw new IOException("分词表准备失败：" + logPath);
+        return tokenizerDir;
+    }
+
     public static async Task<Result> PrepareAsync(Options options, Action<string>? progress = null, CancellationToken ct = default)
     {
         if (!await Gate.WaitAsync(0, ct).ConfigureAwait(false)) throw new InvalidOperationException("已有一个 pack 准备任务在运行。");

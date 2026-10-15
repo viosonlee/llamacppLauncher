@@ -13,6 +13,8 @@ public partial class App : Application
     {
         base.OnStartup(e);
         ShutdownMode = ShutdownMode.OnExplicitShutdown;
+        // Register plugin backends before any entry point (CLI or GUI) can resolve them.
+        Engines.PluginLoader.RegisterAll();
         if (e.Args.Length > 0)
         {
             AttachConsole(unchecked((uint)-1));

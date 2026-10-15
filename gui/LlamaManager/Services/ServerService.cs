@@ -37,9 +37,10 @@ public static class ServerService
     private static Process? GetProcess(ManagerConfig config, bool embedding)
     {
         var latest = ConfigService.ReadConfig();
-        if (embedding) { config.RunningEmbedding = latest.RunningEmbedding; config.EmbeddingLastPid = latest.EmbeddingLastPid; }
-        else { config.RunningServer = latest.RunningServer; config.LastPid = latest.LastPid; }
-        var session = embedding ? latest.RunningEmbedding : latest.RunningServer;
+        var slot = embedding ? ManagerConfig.SlotEmbedding : ManagerConfig.SlotMain;
+        if (embedding) { config.SetRunning(slot, latest.RunningEmbedding); config.EmbeddingLastPid = latest.EmbeddingLastPid; }
+        else { config.SetRunning(slot, latest.RunningServer); config.LastPid = latest.LastPid; }
+        var session = latest.GetRunning(slot);
         if (session != null)
         {
             var validated = ValidateProcess(session);

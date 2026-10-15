@@ -106,11 +106,13 @@ internal static class UiRegression
                 ((TextBlock)window.FindName("SelectedModelText")).Text = "Sakura-Micro-Bonsai-2-GSQ-RCO.gguf";
                 ((TextBlock)window.FindName("ModelInfoText")).Text = "qwen3 · 64 层 · 原生上下文 32768\n含 TQ1_0 张量；部分引擎的 CUDA 后端不支持此类型，可能回退 CPU。请以加载日志中的 GPU 权重为准。";
                 var logTab = tabs.Items.Count - 1;
-                Program.Check(tabs.Items.Count == 5, $"expected 5 nav pages, found {tabs.Items.Count}");
+                Program.Check(tabs.Items.Count == 6, $"expected 6 nav pages, found {tabs.Items.Count}");
                 Program.Check(((TextBlock)window.FindName("ProcessInfoText")).Text == "进程: 无", "log tab lost process info");
                 Program.Check(window.FindName("LogScrollViewer") is ScrollViewer, "log scroll viewer missing");
                 Program.Check(window.FindName("AutoOpenBrowserCheckBox") != null, "auto-open checkbox missing from advanced page");
-                foreach (var tab in new[] { 0, 1, 2, 3, 4 })
+                Program.Check(window.FindName("EngineBackendBox") != null, "engine backend selector missing");
+                Program.Check(window.FindName("EngineBaseUrlTextBox") != null, "engine base URL field missing");
+                foreach (var tab in new[] { 0, 1, 2, 3, 4, 5 })
                 {
                     tabs.SelectedIndex = tab;
                     content.Measure(new Size(690, 775)); content.Arrange(new Rect(0, 0, 690, 775)); content.UpdateLayout();

@@ -98,43 +98,25 @@ public static class ConfigService
 
     public static void SaveSession(ManagerConfig config, ServerSession? session, bool embedding = false)
     {
-        void Assign(ManagerConfig target)
-        {
-            var started = session == null ? "" : new DateTime(session.StartTimeUtcTicks, DateTimeKind.Utc).ToString("o");
-            if (embedding)
-            {
-                target.RunningEmbedding = session;
-                target.EmbeddingLastPid = session?.ProcessId ?? 0;
-                target.EmbeddingLastStartedAt = started;
-            }
-            else
-            {
-                target.RunningServer = session;
-                target.LastPid = session?.ProcessId ?? 0;
-                target.LastStartedAt = started;
-            }
-        }
-        Store.Update(Assign);
-        Assign(config);
+        var slot = embedding ? ManagerConfig.SlotEmbedding : ManagerConfig.SlotMain;
+        Store.Update(target => target.SetRunning(slot, session));
+        config.SetRunning(slot, session);
     }
 
     public static bool MigrateSession(ManagerConfig config, ServerSession session)
     {
+        var slot = session.Embedding ? ManagerConfig.SlotEmbedding : ManagerConfig.SlotMain;
         var migrated = false;
         Store.Update(latest =>
         {
-            var current = session.Embedding ? latest.RunningEmbedding : latest.RunningServer;
+            // Only migrate when the slot is empty and the recorded PID matches (never overwrite a live session).
+            if (latest.GetRunning(slot) != null) return;
             var pid = session.Embedding ? latest.EmbeddingLastPid : latest.LastPid;
-            if (current != null || pid != session.ProcessId) return;
-            if (session.Embedding) latest.RunningEmbedding = session;
-            else latest.RunningServer = session;
+            if (pid != session.ProcessId) return;
+            latest.SetRunning(slot, session);
             migrated = true;
         });
-        if (migrated)
-        {
-            if (session.Embedding) config.RunningEmbedding = session;
-            else config.RunningServer = session;
-        }
+        if (migrated) config.SetRunning(slot, session);
         return migrated;
     }
 
@@ -146,45 +128,37 @@ public static class ConfigService
     public static bool AdoptSession(ManagerConfig config, ServerSession recorded, ServerSession live)
     {
         if (recorded.Embedding != live.Embedding) return false;
+        var slot = live.Embedding ? ManagerConfig.SlotEmbedding : ManagerConfig.SlotMain;
         var adopted = false;
-        var started = new DateTime(live.StartTimeUtcTicks, DateTimeKind.Utc).ToString("o");
         Store.Update(latest =>
         {
-            var current = live.Embedding ? latest.RunningEmbedding : latest.RunningServer;
-            if (!Equals(current, recorded)) return;
-            if (live.Embedding)
-            {
-                latest.RunningEmbedding = live;
-                latest.EmbeddingLastPid = live.ProcessId;
-                latest.EmbeddingLastStartedAt = started;
-            }
-            else
-            {
-                latest.RunningServer = live;
-                latest.LastPid = live.ProcessId;
-                latest.LastStartedAt = started;
-            }
+            if (!Equals(latest.GetRunning(slot), recorded)) return;
+            latest.SetRunning(slot, live);
             adopted = true;
         });
-        if (adopted)
-        {
-            if (live.Embedding)
-            {
-                config.RunningEmbedding = live;
-                config.EmbeddingLastPid = live.ProcessId;
-                config.EmbeddingLastStartedAt = started;
-            }
-            else
-            {
-                config.RunningServer = live;
-                config.LastPid = live.ProcessId;
-                config.LastStartedAt = started;
-            }
-        }
+        if (adopted) config.SetRunning(slot, live);
         return adopted;
     }
 
     public static void SaveAutostartSetting(bool enabled) => Store.Update(latest => latest.AutoStartEnabled = enabled);
+
+    /// <summary>Persists the default backend without touching sessions or other settings.</summary>
+    public static void SaveActiveBackend(ManagerConfig config, string backendId)
+    {
+        Store.Update(latest => latest.ActiveBackendId = backendId);
+        config.ActiveBackendId = backendId;
+    }
+
+    /// <summary>Persists one backend's settings without touching other backends or live sessions.</summary>
+    public static void SaveEngineSettings(ManagerConfig config, string backendId, EngineSettings settings)
+    {
+        Store.Update(latest =>
+        {
+            latest.Engines[backendId] = settings;
+            Touch(latest);
+        });
+        config.Engines[backendId] = settings;
+    }
 
     public static void SaveStrata(ManagerConfig config)
     {
@@ -194,6 +168,11 @@ public static class ConfigService
             var s = config.Strata;
             var target = latest.Strata;
             target.PackageRoot = s.PackageRoot;
+            target.ServeRoot = s.ServeRoot;
+            target.Host = s.Host;
+            target.ServePort = s.ServePort;
+            target.ReasoningBudgetTokens = s.ReasoningBudgetTokens;
+            target.AnthropicThinking = s.AnthropicThinking;
             target.PackDir = s.PackDir;
             target.ProfilePath = s.ProfilePath;
             target.ModelPath = s.ModelPath;

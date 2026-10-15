@@ -47,10 +47,12 @@ public static class AutostartService
 
     public static async Task EnableAsync(ManagerConfig config)
     {
-        if (!File.Exists(config.ModelPath)) throw new FileNotFoundException("开启自启动前请先选择有效模型。");
+        var backendId = string.IsNullOrWhiteSpace(config.ActiveBackendId) ? "llamacpp" : config.ActiveBackendId;
+        if (backendId == "llamacpp" && !File.Exists(config.ModelPath))
+            throw new FileNotFoundException("开启自启动前请先选择有效模型。");
         var executable = GetExecutablePath();
         using var key = Registry.CurrentUser.CreateSubKey(RunKey, writable: true);
-        key.SetValue(Name, LauncherArguments.Quote(executable) + " --service", RegistryValueKind.String);
+        key.SetValue(Name, LauncherArguments.Quote(executable) + $" --service --backend {backendId}", RegistryValueKind.String);
         await RemoveLegacyAsync();
         config.AutoStartEnabled = true;
         ConfigService.SaveAutostartSetting(true);

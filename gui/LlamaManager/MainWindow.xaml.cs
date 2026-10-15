@@ -2,6 +2,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
+using LlamaManager.Engines;
 using LlamaManager.Models;
 using LlamaManager.Services;
 
@@ -18,6 +19,9 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
     private bool _loaded, _parsingArgs, _refreshing, _serverStarting, _serverStopping, _embeddingStarting, _speedTesting, _selecting, _scanning;
     private int _updateCount, _statusVersion, _strataUpdate;
     private string? _lastLogText;
+
+    /// <summary>The built-in llama.cpp backend, resolved once from the registry.</summary>
+    private static IServerBackend MainBackend => BackendRegistry.ServerById("llamacpp")!;
 
     public MainWindow()
     {
@@ -37,6 +41,7 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
             await RefreshModelsAsync();
             ApplyConfig();
             await ApplyStrataConfigAsync();
+            await ApplyEngineConfigAsync();
             _loaded = true;
             if (recovery != null) MessageBox.Show(recovery, "配置恢复");
             _statusTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };

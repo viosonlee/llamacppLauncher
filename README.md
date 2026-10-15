@@ -3,6 +3,22 @@
 Windows 上的 llama.cpp / Prism 模型启动器，使用 .NET 8 WPF。
 图形界面、命令行和登录自启动共用同一套模型路由、配置和进程管理逻辑。
 
+## 引擎后端（可插拔）
+
+启动器把每个推理引擎抽象为「本地 HTTP 服务」，由统一的后端注册表驱动：
+
+- **llamacpp**（内置）：任意 GGUF 的通用后端，OpenAI 兼容。
+- **strata-upstream**（内置）：Strata 原生 qwen35moe 路径（原地读 GGUF），启动引擎自带的
+  `serve/server.py` HTTP 服务（OpenAI/Anthropic 兼容）。
+- **插件后端**：`plugins/<id>/plugin.json`（`schema:1`）声明如何启动引擎、如何探测就绪、参数表。
+  随包附带 `polystrata` 清单（strata-poly）。插件是独立进程，崩溃不影响启动器，新增引擎无需重编译。
+
+「引擎」页可切换后端、生成参数控件、一键初始化运行环境（`--bootstrap`），并显示可直接复制给
+pi / Claude Code / Codex 的接入地址（`http://127.0.0.1:<port>/v1`）。
+同一个 GPU 上同时只运行一个重负载后端；切换时统一提示。
+
+旧的 Strata pack 页（cyber）已归档，仅作参考。
+
 ## 使用
 
 发布后运行 `dist/LlamaManager.exe`，选择模型目录或单个 GGUF 文件。
@@ -54,6 +70,8 @@ llama.cpp/
 └── llamacppLauncher/
     ├── dist/LlamaManager.exe
     ├── gui/LlamaManager/     # WPF 源码，按参数、模型、运行操作分文件
+    │   ├── Engines/          # 后端抽象、注册表、插件驱动与内置后端
+    │   └── plugins/          # 随包分发的插件清单（plugin.json）
     ├── tests/                # 无测试框架依赖的回归程序
     ├── tools/                # 可选 Sakura 格式转换工具
     ├── docs/                 # 架构、验证和维护说明
@@ -78,8 +96,10 @@ llama.cpp/
 ```
 
 EXE 对应开关：`--start`、`--service`、`--stop`、`--status`、`--open`、
-`--print-preset`、`--enable-autostart`、`--disable-autostart`、`--help`。
+`--print-preset`、`--bootstrap`、`--enable-autostart`、`--disable-autostart`、`--help`。
 模型/端口覆盖使用 `--model PATH --port N`，只影响本次命令。
+`--backend ID` 选择后端（默认取配置的 `ActiveBackendId`，如 `llamacpp`、`strata-upstream`、`polystrata`）。
+`--bootstrap --backend ID` 一键初始化该后端运行环境（Python venv 与依赖等）。
 `--start` 遇到已经运行的实例会保留它；切换需先停止再启动。
 退出码：0 成功；1 错误；2 进程仍在加载，但 90 秒内 API 尚未就绪。
 

@@ -37,6 +37,8 @@ public sealed class ConfigStore(string path)
         var config = JsonSerializer.Deserialize<ManagerConfig>(File.ReadAllText(path))
             ?? throw new InvalidDataException("配置内容为空。");
         config.ModelPresets ??= [];
+        config.Running ??= [];
+        config.Normalize();
         if (config.ModelPath == null || config.Args == null || config.ModelsDirectory == null ||
             config.ModelPresets.Any(p => p.Value == null || p.Value.Args == null) ||
             config.Port is < 1 or > 65535 || config.EmbeddingPort is < 1 or > 65535)

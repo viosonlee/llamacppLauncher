@@ -4,8 +4,41 @@ namespace LlamaManager.Models;
 
 public class ManagerConfig
 {
-    public ServerSession? RunningServer { get; set; }
-    public ServerSession? RunningEmbedding { get; set; }
+    /// <summary>
+    /// Canonical session store, keyed by slot ("main", "embedding"). This is the only
+    /// session structure written to disk. The pre-plugin keys (RunningServer /
+    /// RunningEmbedding / LastPid / ...) are folded in by ConfigStore on read and are
+    /// never written again (migrate-and-delete).
+    /// </summary>
+    [JsonPropertyName("Running")]
+    public Dictionary<string, ServerSession> Running { get; set; } = new();
+
+    /// <summary>The backend the launcher drives by default.</summary>
+    [JsonPropertyName("ActiveBackendId")]
+    public string ActiveBackendId { get; set; } = "llamacpp";
+
+    /// <summary>Per-backend user settings (model, executable, port, free-form parameters).</summary>
+    [JsonPropertyName("Engines")]
+    public Dictionary<string, EngineSettings> Engines { get; set; } = new();
+
+    /// <summary>The main (llama.cpp) session, if any. Computed; never serialized under this name.</summary>
+    [JsonIgnore]
+    public ServerSession? RunningServer => Running.GetValueOrDefault(SlotMain);
+
+    /// <summary>The embedding session, if any. Computed; never serialized under this name.</summary>
+    [JsonIgnore]
+    public ServerSession? RunningEmbedding => Running.GetValueOrDefault(SlotEmbedding);
+
+    public const string SlotMain = "main";
+    public const string SlotEmbedding = "embedding";
+
+    public ServerSession? GetRunning(string slot) => Running.GetValueOrDefault(slot);
+    public void SetRunning(string slot, ServerSession? session)
+    {
+        if (session == null) Running.Remove(slot);
+        else Running[slot] = session;
+    }
+
     [JsonPropertyName("ModelPath")]
     public string ModelPath { get; set; } = string.Empty;
 
@@ -24,11 +57,36 @@ public class ManagerConfig
     [JsonPropertyName("AutoOpenBrowser")]
     public bool AutoOpenBrowser { get; set; } = false;
 
+    /// <summary>Legacy PID-only recovery hint, retained only while no full session exists.
+    /// Read for pre-plugin configs; never written once a canonical session exists.</summary>
     [JsonPropertyName("LastPid")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public int LastPid { get; set; }
 
     [JsonPropertyName("LastStartedAt")]
-    public string LastStartedAt { get; set; } = string.Empty;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? LastStartedAt { get; set; }
+
+    /// <summary>Pre-plugin session key, folded into <see cref="Running"/> on read and never written again.</summary>
+    [JsonPropertyName("RunningServer")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ServerSession? LegacyRunningServer { get; set; }
+
+    /// <summary>Pre-plugin embedding session key, folded into <see cref="Running"/> on read and never written again.</summary>
+    [JsonPropertyName("RunningEmbedding")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ServerSession? LegacyRunningEmbedding { get; set; }
+
+    /// <summary>Folds legacy session keys into <see cref="Running"/> (migrate-and-delete). Idempotent.</summary>
+    public void Normalize()
+    {
+        if (LegacyRunningServer != null) { Running.TryAdd(SlotMain, LegacyRunningServer); LegacyRunningServer = null; }
+        if (LegacyRunningEmbedding != null) { Running.TryAdd(SlotEmbedding, LegacyRunningEmbedding); LegacyRunningEmbedding = null; }
+        // Once a full session exists, the PID-only recovery hints are redundant: drop them so
+        // the next save no longer writes the pre-plugin keys.
+        if (Running.ContainsKey(SlotMain)) { LastPid = 0; LastStartedAt = null; }
+        if (Running.ContainsKey(SlotEmbedding)) { EmbeddingLastPid = 0; EmbeddingLastStartedAt = null; }
+    }
 
     [JsonPropertyName("CreatedAt")]
     public string CreatedAt { get; set; } = string.Empty;
@@ -46,13 +104,35 @@ public class ManagerConfig
     public int EmbeddingPort { get; set; } = 8081;
 
     [JsonPropertyName("EmbeddingLastPid")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public int EmbeddingLastPid { get; set; }
 
     [JsonPropertyName("EmbeddingLastStartedAt")]
-    public string EmbeddingLastStartedAt { get; set; } = string.Empty;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? EmbeddingLastStartedAt { get; set; }
 
     [JsonPropertyName("Strata")]
     public StrataConfig Strata { get; set; } = new();
+}
+
+/// <summary>Per-backend user settings. Model/executable/port are common; parameters are backend-defined.</summary>
+public class EngineSettings
+{
+    [JsonPropertyName("ModelPath")]
+    public string ModelPath { get; set; } = string.Empty;
+
+    [JsonPropertyName("ExecutablePath")]
+    public string ExecutablePath { get; set; } = string.Empty;
+
+    [JsonPropertyName("Port")]
+    public int Port { get; set; }
+
+    [JsonPropertyName("Parameters")]
+    public Dictionary<string, string> Parameters { get; set; } = new();
+
+    [JsonPropertyName("LastStats")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? LastStats { get; set; }
 }
 
 public class StrataConfig
@@ -60,6 +140,26 @@ public class StrataConfig
     /// <summary>Strata 包根目录（包含 engine\strata.exe 的目录）。</summary>
     [JsonPropertyName("PackageRoot")]
     public string PackageRoot { get; set; } = string.Empty;
+
+    /// <summary>Strata 源码根目录（包含 serve\server.py 的目录）；为空时回退到 PackageRoot。</summary>
+    [JsonPropertyName("ServeRoot")]
+    public string ServeRoot { get; set; } = string.Empty;
+
+    /// <summary>服务监听地址；默认仅本机回环。</summary>
+    [JsonPropertyName("Host")]
+    public string Host { get; set; } = "127.0.0.1";
+
+    /// <summary>服务端口（HTTP API 端口）。</summary>
+    [JsonPropertyName("ServePort")]
+    public int ServePort { get; set; } = 8091;
+
+    /// <summary>reasoning 预算（0 = 不限制）。</summary>
+    [JsonPropertyName("ReasoningBudgetTokens")]
+    public int ReasoningBudgetTokens { get; set; }
+
+    /// <summary>Anthropic 请求未显式要求思考时的行为：model | on_request。</summary>
+    [JsonPropertyName("AnthropicThinking")]
+    public string AnthropicThinking { get; set; } = "model";
 
     /// <summary>pack 目录路径（可选；为空时自动探测 root\pack\iq-native 或 root 下的 pack-* 目录）。</summary>
     [JsonPropertyName("PackDir")]

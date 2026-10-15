@@ -70,6 +70,10 @@ internal static class Program
         {
             Console.WriteLine("--fit [on|off] --flash-attn [on|off|auto]"); return 0;
         }
+        if (args.FirstOrDefault() == "--version")
+        {
+            Console.WriteLine("version: 0.0.0-fixture (fake llama-server)"); return 0;
+        }
         if (args.FirstOrDefault() == "--probe-hang") { await Task.Delay(60000); return 0; }
         if (args.FirstOrDefault() == "--probe-output")
         {
@@ -232,6 +236,28 @@ internal static class Program
                 StrataRegression.RunPackServiceAsync(_root));
             await Test("strata: q36 native path selects the engine path, args and output line", () =>
                 StrataRegression.RunQ36Async(_root, _model));
+            await Test("config: legacy sessions migrate into Running and legacy keys are deleted", () =>
+                Run(MigrationRegression.RunMigrateAndDelete));
+            await Test("config: an empty config invents no session", () =>
+                Run(MigrationRegression.RunEmptyConfig));
+            await Test("engines: llama.cpp backend adapts ServerService without changing identity", () =>
+                EnginesRegression.RunLlamaCppAsync(_root, _model));
+            await Test("engines: embedding lifecycle goes through the backend facade", () =>
+                EnginesRegression.RunEmbeddingAsync(_root, _model));
+            await Test("engines: registry resolution and GPU arbitration", () =>
+                Run(EnginesRegression.RunRegistryAndArbiter));
+            await Test("strata backend: launches serve.server with a generated runconfig", () =>
+                StrataBackendRegression.RunLaunchAsync(_root, _model));
+            await Test("strata backend: resolvers report honest problems", () =>
+                Run(() => StrataBackendRegression.RunResolvers(_root)));
+            await Test("plugins: manifest parse, validation and argument templating", () =>
+                Run(() => PluginRegression.RunManifest(_root)));
+            await Test("plugins: discovery rejects built-in id collisions", () =>
+                Run(() => PluginRegression.RunDiscovery(_root)));
+            await Test("compatibility: every backend reports a verdict and estimate", () =>
+                CompatibilityRegression.RunAsync(_root));
+            await Test("CLI: backend routing, help and bootstrap requirements", () =>
+                CliRegression.RunAsync(_root));
             await Test("strata: compatibility roles, native heads, required tensors and MTP structure", () =>
                 Run(StrataCompatibilityRegression.RunFormats));
             await Test("strata: complete GGUF shards, duplicate detection and cancellation", () =>

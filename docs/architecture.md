@@ -1,5 +1,19 @@
 # 架构与维护
 
+## 引擎后端（可插拔）
+
+启动器把每个推理引擎抽象为「本地 HTTP 服务」，用统一的后端接口驱动，GUI、命令行与自启动共用同一注册表。
+
+- `IEngineBackend` 提供 `ProbeAsync`（可用性/版本）、`InspectAsync`（GGUF 兼容性 + 资源估算）与 `StatusAsync`。
+- `IServerBackend` 增加 `BuildLaunch`/`StartAsync`/`StopAsync`/`ReadyAsync`/`ResolvePort`/`HealthUrl`/`OpenWebUi`。
+- 内置后端：`llamacpp`（委托既有 `ServerService`，行为不变）、`strata-upstream`（启动引擎自带的 `serve/server.py` HTTP 服务）。
+- 插件后端：`ProcessPluginBackend` 由 `plugins/<id>/plugin.json` 清单驱动（`schema:1`），只拉起声明的进程、等待 `/health` 或端口；不加载插件代码，因此崩溃被隔离在子进程。内置 `polystrata` 清单。
+- `BackendRegistry` 是唯一后端清单；`PluginLoader` 在启动时扫描 `AppContext.BaseDirectory/plugins`、`<ManagerRoot>/plugins`、`<LlamaCppRoot>/engines`。
+- `EngineArbiter` 集中 GPU 重负载互斥：启动某后端前若另一后端持有 GPU，走统一确认；不再在各处重复冲突检查。
+- `BootstrapService` 一键初始化运行环境（Python venv 与依赖、引擎定位）；依赖清单优先读引擎 `requirements.txt`，缺失时回退内置列表。
+
+`EngineSession` 是会话身份（后端 id + PID + 创建时间 + 可执行路径），与 `ServerSession` 双向映射。会话持久化在 `ManagerConfig.Running` 的槽位中；旧版的 `RunningServer`/`RunningEmbedding` 与 PID 提示在读取时折叠进槽位，保存后删除（迁移即删）。
+
 ## 运行实例
 
 `ManagerConfig` 的 ModelPath/Args/Port 描述下一次启动的选择。

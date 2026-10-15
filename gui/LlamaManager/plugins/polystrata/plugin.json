@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "id": "polystrata",
+  "displayName": "PolyStrata (strata-poly)",
+  "description": "小显存下的 MoE 专家缓存引擎（内置 lookup 猜测与 MTP 草稿块）；通过本地 HTTP 服务接入 agent。",
+  "gpuHeavy": true,
+  "executable": {
+    "windows": "strata-poly.exe",
+    "linux": "strata-poly"
+  },
+  "detect": {
+    "versionArg": ["--version"],
+    "versionRegex": "([0-9]+\\.[0-9]+\\.[0-9]+)"
+  },
+  "launch": {
+    "workingDirectory": "{installDir}",
+    "arguments": ["--model", "{model}", "--port", "{port}", "--max-context", "{context}", "--max-new", "{maxNew}"],
+    "environment": {}
+  },
+  "ready": {
+    "type": "http",
+    "path": "/health",
+    "timeoutSeconds": 180
+  },
+  "parameters": [
+    { "key": "port", "label": "服务端口", "group": "基本", "type": "Integer", "default": "8080", "min": 1, "max": 65535, "tooltip": "HTTP API 端口（OpenAI/Anthropic 兼容）。" },
+    { "key": "context", "label": "上下文", "group": "基本", "type": "Integer", "default": "4096", "min": 256, "max": 1048576 },
+    { "key": "maxNew", "label": "生成长度", "group": "基本", "type": "Integer", "default": "256", "min": 1, "max": 65536 }
+  ],
+  "logs": {
+    "perfRegex": {
+      "prefill": "prefill .* ([0-9.]+) tok/s",
+      "decode": "decode .* ([0-9.]+) tok/s"
+    }
+  },
+  "compatibility": {
+    "driver": "polystrata-matrix"
+  }
+}
