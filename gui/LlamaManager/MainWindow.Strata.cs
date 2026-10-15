@@ -116,7 +116,7 @@ public partial class MainWindow
     private void AppendStrataOutput(string text)
     {
         StrataOutputBox.AppendText(text + "\n");
-        StrataOutputScroll.ScrollToEnd();
+        StrataOutputBox.ScrollToEnd();
     }
 
     private async void StrataRunButton_Click(object sender, RoutedEventArgs e)

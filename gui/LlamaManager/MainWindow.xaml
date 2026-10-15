@@ -117,7 +117,7 @@
                                     <TextBlock Grid.Column="0" Text="{Binding SizeFormatted}" Width="70"
                                                FontSize="11" VerticalAlignment="Center"/>
                                     <Border Grid.Column="1" CornerRadius="3" Padding="4,1" Margin="0,0,6,0"
-                                            BorderBrush="{DynamicResource TextFillColorSecondaryBrush}" BorderThickness="1"
+                                            BorderBrush="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type ListBoxItem}}}" BorderThickness="1"
                                             ToolTip="{Binding Category}" VerticalAlignment="Center">
                                         <TextBlock Text="{Binding ModelTypeDisplay}" FontSize="10"
                                                   />
@@ -530,7 +530,7 @@
                 </Grid>
             </TabItem>
 
-            <!-- Strata: preparation and parameter guidance stay scrollable on small windows. -->
+            <!-- Strata: one scrollable page; the action bar stays pinned. -->
             <TabItem ToolTip="Strata 推理">
                 <TabItem.Header>
                     <ui:SymbolIcon Symbol="Rocket24" FontSize="20"/>
@@ -538,151 +538,146 @@
                 <Grid Margin="12,8">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="2*"/>
-                        <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
-                    <DockPanel Margin="0,0,0,6">
+
+                    <DockPanel Grid.Row="0" Margin="0,0,0,8">
                         <ui:Button x:Name="StrataHelpButton" DockPanel.Dock="Right" Content="参数说明" Click="StrataHelpButton_Click" FontSize="11" Padding="8,3"/>
                         <TextBlock Text="Strata · 新 GGUF 先准备 Pack，再运行推理" FontSize="12" VerticalAlignment="Center" TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
                     </DockPanel>
-                    <TabControl x:Name="StrataSettingsTabs" Grid.Row="1" Margin="0,0,0,6"
-                                Style="{DynamicResource FluentTabControl}" ItemContainerStyle="{DynamicResource FluentTabItem}">
-                        <TabItem Header="模型与 Pack">
-                            <ui:DynamicScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                                <StackPanel Margin="6">
-                                    <StackPanel x:Name="StrataSourcePanel">
-                                        <TextBlock Text="包目录（含 engine 和 tools）" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                        <DockPanel Margin="0,3,0,6">
-                                            <ui:Button DockPanel.Dock="Right" Content="浏览…" Click="StrataRootButton_Click" Margin="6,0,0,0" Padding="8,3"/>
-                                            <ui:TextBox x:Name="StrataRootTextBox" LostFocus="StrataParam_LostFocus" FontSize="11"/>
-                                        </DockPanel>
-                                        <TextBlock Text="所选 GGUF（分片模型选第一片）" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                        <DockPanel Margin="0,3,0,6">
-                                            <ui:Button DockPanel.Dock="Right" Content="浏览…" Click="StrataModelButton_Click" Margin="6,0,0,0" Padding="8,3"/>
-                                            <ui:Button DockPanel.Dock="Right" Content="默认" Click="StrataModelResetButton_Click" Margin="6,0,0,0" Padding="8,3"/>
-                                            <ui:TextBox x:Name="StrataModelTextBox" IsReadOnly="True" FontSize="11"/>
-                                        </DockPanel>
-                                        <TextBlock Text="Python 3.10+（留空自动查找；已有 Pack 推理不需要 Python）" FontSize="11" TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                        <DockPanel Margin="0,3,0,6">
-                                            <ui:Button DockPanel.Dock="Right" Content="选择…" Tag="Python" Click="StrataPathButton_Click" Margin="6,0,0,0" Padding="8,3"/>
-                                            <ui:TextBox x:Name="StrataPythonTextBox" FontSize="11" LostFocus="StrataParam_LostFocus"/>
-                                        </DockPanel>
-                                        <TextBlock Text="Pack 缓存位置（留空使用启动器 data/strata-packs）" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                        <DockPanel Margin="0,3,0,6">
-                                            <ui:Button DockPanel.Dock="Right" Content="选择…" Tag="Cache" Click="StrataPathButton_Click" Margin="6,0,0,0" Padding="8,3"/>
-                                            <ui:TextBox x:Name="StrataCacheTextBox" FontSize="11" LostFocus="StrataParam_LostFocus"/>
-                                        </DockPanel>
-                                    </StackPanel>
-                                    <ui:Button x:Name="StrataGeneratePackButton" Content="为所选 GGUF 一键生成 / 复用 Pack" Click="StrataGeneratePackButton_Click" Padding="8,6" HorizontalAlignment="Left"/>
-                                    <ProgressBar x:Name="StrataPackProgress" Height="3" Margin="0,6,0,0" IsIndeterminate="True" Visibility="Collapsed"/>
-                                    <TextBlock x:Name="StrataPackStatusText" Text="首次缺少依赖时会联网安装到独立 Python 环境；生成完成自动关联 Pack 和初始 Profile。" FontSize="11" TextWrapping="Wrap" Margin="0,5,0,8" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
-                                    <Expander Header="已有 Pack / Profile / MTP 路径" FontSize="11">
-                                        <StackPanel Margin="0,6,0,0">
-                                            <TextBlock Text="Pack：必须对应当前 GGUF" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                            <DockPanel Margin="0,3,0,6">
-                                                <ui:Button DockPanel.Dock="Right" Content="选择…" Tag="Pack" Click="StrataPathButton_Click" Margin="6,0,0,0"/>
-                                                <ui:TextBox x:Name="StrataPackTextBox" FontSize="11" LostFocus="StrataParam_LostFocus"/>
-                                            </DockPanel>
-                                            <TextBlock Text="Profile：专家缓存排序，初始 Profile 可直接运行" TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                            <DockPanel Margin="0,3,0,6">
-                                                <ui:Button DockPanel.Dock="Right" Content="选择…" Tag="Profile" Click="StrataPathButton_Click" Margin="6,0,0,0"/>
-                                                <ui:TextBox x:Name="StrataProfileTextBox" FontSize="11" LostFocus="StrataParam_LostFocus"/>
-                                            </DockPanel>
-                                            <TextBlock Text="MTP：可选草稿目录，需另行准备；不是另一个完整 GGUF" TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                            <DockPanel Margin="0,3,0,6">
-                                                <ui:Button DockPanel.Dock="Right" Content="选择…" Tag="Mtp" Click="StrataPathButton_Click" Margin="6,0,0,0"/>
-                                                <ui:TextBox x:Name="StrataMtpTextBox" FontSize="11" LostFocus="StrataParam_LostFocus"/>
-                                            </DockPanel>
-                                        </StackPanel>
-                                    </Expander>
-                                </StackPanel>
-                            </ui:DynamicScrollViewer>
-                        </TabItem>
-                        <TabItem Header="运行参数">
-                            <ui:DynamicScrollViewer x:Name="StrataParameterScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                                <StackPanel Margin="6">
-                                    <WrapPanel Margin="0,0,0,6">
-                                        <ui:Button x:Name="StrataRecommendedButton" Content="6GB 起步" Tag="6gb" Click="StrataRecommendedButton_Click" Padding="8,4" Margin="0,0,6,4"/>
-                                        <ui:Button Content="6GB / 24GB RAM" Tag="24gb" Click="StrataRecommendedButton_Click" Padding="8,4" Margin="0,0,0,4"/>
-                                    </WrapPanel>
-                                    <TextBlock Text="推荐值是起始配置，保留已选择的模型和 MTP 开关。推理与 llama-server 共享显存。" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,8" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                    <Grid>
-                                        <Grid.ColumnDefinitions><ColumnDefinition Width="100"/><ColumnDefinition Width="82"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                                        <Grid.RowDefinitions>
-                                            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
-                                            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
-                                            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
-                                        </Grid.RowDefinitions>
-                                        <TextBlock Text="显存预留 MiB" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                        <ui:TextBox x:Name="StrataReserveBox" Grid.Column="1" Margin="0,0,8,6" LostFocus="StrataParam_LostFocus" ToolTip="--vram-reserve-mib；6GB 从 800 起步，500 可增加专家缓存；越小越容易挤占 KV 和桌面空间。"/>
-                                        <TextBlock Grid.Column="2" Text="6GB 从 800 起步；降低可增加缓存，不等于一定更快。" TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                        <TextBlock Grid.Row="1" Text="上下文 tokens" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                        <ui:TextBox x:Name="StrataContextBox" Grid.Row="1" Grid.Column="1" Margin="0,0,8,6" LostFocus="StrataParam_LostFocus" ToolTip="--max-context；建议 4096，包含输入和输出。增大会占用更多 KV 显存。"/>
-                                        <TextBlock Grid.Row="1" Grid.Column="2" Text="建议 4096；必须容纳提示词 + 最大生成长度。" TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                        <TextBlock Grid.Row="2" Text="最大生成" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                        <ui:TextBox x:Name="StrataMaxNewBox" Grid.Row="2" Grid.Column="1" Margin="0,0,8,6" LostFocus="StrataParam_LostFocus" ToolTip="--max-new；首次 128，长回答可改 256/512。"/>
-                                        <TextBlock Grid.Row="2" Grid.Column="2" Text="首次 128；长回答可调 256/512，不能超过剩余上下文。" TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                        <TextBlock Grid.Row="3" Text="Prefill 分块" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                        <ui:TextBox x:Name="StrataPrefillBox" Grid.Row="3" Grid.Column="1" Margin="0,0,8,6" LostFocus="StrataParam_LostFocus" ToolTip="--prefill；建议 2048，临时显存不足时降至 1024/512。不是上下文总长度。"/>
-                                        <TextBlock Grid.Row="3" Grid.Column="2" Text="建议 2048；临时显存不足时降低，不是上下文总长度。" TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                        <TextBlock Grid.Row="4" Text="KV 精度" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                        <ComboBox Style="{StaticResource FluentComboBox}" x:Name="StrataKvBox" Grid.Row="4" Grid.Column="1" Margin="0,0,8,6" SelectionChanged="StrataKvBox_SelectionChanged" ToolTip="建议 int8；fp16 占用更多，k8v4/q4_0 更省但有不同的量化误差，不保证逐位相同。"/>
-                                        <TextBlock Grid.Row="4" Grid.Column="2" Text="建议 int8；fp16 更占显存，k8v4/q4_0 更省。" TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                        <TextBlock Grid.Row="5" Text="CPU 池线程" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                        <ui:TextBox x:Name="StrataWorkersBox" Grid.Row="5" Grid.Column="1" Margin="0,0,8,6" LostFocus="StrataParam_LostFocus" ToolTip="--pool-workers；0 自动；8 核 CPU 可从 6 起步，越多不一定越快。"/>
-                                        <TextBlock Grid.Row="5" Grid.Column="2" Text="0 自动；8 核 CPU 可从 6 起步，线程越多不一定越快。" TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                        <TextBlock Grid.Row="6" Text="线程亲和" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                        <ComboBox Style="{StaticResource FluentComboBox}" x:Name="StrataAffinityBox" Grid.Row="6" Grid.Column="1" Margin="0,0,8,6" SelectionChanged="StrataKvBox_SelectionChanged" ToolTip="auto 自动选择，all 全部物理核心，p-cores 用于有性能核/能效核的 CPU。"/>
-                                        <TextBlock Grid.Row="6" Grid.Column="2" Text="auto 通用；all 使用物理核心；p-cores 针对混合架构 CPU。" TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                        <TextBlock Grid.Row="7" Text="Spec 窗口" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                        <ui:TextBox x:Name="StrataSpecBox" Grid.Row="7" Grid.Column="1" Margin="0,0,8,6" LostFocus="StrataParam_LostFocus" ToolTip="2-8；建议 2。MTP 开启时 spec 2 最多起草 1 个，spec 4 最多 3 个。无 MTP 时仍需 native 验证窗口。"/>
-                                        <TextBlock Grid.Row="7" Grid.Column="2" Text="从 2 起步；MTP 可尝试 4，看吞吐而不只看接受率。" TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                        <TextBlock Grid.Row="8" Text="锁页 RAM GiB" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                        <ui:TextBox x:Name="StrataArenaPinBox" Grid.Row="8" Grid.Column="1" Margin="0,0,8,6" LostFocus="StrataParam_LostFocus" ToolTip="STRATA_ARENA_PIN_GIB；主机内存，不是显存。0 自动，24GB RAM 笔记本可从 12 起步。"/>
-                                        <TextBlock Grid.Row="8" Grid.Column="2" Text="0 自动；24GB RAM 可从 12 起步。这是主机内存，不是显存。" TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                    </Grid>
-                                    <WrapPanel Margin="0,6,0,0">
-                                        <ui:ToggleSwitch x:Name="StrataMtpCheckBox" Content="启用 MTP 草稿" Checked="StrataMtp_Changed" Unchecked="StrataMtp_Changed" Margin="0,0,16,6"/>
-                                        <ui:ToggleSwitch x:Name="StrataMtpPlainCheckBox" Content="Plain RMSNorm（APEX / Qwen）" Checked="StrataMtp_Changed" Unchecked="StrataMtp_Changed" Margin="0,0,0,6"/>
-                                    </WrapPanel>
-                                    <TextBlock Text="MTP 需选择 runtime 目录（dense.bin / dense.txt / experts.bin）。无草稿先关闭；跨模型草稿的接受率和收益需实测。生成 Pack 不会自动生成 MTP。" FontSize="11" TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                </StackPanel>
-                            </ui:DynamicScrollViewer>
-                        </TabItem>
-                    </TabControl>
-                    <ui:TextBox x:Name="StrataPromptTextBox" Grid.Row="2" AcceptsReturn="True" TextWrapping="Wrap"
-                             VerticalScrollBarVisibility="Auto" Height="65" FontSize="11" Margin="0,0,0,6"
-                             LostFocus="StrataPromptTextBox_LostFocus" ToolTip="原始提示词；当前不自动套用聊天模板，可粘贴模型要求的完整模板。"/>
-                    <Grid Grid.Row="3" Margin="0,4,0,0">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="*"/>
-                        </Grid.RowDefinitions>
-                        <TextBlock Grid.Row="0" x:Name="StrataStatsText" Text="" FontSize="11" FontFamily="Consolas"
-                                   Foreground="{DynamicResource SystemFillColorSuccessBrush}" TextWrapping="Wrap" Margin="0,0,0,4"/>
-                        <ui:DynamicScrollViewer Grid.Row="1" x:Name="StrataOutputScroll" VerticalScrollBarVisibility="Auto">
-                            <ui:TextBox x:Name="StrataOutputBox" IsReadOnly="True"
-                                     Background="Transparent" BorderThickness="0"
-                                     FontFamily="Consolas" FontSize="11"
-                                     TextWrapping="Wrap" AcceptsReturn="True"
-                                     Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                        </ui:DynamicScrollViewer>
-                    </Grid>
 
-                    <Grid Grid.Row="4" Margin="0,8,0,0">
+                    <ui:DynamicScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                        <StackPanel Margin="0,0,10,0">
+                            <!-- Section: 模型与 Pack -->
+                            <TextBlock Text="模型与 Pack" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,0,8"/>
+                            <StackPanel x:Name="StrataSourcePanel">
+                                <TextBlock Text="包目录（含 engine 和 tools）" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                <DockPanel Margin="0,3,0,6">
+                                    <ui:Button DockPanel.Dock="Right" Content="浏览…" Click="StrataRootButton_Click" Margin="6,0,0,0" Padding="8,3"/>
+                                    <ui:TextBox x:Name="StrataRootTextBox" LostFocus="StrataParam_LostFocus" FontSize="11"/>
+                                </DockPanel>
+                                <TextBlock Text="所选 GGUF（分片模型选第一片）" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                <DockPanel Margin="0,3,0,6">
+                                    <ui:Button DockPanel.Dock="Right" Content="浏览…" Click="StrataModelButton_Click" Margin="6,0,0,0" Padding="8,3"/>
+                                    <ui:Button DockPanel.Dock="Right" Content="默认" Click="StrataModelResetButton_Click" Margin="6,0,0,0" Padding="8,3"/>
+                                    <ui:TextBox x:Name="StrataModelTextBox" IsReadOnly="True" FontSize="11"/>
+                                </DockPanel>
+                                <TextBlock Text="Python 3.10+（留空自动查找；已有 Pack 推理不需要 Python）" FontSize="11" TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                <DockPanel Margin="0,3,0,6">
+                                    <ui:Button DockPanel.Dock="Right" Content="选择…" Tag="Python" Click="StrataPathButton_Click" Margin="6,0,0,0" Padding="8,3"/>
+                                    <ui:TextBox x:Name="StrataPythonTextBox" FontSize="11" LostFocus="StrataParam_LostFocus"/>
+                                </DockPanel>
+                                <TextBlock Text="Pack 缓存位置（留空使用启动器 data/strata-packs）" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                <DockPanel Margin="0,3,0,6">
+                                    <ui:Button DockPanel.Dock="Right" Content="选择…" Tag="Cache" Click="StrataPathButton_Click" Margin="6,0,0,0" Padding="8,3"/>
+                                    <ui:TextBox x:Name="StrataCacheTextBox" FontSize="11" LostFocus="StrataParam_LostFocus"/>
+                                </DockPanel>
+                            </StackPanel>
+                            <ui:Button x:Name="StrataGeneratePackButton" Content="为所选 GGUF 一键生成 / 复用 Pack" Click="StrataGeneratePackButton_Click" Padding="8,6" HorizontalAlignment="Left"/>
+                            <ProgressBar x:Name="StrataPackProgress" Height="3" Margin="0,6,0,0" IsIndeterminate="True" Visibility="Collapsed"/>
+                            <TextBlock x:Name="StrataPackStatusText" Text="首次缺少依赖时会联网安装到独立 Python 环境；生成完成自动关联 Pack 和初始 Profile。" FontSize="11" TextWrapping="Wrap" Margin="0,5,0,8" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                            <Expander Header="已有 Pack / Profile / MTP 路径" FontSize="11">
+                                <StackPanel Margin="0,6,0,0">
+                                    <TextBlock Text="Pack：必须对应当前 GGUF" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                    <DockPanel Margin="0,3,0,6">
+                                        <ui:Button DockPanel.Dock="Right" Content="选择…" Tag="Pack" Click="StrataPathButton_Click" Margin="6,0,0,0"/>
+                                        <ui:TextBox x:Name="StrataPackTextBox" FontSize="11" LostFocus="StrataParam_LostFocus"/>
+                                    </DockPanel>
+                                    <TextBlock Text="Profile：专家缓存排序，初始 Profile 可直接运行" TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                    <DockPanel Margin="0,3,0,6">
+                                        <ui:Button DockPanel.Dock="Right" Content="选择…" Tag="Profile" Click="StrataPathButton_Click" Margin="6,0,0,0"/>
+                                        <ui:TextBox x:Name="StrataProfileTextBox" FontSize="11" LostFocus="StrataParam_LostFocus"/>
+                                    </DockPanel>
+                                    <TextBlock Text="MTP：可选草稿目录，需另行准备；不是另一个完整 GGUF" TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                    <DockPanel Margin="0,3,0,6">
+                                        <ui:Button DockPanel.Dock="Right" Content="选择…" Tag="Mtp" Click="StrataPathButton_Click" Margin="6,0,0,0"/>
+                                        <ui:TextBox x:Name="StrataMtpTextBox" FontSize="11" LostFocus="StrataParam_LostFocus"/>
+                                    </DockPanel>
+                                </StackPanel>
+                            </Expander>
+
+                            <!-- Section: 运行参数 -->
+                            <TextBlock Text="运行参数" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,18,0,8"/>
+                            <WrapPanel Margin="0,0,0,6">
+                                <ui:Button x:Name="StrataRecommendedButton" Content="6GB 起步" Tag="6gb" Click="StrataRecommendedButton_Click" Padding="8,4" Margin="0,0,6,4"/>
+                                <ui:Button Content="6GB / 24GB RAM" Tag="24gb" Click="StrataRecommendedButton_Click" Padding="8,4" Margin="0,0,0,4"/>
+                            </WrapPanel>
+                            <TextBlock Text="推荐值是起始配置，保留已选择的模型和 MTP 开关。推理与 llama-server 共享显存。" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,8" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                            <Grid>
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="100"/><ColumnDefinition Width="82"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                <TextBlock Text="显存预留 MiB" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                <ui:TextBox x:Name="StrataReserveBox" Grid.Column="1" Margin="0,0,8,6" LostFocus="StrataParam_LostFocus" ToolTip="--vram-reserve-mib；6GB 从 800 起步，500 可增加专家缓存；越小越容易挤占 KV 和桌面空间。"/>
+                                <TextBlock Grid.Column="2" Text="6GB 从 800 起步；降低可增加缓存，不等于一定更快。" TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                <TextBlock Grid.Row="1" Text="上下文 tokens" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                <ui:TextBox x:Name="StrataContextBox" Grid.Row="1" Grid.Column="1" Margin="0,0,8,6" LostFocus="StrataParam_LostFocus" ToolTip="--max-context；建议 4096，包含输入和输出。增大会占用更多 KV 显存。"/>
+                                <TextBlock Grid.Row="1" Grid.Column="2" Text="建议 4096；必须容纳提示词 + 最大生成长度。" TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                <TextBlock Grid.Row="2" Text="最大生成" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                <ui:TextBox x:Name="StrataMaxNewBox" Grid.Row="2" Grid.Column="1" Margin="0,0,8,6" LostFocus="StrataParam_LostFocus" ToolTip="--max-new；首次 128，长回答可改 256/512。"/>
+                                <TextBlock Grid.Row="2" Grid.Column="2" Text="首次 128；长回答可调 256/512，不能超过剩余上下文。" TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                <TextBlock Grid.Row="3" Text="Prefill 分块" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                <ui:TextBox x:Name="StrataPrefillBox" Grid.Row="3" Grid.Column="1" Margin="0,0,8,6" LostFocus="StrataParam_LostFocus" ToolTip="--prefill；建议 2048，临时显存不足时降至 1024/512。不是上下文总长度。"/>
+                                <TextBlock Grid.Row="3" Grid.Column="2" Text="建议 2048；临时显存不足时降低，不是上下文总长度。" TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                <TextBlock Grid.Row="4" Text="KV 精度" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                <ComboBox Style="{StaticResource FluentComboBox}" x:Name="StrataKvBox" Grid.Row="4" Grid.Column="1" Margin="0,0,8,6" SelectionChanged="StrataKvBox_SelectionChanged" ToolTip="建议 int8；fp16 占用更多，k8v4/q4_0 更省但有不同的量化误差，不保证逐位相同。"/>
+                                <TextBlock Grid.Row="4" Grid.Column="2" Text="建议 int8；fp16 更占显存，k8v4/q4_0 更省。" TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                <TextBlock Grid.Row="5" Text="CPU 池线程" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                <ui:TextBox x:Name="StrataWorkersBox" Grid.Row="5" Grid.Column="1" Margin="0,0,8,6" LostFocus="StrataParam_LostFocus" ToolTip="--pool-workers；0 自动；8 核 CPU 可从 6 起步，越多不一定越快。"/>
+                                <TextBlock Grid.Row="5" Grid.Column="2" Text="0 自动；8 核 CPU 可从 6 起步，线程越多不一定越快。" TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                <TextBlock Grid.Row="6" Text="线程亲和" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                <ComboBox Style="{StaticResource FluentComboBox}" x:Name="StrataAffinityBox" Grid.Row="6" Grid.Column="1" Margin="0,0,8,6" SelectionChanged="StrataKvBox_SelectionChanged" ToolTip="auto 自动选择，all 全部物理核心，p-cores 用于有性能核/能效核的 CPU。"/>
+                                <TextBlock Grid.Row="6" Grid.Column="2" Text="auto 通用；all 使用物理核心；p-cores 针对混合架构 CPU。" TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                <TextBlock Grid.Row="7" Text="Spec 窗口" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                <ui:TextBox x:Name="StrataSpecBox" Grid.Row="7" Grid.Column="1" Margin="0,0,8,6" LostFocus="StrataParam_LostFocus" ToolTip="2-8；建议 2。MTP 开启时 spec 2 最多起草 1 个，spec 4 最多 3 个。无 MTP 时仍需 native 验证窗口。"/>
+                                <TextBlock Grid.Row="7" Grid.Column="2" Text="从 2 起步；MTP 可尝试 4，看吞吐而不只看接受率。" TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                <TextBlock Grid.Row="8" Text="锁页 RAM GiB" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                <ui:TextBox x:Name="StrataArenaPinBox" Grid.Row="8" Grid.Column="1" Margin="0,0,8,6" LostFocus="StrataParam_LostFocus" ToolTip="STRATA_ARENA_PIN_GIB；主机内存，不是显存。0 自动，24GB RAM 笔记本可从 12 起步。"/>
+                                <TextBlock Grid.Row="8" Grid.Column="2" Text="0 自动；24GB RAM 可从 12 起步。这是主机内存，不是显存。" TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                            </Grid>
+                            <WrapPanel Margin="0,6,0,0">
+                                <ui:ToggleSwitch x:Name="StrataMtpCheckBox" Content="启用 MTP 草稿" Checked="StrataMtp_Changed" Unchecked="StrataMtp_Changed" Margin="0,0,16,6"/>
+                                <ui:ToggleSwitch x:Name="StrataMtpPlainCheckBox" Content="Plain RMSNorm（APEX / Qwen）" Checked="StrataMtp_Changed" Unchecked="StrataMtp_Changed" Margin="0,0,0,6"/>
+                            </WrapPanel>
+                            <TextBlock Text="MTP 需选择 runtime 目录（dense.bin / dense.txt / experts.bin）。无草稿先关闭；跨模型草稿的接受率和收益需实测。生成 Pack 不会自动生成 MTP。" FontSize="11" TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+
+                            <!-- Section: 提示词与输出 -->
+                            <TextBlock Text="提示词" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,18,0,6"/>
+                            <ui:TextBox x:Name="StrataPromptTextBox" AcceptsReturn="True" TextWrapping="Wrap"
+                                     VerticalScrollBarVisibility="Auto" MinHeight="84" MaxHeight="200" FontSize="11"
+                                     LostFocus="StrataPromptTextBox_LostFocus" ToolTip="原始提示词；当前不自动套用聊天模板，可粘贴模型要求的完整模板。"/>
+
+                            <TextBlock x:Name="StrataStatsText" Text="" FontSize="11" FontFamily="Consolas"
+                                       Foreground="{DynamicResource SystemFillColorSuccessBrush}" TextWrapping="Wrap" Margin="0,16,0,4"/>
+                            <Border CornerRadius="6" Padding="8" MinHeight="200" MaxHeight="360"
+                                    Background="{DynamicResource CardBackgroundFillColorSecondaryBrush}"
+                                    BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                                <ui:TextBox x:Name="StrataOutputBox" IsReadOnly="True"
+                                         Background="Transparent" BorderThickness="0"
+                                         FontFamily="Consolas" FontSize="11"
+                                         TextWrapping="Wrap" AcceptsReturn="True"
+                                         VerticalScrollBarVisibility="Auto"
+                                         Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                            </Border>
+                        </StackPanel>
+                    </ui:DynamicScrollViewer>
+
+                    <Grid Grid.Row="2" Margin="0,8,0,0" HorizontalAlignment="Left" Grid.IsSharedSizeScope="True">
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto" SharedSizeGroup="StrataActions"/>
+                            <ColumnDefinition Width="Auto" SharedSizeGroup="StrataActions"/>
+                            <ColumnDefinition Width="Auto" SharedSizeGroup="StrataActions"/>
                         </Grid.ColumnDefinitions>
                         <ui:Button Grid.Column="0" x:Name="StrataRunButton" Appearance="Primary" Content="运行推理" Icon="{ui:SymbolIcon Symbol=Play24}" Click="StrataRunButton_Click"
-                                HorizontalContentAlignment="Center" Margin="0,0,4,0" Padding="8,8" FontSize="13" FontWeight="SemiBold"/>
+                                HorizontalContentAlignment="Center" Margin="0,0,8,0" Padding="16,8" FontSize="13" FontWeight="SemiBold"/>
                         <ui:Button Grid.Column="1" x:Name="StrataStopButton" Content="停止" Icon="{ui:SymbolIcon Symbol=Stop24}" Click="StrataStopButton_Click"
-                                HorizontalContentAlignment="Center" Margin="4,0,4,0" Padding="8,8" FontSize="13" IsEnabled="False"/>
+                                HorizontalContentAlignment="Center" Margin="0,0,8,0" Padding="16,8" FontSize="13" IsEnabled="False"/>
                         <ui:Button Grid.Column="2" x:Name="StrataOpenLogButton" Content="打开日志" Icon="{ui:SymbolIcon Symbol=DocumentText24}" Click="StrataOpenLogButton_Click"
-                                HorizontalContentAlignment="Center" Padding="8,8" FontSize="13" IsEnabled="False"/>
+                                HorizontalContentAlignment="Center" Padding="16,8" FontSize="13" IsEnabled="False"/>
                     </Grid>
                 </Grid>
             </TabItem>
