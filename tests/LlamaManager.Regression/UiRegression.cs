@@ -119,7 +119,7 @@ internal static class UiRegression
                     var visual = new DrawingVisual();
                     using (var context = visual.RenderOpen())
                     {
-                        context.DrawRectangle(window.Background, null, new Rect(0, 0, 690, 775));
+                        context.DrawRectangle(window.Background ?? (Brush)app.FindResource("ApplicationBackgroundBrush"), null, new Rect(0, 0, 690, 775));
                         context.DrawImage(bitmap, new Rect(0, 0, 690, 775));
                     }
                     var composited = new RenderTargetBitmap(690, 775, 96, 96, PixelFormats.Pbgra32);

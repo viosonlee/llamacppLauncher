@@ -34,7 +34,7 @@ public partial class MainWindow
             var running = session != null && process?.HasExited == false;
             var ready = running && readyTask.Result;
             var busy = _serverStarting || _serverStopping;
-            var brush = (Brush)FindResource(ready ? "SuccessBrush" : running || busy ? "WarningBrush" : "ErrorBrush");
+            var brush = (Brush)FindResource(ready ? "SystemFillColorSuccessBrush" : running || busy ? "SystemFillColorCautionBrush" : "SystemFillColorCriticalBrush");
             StatusDot.Fill = brush;
             StatusText.Text = _serverStopping ? "正在停止…" : running ? ready ? "服务运行中" : "模型加载中…" : busy ? "正在启动…" : "已停止";
             ActionStatusText.Text = _strataRunning || _strataStopping
@@ -42,7 +42,7 @@ public partial class MainWindow
                 : session != null && running
                     ? $"{Path.GetFileName(session.ModelPath)} · PID {session.ProcessId}"
                     : "选择模型后启动服务";
-            ActionStatusText.Foreground = (Brush)FindResource(ready && !(_strataRunning || _strataStopping) ? "SuccessBrush" : "TextSecondaryBrush");
+            ActionStatusText.Foreground = (Brush)FindResource(ready && !(_strataRunning || _strataStopping) ? "SystemFillColorSuccessBrush" : "TextFillColorSecondaryBrush");
             ActionEndpointText.Text = session != null && running ? $"http://127.0.0.1:{session.Port}" : "未监听";
             ApiStatusBadge.Text = ready ? "API: 就绪" : running ? "API: 加载中" : "API: 离线";
             ApiStatusBadge.Foreground = brush;
@@ -61,7 +61,7 @@ public partial class MainWindow
                 ? "Strata 正在运行，无法测速"
                 : "实测推理速度：首Token延迟(TTFT) 与解码速度(tok/s)";
             LiveSpeedText.Text = running ? status.Text : "";
-            LiveSpeedText.Foreground = (Brush)FindResource(status.IsActive ? "AccentBrush" : "SuccessBrush");
+            LiveSpeedText.Foreground = (Brush)FindResource(status.IsActive ? "AccentFillColorDefaultBrush" : "SystemFillColorSuccessBrush");
             ProcessInfoText.Text = running
                 ? $"{Path.GetFileName(Path.GetDirectoryName(session!.EnginePath))} · PID {session.ProcessId} · {LogService.GetGpuSummary(session)}" : "进程: 无";
             var cuda = cudaTask.Result;
@@ -70,7 +70,7 @@ public partial class MainWindow
             PortText.Text = session != null && running ? $":{session.Port}" : $":{_config.Port}";
             EmbeddingStatusText.Text = embeddingSession == null ? "嵌入: 未启动" :
                 $"嵌入: {(embeddingReadyTask.Result ? "就绪" : "加载中")} · {embeddingSession.Port}";
-            EmbeddingStatusDot.Fill = (Brush)FindResource(embeddingSession == null ? "TextSecondaryBrush" : embeddingReadyTask.Result ? "SuccessBrush" : "WarningBrush");
+            EmbeddingStatusDot.Fill = (Brush)FindResource(embeddingSession == null ? "TextFillColorSecondaryBrush" : embeddingReadyTask.Result ? "SystemFillColorSuccessBrush" : "SystemFillColorCautionBrush");
             EmbeddingToggleButton.Content = _embeddingStarting ? "终止启动" : embeddingSession == null ? "启动" : "停止";
             AutostartStatusText.Text = autostartTask.Result.Text;
             AutostartButton.Content = autostartTask.Result.Enabled ? "关闭自启" : "开启自启";

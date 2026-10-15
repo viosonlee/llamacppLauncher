@@ -127,7 +127,7 @@ public partial class MainWindow
         else
         {
             DraftModelBox.ToolTip = "警告：草稿模型文件不存在，启动时将报错。";
-            DraftModelBox.BorderBrush = Brushes.IndianRed;
+            DraftModelBox.BorderBrush = (Brush)FindResource("SystemFillColorCriticalBrush");
         }
     }
 

@@ -10,7 +10,7 @@ or searching configuration, documentation, literals and logs.
 ## Build and verify
 
 Requires Windows x64 and .NET 8 SDK; project targets `net8.0-windows` with WPF.
-Resources are defined in `gui/LlamaManager/Styles.xaml` and merged by App.xaml.
+Resources are defined in `gui/LlamaManager/Brushes.xaml` and merged by App.xaml.
 
 ```powershell
 dotnet build LlamaManager.sln -c Release

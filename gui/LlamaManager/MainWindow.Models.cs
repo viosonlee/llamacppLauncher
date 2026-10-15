@@ -13,6 +13,7 @@ public partial class MainWindow
         if (_scanning || _selecting) return;
         _scanning = true;
         ModelCountText.Text = "正在扫描模型…";
+        EmptyModelsHint.Visibility = Visibility.Collapsed;
         try
         {
             var directory = string.IsNullOrEmpty(_config.ModelsDirectory) ? Path.Combine(ConfigService.GetRoot(), "models") : _config.ModelsDirectory;
@@ -40,6 +41,7 @@ public partial class MainWindow
                 ModelListBox.ItemsSource = _models;
                 ModelListBox.SelectedItem = _models.FirstOrDefault(m => PathIdentity.Equals(m.FullName, _config.ModelPath));
                 ModelCountText.Text = $"共 {_models.Count} 个模型";
+                EmptyModelsHint.Visibility = _models.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
             }
             finally { _selecting = false; }
         }
