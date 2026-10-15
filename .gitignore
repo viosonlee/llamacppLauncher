@@ -35,4 +35,7 @@ llama-manager.config.json*
 # Caches and local artifacts
 __pycache__/
 .idea/
+.memory/
+*.orig
+*.rej
 *.lnk
