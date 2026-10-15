@@ -24,6 +24,24 @@ public static class StrataPackService
 
     public static string DefaultCacheDirectory => Path.Combine(ConfigService.GetManagerRoot(), "data", "strata-packs");
 
+    /// <summary>为 q36 原生路径导出 vocab_bytes.tsv（token id → 字节）；同一模型复用同一目录。</summary>
+    public static async Task<string> EnsureVocabAsync(Options options, string model, Action<string>? progress = null, CancellationToken ct = default)
+    {
+        var vocab = StrataService.Q36VocabPath(model);
+        var dir = Path.GetDirectoryName(vocab)!;
+        var info = new FileInfo(vocab);
+        var source = new FileInfo(model);
+        if (info.Exists && info.Length > 0 && source.Exists && info.LastWriteTimeUtc >= source.LastWriteTimeUtc) return vocab;
+        Directory.CreateDirectory(dir);
+        var logPath = Path.Combine(ConfigService.GetManagerRoot(), "logs", "strata-q36-vocab-" + Guid.NewGuid().ToString("N") + ".log");
+        var python = await EnsurePythonAsync(options, Path.Combine(Path.GetFullPath(options.PackageRoot), "tools"), DefaultCacheDirectory, logPath, progress ?? (_ => { }), ct).ConfigureAwait(false);
+        await RunCheckedAsync(PythonStart(python.Executable, ["-u", "-c", ExportVocab,
+            Path.Combine(Path.GetFullPath(options.PackageRoot), "tools"), model, vocab], python.GgufRoot),
+            logPath, "vocab", progress ?? (_ => { }), ct).ConfigureAwait(false);
+        if (!File.Exists(vocab)) throw new IOException("分词表导出失败：" + logPath);
+        return vocab;
+    }
+
     public static async Task<Result> PrepareAsync(Options options, Action<string>? progress = null, CancellationToken ct = default)
     {
         if (!await Gate.WaitAsync(0, ct).ConfigureAwait(false)) throw new InvalidOperationException("已有一个 pack 准备任务在运行。");

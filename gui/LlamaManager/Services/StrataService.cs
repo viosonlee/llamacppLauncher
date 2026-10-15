@@ -41,6 +41,45 @@ public static class StrataService
         return null;
     }
 
+    /// <summary>引擎是否带原生 qwen35moe 家族路径（上游 0.1.44+ 的 `--families`）。旧 cyber-on-strata 引擎没有该旗标。</summary>
+    public static bool EngineSupportsQwen35(string strataExe)
+    {
+        try
+        {
+            var start = CaptureStart(strataExe);
+            start.ArgumentList.Add("--families");
+            using var process = Process.Start(start);
+            if (process == null) return false;
+            var stdout = process.StandardOutput.ReadToEnd();
+            process.WaitForExit(5000);
+            return process.ExitCode == 0 && stdout.Contains("qwen35moe", StringComparison.Ordinal);
+        }
+        catch (Exception ex) when (ex is IOException or System.ComponentModel.Win32Exception or InvalidOperationException) { return false; }
+    }
+
+    /// <summary>q36 分词表的稳定缓存路径（按归一化模型路径的 SHA-256 前 16 位）。</summary>
+    public static string Q36VocabPath(string model)
+    {
+        var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            Encoding.UTF8.GetBytes(PathIdentity.Normalize(model))))[..16];
+        return Path.Combine(ConfigService.GetManagerRoot(), "data", "strata-q36", hash, "vocab_bytes.tsv");
+    }
+
+    /// <summary>q36 原生路径只需要 engine\strata.exe 与分词器，不需要 pack/profile。</summary>
+    public static EnginePaths ResolveQ36Paths(ManagerConfig config)
+    {
+        var root = config.Strata.PackageRoot;
+        if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
+            throw new DirectoryNotFoundException("未找到 Strata 包目录，请先在 Strata 面板中选择。");
+        root = Path.GetFullPath(root);
+        var engineDir = Path.Combine(root, "engine");
+        var strata = Path.Combine(engineDir, "strata.exe");
+        var tokenize = Path.Combine(engineDir, "tokenize", "llama-tokenize.exe");
+        if (!File.Exists(strata)) throw new FileNotFoundException("未找到 strata.exe。", strata);
+        if (!File.Exists(tokenize)) throw new FileNotFoundException("未找到 llama-tokenize.exe。", tokenize);
+        return new EnginePaths(root, strata, tokenize, Q36VocabPath(config.Strata.ModelPath), "", "", Path.Combine(root, "models"), Path.Combine(root, "last-run.log"));
+    }
+
     public static EnginePaths ResolvePaths(ManagerConfig config)
     {
         var root = config.Strata.PackageRoot;
@@ -207,9 +246,32 @@ public static class StrataService
         return start;
     }
 
+    /// <summary>
+    /// q36 原生路径（上游 0.1.44+）：直接读 GGUF，不需要 pack / profile / iq_pack。
+    /// 参数与 cyber-on-strata 引擎不同：--tokens IDS、--mtp N（GGUF 内置草稿块）、--expert-vram / --cpu-threads。
+    /// </summary>
+    public static ProcessStartInfo CreateQ36EngineStart(ManagerConfig config, EnginePaths paths, string model, string tokens)
+    {
+        var s = config.Strata;
+        if (s.Context is < 256 or > 1048576 || s.MaxNew is < 1 or > 65536 || s.Workers is < 0 or > 256)
+            throw new ArgumentException("Strata 数值参数超出范围。");
+        if (s.MaxNew >= s.Context) throw new ArgumentException("生成长度必须小于上下文容量。");
+        if (s.MtpEnabled && s.Spec is < 1 or > 7) throw new ArgumentException("MTP 草稿数必须为 1-7。");
+        var start = CaptureStart(paths.StrataExe);
+        foreach (var arg in new[] { "--native", model, "--tokens", tokens, "--max-context", s.Context.ToString(),
+            "--max-new", s.MaxNew.ToString(), "--pool-workers", s.Workers.ToString() })
+            start.ArgumentList.Add(arg);
+        if (s.Prefill > 0) { start.ArgumentList.Add("--prefill"); start.ArgumentList.Add(s.Prefill.ToString()); }
+        if (s.MtpEnabled) { start.ArgumentList.Add("--mtp"); start.ArgumentList.Add(s.Spec.ToString()); }
+        return start;
+    }
+
     private static async Task<StrataResult> RunCoreAsync(ManagerConfig config, Action<string>? log, CancellationToken ct)
     {
-        var paths = ResolvePaths(config);
+        var model0 = config.Strata.ModelPath;
+        var q36 = !string.IsNullOrWhiteSpace(model0) && GgufService.GetArchitecture(model0) == "qwen35moe" &&
+            EngineSupportsQwen35(Path.Combine(Path.GetFullPath(config.Strata.PackageRoot), "engine", "strata.exe"));
+        var paths = q36 ? ResolveQ36Paths(config) : ResolvePaths(config);
         var model = ResolveModel(config, paths);
         var prompt = config.Strata.Prompt;
         if (string.IsNullOrWhiteSpace(prompt)) throw new ArgumentException("提示词为空。");
@@ -226,7 +288,6 @@ public static class StrataService
         try
         {
             log?.Invoke("[Strata 1/3] 分词中…");
-            var engineStart = CreateEngineStart(config, paths, model, tokensFile);
             var tokenizeStart = CaptureStart(paths.TokenizeExe);
             foreach (var arg in new[] { "-m", model, "-f", promptFile, "--ids" }) tokenizeStart.ArgumentList.Add(arg);
             var tokenized = await RunChildAsync(tokenizeStart, tokOut, tokErr, ct).ConfigureAwait(false);
@@ -244,6 +305,17 @@ public static class StrataService
             if (promptTokens + config.Strata.MaxNew > config.Strata.Context)
                 throw new ArgumentException("提示词与生成长度之和超过上下文容量。");
             var s = config.Strata;
+            if (q36)
+            {
+                // q36 输出 token id，需要 vocab 表反分词；按模型缓存，首次导出。
+                var vocab = await StrataPackService.EnsureVocabAsync(
+                    new StrataPackService.Options(paths.PackageRoot, model, s.PythonPath, s.PackCacheDirectory),
+                    model, log, ct).ConfigureAwait(false);
+                paths = paths with { VocabTsv = vocab };
+            }
+            var engineStart = q36
+                ? CreateQ36EngineStart(config, paths, model, ids)
+                : CreateEngineStart(config, paths, model, tokensFile);
             log?.Invoke($"[Strata 2/3] 推理中（reserve {s.ReserveMib} MiB, context {s.Context}, max-new {s.MaxNew}）…");
 
             ChildResult result;
@@ -259,13 +331,13 @@ public static class StrataService
             }
             var lines = result.Stdout.Split('\n').Concat(result.Stderr.Split('\n')).ToArray();
             try { File.WriteAllLines(paths.LastRunLog, lines); } catch (IOException) { }
-            var outputLine = lines.LastOrDefault(l => Regex.IsMatch(l, @"^\s*output\s*:"));
+            var outputLine = lines.LastOrDefault(l => Regex.IsMatch(l, q36 ? @"^\s*gen\s*:" : @"^\s*output\s*:"));
             if (outputLine == null || result.ExitCode != 0)
             {
                 var tail = string.Join("\n", lines.Where(l => l.Length > 0).TakeLast(10));
                 throw new InvalidOperationException($"引擎提前退出（{result.ExitCode}）。\n" + tail);
             }
-            var answer = Detokenize(paths.VocabTsv, outputLine);
+            var answer = Detokenize(paths.VocabTsv, outputLine, q36);
             var stats = FormatStats(lines, promptTokens);
             log?.Invoke($"[Strata 3/3] 完成：{stats}");
             ConfigService.SaveStrataStats(stats);
@@ -320,9 +392,11 @@ public static class StrataService
         }
     }
 
-    private static string Detokenize(string vocabTsv, string outputLine)
+    public static string DetokenizeForTest(string vocabTsv, string outputLine, bool q36) => Detokenize(vocabTsv, outputLine, q36);
+
+    private static string Detokenize(string vocabTsv, string outputLine, bool q36 = false)
     {
-        var ids = Regex.Replace(outputLine, @"^\s*output\s*:\s*", "")
+        var ids = Regex.Replace(outputLine, q36 ? @"^\s*gen\s*:\s*" : @"^\s*output\s*:\s*", "")
             .Split([' ', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Where(t => t.All(char.IsDigit)).Select(int.Parse);
         var map = new Dictionary<int, string>();

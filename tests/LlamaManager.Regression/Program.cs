@@ -53,7 +53,8 @@ internal static class Program
             Console.WriteLine("Reused: " + prepared.Reused);
             return 0;
         }
-        if (args.Contains("--ids") || args.Contains("--tokens-file")) return await StrataRegression.RunChildAsync(args);
+        if (args.Contains("--ids") || args.Contains("--tokens-file") || args.Contains("--tokens") || args.Contains("--families"))
+            return await StrataRegression.RunChildAsync(args);
         if (args.Contains("-m")) { await Fixtures.RunFakeServerAsync(args); return 0; }
         if (args.FirstOrDefault() == "--invoke-cli")
         {
@@ -229,6 +230,8 @@ internal static class Program
                 StrataRegression.RunAsync(_root, _model));
             await Test("strata: pack preparation refuses unsupported models and missing files", () =>
                 StrataRegression.RunPackServiceAsync(_root));
+            await Test("strata: q36 native path selects the engine path, args and output line", () =>
+                StrataRegression.RunQ36Async(_root, _model));
             await Test("strata: compatibility roles, native heads, required tensors and MTP structure", () =>
                 Run(StrataCompatibilityRegression.RunFormats));
             await Test("strata: complete GGUF shards, duplicate detection and cancellation", () =>

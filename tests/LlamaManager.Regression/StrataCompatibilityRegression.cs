@@ -51,12 +51,14 @@ internal static class StrataCompatibilityRegression
             Check(!r.IsPackable && r.Blockers.Any(b => b.Contains("token_embd.weight")), "unsupported embedding accepted");
         }
 
-        foreach (uint type in new uint[] { 7, 14, 20 })
+        foreach (uint type in new uint[] { 7, 20 })
         {
             var r = StrataCompatibility.Analyze(Read(Fixtures.StrataGguf(gateType: type)));
             Check(!r.IsPackable && r.Blockers.Any(b => b.Contains("gate/up") && b.Contains(StrataCompatibility.TypeName(type))),
                 "down-only format accepted for gate/up: " + type);
         }
+        // Q6_K gate/up is now native (upstream 87659162), so it is NOT a down-only format any more.
+        Check(StrataCompatibility.Analyze(Read(Fixtures.StrataGguf(gateType: 14))).IsPackable, "Q6_K gate/up rejected");
         foreach (uint type in new uint[] { 16, 17, 21, 29 })
         {
             var r = StrataCompatibility.Analyze(Read(Fixtures.StrataGguf(downType: type)));

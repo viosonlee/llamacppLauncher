@@ -11,8 +11,21 @@ internal static class StrataRegression
         var folder = Path.GetDirectoryName(Environment.ProcessPath!)!;
         File.WriteAllText(Path.Combine(folder, "started.pid"), Environment.ProcessId.ToString());
         File.WriteAllText(Path.Combine(folder, "arguments.json"), JsonSerializer.Serialize(args));
+        if (args.Contains("--families"))
+        {
+            // The upstream engine advertises its native families; the old cyber engine exits nonzero here.
+            if (File.Exists(Path.Combine(folder, "no-qwen35"))) return 2;
+            Console.WriteLine("qwen4exp qwen35moe");
+            return 0;
+        }
         if (File.Exists(Path.Combine(folder, "hang"))) await Task.Delay(60000);
         if (args.Contains("--ids")) Console.WriteLine("[1, 2]");
+        else if (args.Contains("--tokens"))
+        {
+            // q36 native path: reads GGUF directly, emits "gen:" ids and its own stats line.
+            Console.WriteLine("gen: 1 2");
+            Console.WriteLine("strata-q36: prompt 1 tokens in 5.0 ms (200.0 tok/s), 2 generated in 10.0 ms (200.0 tok/s)");
+        }
         else
         {
             // Match the engine's padded label, and split a UTF-8 character across token boundaries.
@@ -143,6 +156,55 @@ internal static class StrataRegression
 
         // Cancellation releases the run gate and cross-process lease.
         Program.Equal("中", (await StrataService.RunAsync(config)).Answer);
+    }
+
+    public static async Task RunQ36Async(string root, string qwen3Model)
+    {
+        // A qwen35moe fixture (arch qwen35moe) selects the native q36 path when the engine advertises it.
+        var package = Path.Combine(root, "q36 模型 package");
+        var engine = Path.Combine(package, "engine");
+        var tokenizer = Path.Combine(engine, "tokenize");
+        Fixtures.CopyRuntime(engine);
+        Fixtures.CopyRuntime(tokenizer);
+        File.Copy(Environment.ProcessPath!, Path.Combine(engine, "strata.exe"), true);
+        File.Copy(Environment.ProcessPath!, Path.Combine(tokenizer, "llama-tokenize.exe"), true);
+        var qwen35 = Path.Combine(root, "qwen35 model.gguf");
+        File.WriteAllBytes(qwen35, Fixtures.StrataGguf());
+        var config = new ManagerConfig { Strata = new StrataConfig { PackageRoot = package, ModelPath = qwen35, Prompt = "hello" } };
+        ConfigService.SaveStrata(config);
+
+        Program.Check(StrataService.EngineSupportsQwen35(Path.Combine(engine, "strata.exe")), "q36 family not detected");
+        // The old engine (no --families) is not mistaken for one that runs qwen35moe.
+        File.WriteAllText(Path.Combine(engine, "no-qwen35"), "");
+        Program.Check(!StrataService.EngineSupportsQwen35(Path.Combine(engine, "strata.exe")), "engine without qwen35moe accepted");
+        File.Delete(Path.Combine(engine, "no-qwen35"));
+
+        // Argument shape: --native + --tokens IDS, no --pack/--expert-profile, MTP as a draft count.
+        var paths = StrataService.ResolveQ36Paths(config);
+        var start = StrataService.CreateQ36EngineStart(config, paths, qwen35, "1 2");
+        Program.Check(start.ArgumentList.Contains("--native") && start.ArgumentList.Contains("--tokens"), "q36 args missing");
+        Program.Check(start.ArgumentList[start.ArgumentList.IndexOf("--tokens") + 1] == "1 2", "q36 ids not passed inline");
+        Program.Check(!start.ArgumentList.Contains("--pack") && !start.ArgumentList.Contains("--expert-profile"), "q36 passed pack args");
+        Program.Check(!start.ArgumentList.Contains("--mtp"), "MTP off still passed --mtp");
+        config.Strata.MtpEnabled = true;
+        config.Strata.Spec = 2;
+        var mtpStart = StrataService.CreateQ36EngineStart(config, paths, qwen35, "1 2");
+        Program.Equal("2", mtpStart.ArgumentList[mtpStart.ArgumentList.IndexOf("--mtp") + 1]);
+        config.Strata.MtpEnabled = false;
+
+        // The engine's "gen:" line is parsed and detokenized with the exported vocab.
+        var vocab = Path.Combine(root, "q36-vocab.tsv");
+        File.WriteAllText(vocab, "1\tE4B8\n2\tAD\n");
+        Program.Equal("中", StrataService.DetokenizeForTest(vocab, "gen: 1 2", q36: true));
+        // Pre-seed the cached vocab so RunAsync does not need Python (a fresh file beats the model's mtime).
+        var cached = StrataService.Q36VocabPath(qwen35);
+        Directory.CreateDirectory(Path.GetDirectoryName(cached)!);
+        File.WriteAllText(cached, "1\tE4B8\n2\tAD\n");
+        File.SetLastWriteTimeUtc(cached, DateTime.UtcNow.AddMinutes(1));
+
+        var result = await StrataService.RunAsync(config);
+        Program.Equal("中", result.Answer);
+        Program.Equal(0, ConfigService.ReadConfig().Strata.LastPid);
     }
 
     public static async Task RunPackServiceAsync(string root)
