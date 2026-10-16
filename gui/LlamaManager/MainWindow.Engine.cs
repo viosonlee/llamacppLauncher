@@ -121,7 +121,7 @@ public partial class MainWindow
                 foreach (var spec in group)
                 {
                     var row = new Grid { Margin = new Thickness(0, 0, 0, 6) };
-                    row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(140) });
+                    row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(150) });
                     row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
                     var label = new TextBlock
                     {
@@ -143,7 +143,7 @@ public partial class MainWindow
                     Grid.SetColumn(control, 1);
                     if (spec.Type is ParamType.FilePath or ParamType.FolderPath && control is TextBox pathBox)
                     {
-                        var pathRow = new DockPanel();
+                        var pathRow = new DockPanel { MinWidth = 220 };
                         var browse = new Button { Content = "浏览…", Padding = new Thickness(8, 3, 8, 3), Margin = new Thickness(6, 0, 0, 0) };
                         var folder = spec.Type == ParamType.FolderPath;
                         browse.Click += (_, _) =>
@@ -162,9 +162,15 @@ public partial class MainWindow
                         DockPanel.SetDock(browse, Dock.Right);
                         pathRow.Children.Add(browse);
                         pathRow.Children.Add(pathBox);
+                        Grid.SetColumn(pathRow, 1);
                         row.Children.Add(pathRow);
                     }
-                    else row.Children.Add(control);
+                    else
+                    {
+                        control.HorizontalAlignment = HorizontalAlignment.Stretch;
+                        Grid.SetColumn(control, 1);
+                        row.Children.Add(control);
+                    }
                     EngineParametersPanel.Children.Add(row);
                     if (control is TextBox textBox) _engineParameterBoxes[spec.Key] = textBox;
                 }

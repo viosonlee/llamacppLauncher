@@ -22,8 +22,4 @@
     <PackageReference Include="WPF-UI" Version="4.3.0" />
   </ItemGroup>
 
-  <ItemGroup>
-    <None Include="plugins\**\plugin.json" CopyToOutputDirectory="PreserveNewest" />
-  </ItemGroup>
-
 </Project>

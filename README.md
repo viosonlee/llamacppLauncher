@@ -10,12 +10,16 @@ Windows 上的 llama.cpp / Prism 模型启动器，使用 .NET 8 WPF。
 - **llamacpp**（内置）：任意 GGUF 的通用后端，OpenAI 兼容。
 - **strata-upstream**（内置）：Strata 原生 qwen35moe 路径（原地读 GGUF），启动引擎自带的
   `serve/server.py` HTTP 服务（OpenAI/Anthropic 兼容）。
-- **插件后端**：`plugins/<id>/plugin.json`（`schema:1`）声明如何启动引擎、如何探测就绪、参数表。
-  随包附带 `polystrata` 清单（strata-poly）。插件是独立进程，崩溃不影响启动器，新增引擎无需重编译。
+- **polystrata**（内置）：PolyStrata（strata-poly）MoE 引擎，同样经 `serve/server.py`
+  提供 HTTP 服务。
+- **插件后端**：`plugins/<id>/plugin.json`（`schema:1`）声明如何启动自带 HTTP 服务的第三方引擎、
+  如何探测就绪、参数表。插件是独立进程，崩溃不影响启动器，新增引擎无需重编译。
 
-「引擎」页可切换后端、生成参数控件、一键初始化运行环境（`--bootstrap`），并显示可直接复制给
-pi / Claude Code / Codex 的接入地址（`http://127.0.0.1:<port>/v1`）。
-同一个 GPU 上同时只运行一个重负载后端；切换时统一提示。
+「引擎」页可切换后端、生成参数控件、一键初始化运行环境（`--bootstrap`，自动下载引擎二进制并安装
+Python 依赖），并显示可直接复制给 pi / Claude Code / Codex 的接入地址
+（`http://127.0.0.1:<port>/v1`）。同一个 GPU 上同时只运行一个重负载后端；切换时统一提示。
+
+模型文件（`.gguf`）由用户自备；引擎二进制首次使用时下载，不随启动器分发。
 
 旧的 Strata pack 页（cyber）已归档，仅作参考。
 

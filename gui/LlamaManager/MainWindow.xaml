@@ -469,8 +469,8 @@
                             </Grid>
 
                             <!-- MoE Section (auto-hide for dense models) -->
-                            <Border x:Name="MoeSection" Grid.Row="7" Grid.ColumnSpan="2" BorderThickness="1,0,0,0"
-                                    BorderBrush="{DynamicResource TextFillColorSecondaryBrush}" Padding="8,6,0,4" Margin="0,4,0,0"
+                            <Border x:Name="MoeSection" Grid.Row="7" Grid.ColumnSpan="2" BorderThickness="0,1,0,0"
+                                    BorderBrush="{DynamicResource TextFillColorSecondaryBrush}" Padding="0,10,0,4" Margin="0,10,0,0"
                                     ToolTip="以下设置仅对MoE（混合专家）模型生效">
                                 <Grid>
                                     <Grid.RowDefinitions>
@@ -510,7 +510,7 @@
                                             <ColumnDefinition Width="110"/>
                                             <ColumnDefinition Width="*"/>
                                         </Grid.ColumnDefinitions>
-                                        <ui:ToggleSwitch x:Name="CpuMoeCheckbox" Grid.Column="0" Content="CPU MoE (--cpu-moe)"
+                                        <ui:ToggleSwitch x:Name="CpuMoeCheckbox" Grid.Column="0" Grid.ColumnSpan="2" Content="CPU MoE (--cpu-moe)"
                                                   FontSize="11" VerticalAlignment="Center"
                                                   ToolTip="强制MoE混合专家模型在CPU上计算专家层（而非GPU）"
                                                   Checked="CpuMoeCheckbox_Changed" Unchecked="CpuMoeCheckbox_Changed"/>
@@ -519,8 +519,8 @@
                             </Border>
 
                             <!-- Built-in MTP (auto-detected from GGUF metadata) -->
-                            <Border x:Name="MtpSection" Grid.Row="8" Grid.ColumnSpan="2" BorderThickness="1,0,0,0"
-                                    BorderBrush="{DynamicResource TextFillColorSecondaryBrush}" Padding="8,6,0,4" Margin="0,4,0,0"
+                            <Border x:Name="MtpSection" Grid.Row="8" Grid.ColumnSpan="2" BorderThickness="0,1,0,0"
+                                    BorderBrush="{DynamicResource TextFillColorSecondaryBrush}" Padding="0,10,0,4" Margin="0,10,0,0"
                                     Visibility="Collapsed"
                                     ToolTip="该模型的 GGUF 内置 MTP（多 Token 预测）头；开启后使用 draft-mtp 投机解码，无需单独草稿文件">
                                 <ui:ToggleSwitch x:Name="MtpCheckbox" Content="启用内置 MTP 投机解码 (--spec-type draft-mtp)"
@@ -603,7 +603,7 @@
                         </StackPanel>
 
                         <!-- Shared: autostart -->
-                        <Border BorderThickness="1,0,0,0" BorderBrush="{DynamicResource TextFillColorSecondaryBrush}"
+                        <Border BorderThickness="0,1,0,0" BorderBrush="{DynamicResource TextFillColorSecondaryBrush}"
                                 Padding="0,10,0,0" Margin="0,16,0,0">
                             <Grid>
                                 <Grid.ColumnDefinitions>
@@ -622,7 +622,7 @@
                         </Border>
 
                         <!-- llama.cpp only: embedding service -->
-                        <Border x:Name="EmbeddingPanel" BorderThickness="1,0,0,0" BorderBrush="{DynamicResource TextFillColorSecondaryBrush}"
+                        <Border x:Name="EmbeddingPanel" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource TextFillColorSecondaryBrush}"
                                 Padding="0,10,0,0" Margin="0,12,0,0">
                             <Grid>
                                 <Grid.ColumnDefinitions>

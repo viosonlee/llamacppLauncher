@@ -1,15 +1,29 @@
 using System.Diagnostics;
 using System.IO;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using LlamaManager.Models;
 using LlamaManager.Services;
 
 namespace LlamaManager.Engines;
 
 /// <summary>
-/// The Strata engine (Niko 0.1.44.1 + APEX patches, "strata-upstream"). It does not run
-/// a one-shot prompt pipeline; it starts the engine's own OpenAI/Anthropic HTTP service
+/// Which engine a <see cref="StrataBackend"/> drives. Both Strata and PolyStrata are the same
+/// shape: a native <c>*.exe</c> that speaks a line protocol, wrapped by the project's own
+/// <c>serve/server.py</c>, which exposes the OpenAI/Anthropic HTTP API. Only the engine
+/// executable's folder/name and the architecture differ.
+/// </summary>
+public sealed record StrataEngineProfile(
+    string Id,
+    string DisplayName,
+    string Description,
+    string EngineSubdir,
+    string EngineExeName,
+    string Arch,
+    bool VerifiesFamilies);
+
+/// <summary>
+/// A Strata-family engine. It does not run a one-shot prompt pipeline; it starts the engine's
+/// own OpenAI/Anthropic HTTP service
 /// (<c>python -m serve.server --engine strata --config &lt;runconfig&gt; --port &lt;port&gt;</c>),
 /// so any agent (pi, Claude Code, Codex) can attach to the base URL.
 ///
@@ -18,19 +32,33 @@ namespace LlamaManager.Engines;
 /// </summary>
 public sealed class StrataBackend : IServerBackend
 {
-    private const string Id = "strata-upstream";
-
-    public BackendDescriptor Descriptor { get; } = new(
-        Id,
+    public static readonly StrataEngineProfile UpstreamProfile = new(
+        "strata-upstream",
         "Strata (upstream q36)",
         "Strata 原生 qwen35moe 路径（原地读 GGUF，内置 MTP）；通过自带 HTTP 服务接入 agent。",
-        BuiltIn: true,
-        GpuHeavy: true);
+        "engine", "strata.exe", "qwen35moe", VerifiesFamilies: true);
+
+    public static readonly StrataEngineProfile PolyProfile = new(
+        "polystrata",
+        "PolyStrata (strata-poly)",
+        "基于 Strata 内核的 MoE 引擎（lookup/重复猜测 + 内置 MTP 草稿）；通过自带 HTTP 服务接入 agent。",
+        "engine-poly", "strata-poly.exe", "qwen35moe", VerifiesFamilies: false);
+
+    private readonly StrataEngineProfile _profile;
+
+    public StrataBackend(StrataEngineProfile profile)
+    {
+        _profile = profile;
+        Descriptor = new BackendDescriptor(profile.Id, profile.DisplayName, profile.Description,
+            BuiltIn: true, GpuHeavy: true);
+    }
+
+    public BackendDescriptor Descriptor { get; }
 
     public IReadOnlyList<ParameterSpec> Parameters { get; } =
     [
-        new("packageRoot", "Strata 包目录", "路径", ParamType.FolderPath, "", "包含 engine\\strata.exe 的目录。"),
-        new("serveRoot", "Strata 源码根", "路径", ParamType.FolderPath, "", "包含 serve\\server.py 的目录；留空则用包目录。"),
+        new("packageRoot", "引擎包目录", "路径", ParamType.FolderPath, "", "包含 engine\\strata.exe 与 serve\\server.py 的目录。"),
+        new("serveRoot", "服务源码根", "路径", ParamType.FolderPath, "", "包含 serve\\server.py 的目录；留空则用包目录。"),
         new("pythonPath", "Python 解释器", "路径", ParamType.FilePath, "", "Python 3.10+ 的 python.exe；留空自动查找。"),
         new("servePort", "服务端口", "基本", ParamType.Integer, "8091", "HTTP API 端口（OpenAI/Anthropic）。", 1, 65535),
         new("host", "监听地址", "基本", ParamType.Text, "127.0.0.1", "默认仅本机回环。"),
@@ -42,18 +70,18 @@ public sealed class StrataBackend : IServerBackend
     ];
 
     /// <summary>
-    /// Reads a Strata setting from the backend's own EngineSettings, falling back to the
-    /// legacy StrataConfig block so existing installs keep working. Empty values fall through.
+    /// Reads a setting from the backend's own EngineSettings, falling back to the legacy
+    /// StrataConfig block so existing installs keep working. Empty values fall through.
     /// </summary>
-    private static string? Param(ManagerConfig config, string key)
+    private string? Param(ManagerConfig config, string key)
     {
-        var settings = config.Engines.GetValueOrDefault(Id);
+        var settings = config.Engines.GetValueOrDefault(_profile.Id);
         if (settings != null && settings.Parameters.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value))
             return value;
         return null;
     }
 
-    private static int ParamInt(ManagerConfig config, string key, int fallback)
+    private int ParamInt(ManagerConfig config, string key, int fallback)
     {
         var value = Param(config, key);
         return value != null && int.TryParse(value, out var parsed) ? parsed : fallback;
@@ -64,19 +92,22 @@ public sealed class StrataBackend : IServerBackend
         var config = ConfigService.ReadConfig();
         var engine = ResolveEngine(config);
         if (engine == null)
-            return BackendStatus.Unavailable("未找到 strata.exe；请在面板中选择 Strata 包目录。");
+            return BackendStatus.Unavailable($"未找到 {_profile.EngineExeName}；请在面板中选择引擎包目录，或用「初始化环境」下载。");
         if (!File.Exists(engine))
-            return BackendStatus.Unavailable("未找到 strata.exe：" + engine);
+            return BackendStatus.Unavailable($"未找到 {_profile.EngineExeName}：" + engine);
         // Both checks spawn a child process; never run them on the UI thread.
-        var supportsQwen35 = await Task.Run(() => EngineSupportsQwen35(engine), ct).ConfigureAwait(false);
-        if (!supportsQwen35)
-            return BackendStatus.Unavailable("该 strata.exe 没有 qwen35moe 原生路径（需要上游 0.1.44+ 构建）。");
+        if (_profile.VerifiesFamilies)
+        {
+            var supportsQwen35 = await Task.Run(() => EngineSupportsQwen35(engine), ct).ConfigureAwait(false);
+            if (!supportsQwen35)
+                return BackendStatus.Unavailable("该 strata.exe 没有 qwen35moe 原生路径（需要上游 0.1.44+ 构建）。");
+        }
         var server = ResolveServer(config);
         if (server == null)
-            return BackendStatus.Unavailable("未找到 serve\\server.py；请设置 Strata 源码根目录。");
+            return BackendStatus.Unavailable("未找到 serve\\server.py；请设置服务源码根目录。");
         var python = await ResolvePythonAsync(config, ct).ConfigureAwait(false);
         if (python == null)
-            return BackendStatus.Unavailable("未找到 Python 3.10+（Strata 服务需要）。");
+            return BackendStatus.Unavailable("未找到 Python 3.10+（服务需要）。");
         return new BackendStatus(true, engine, null, null);
     }
 
@@ -85,6 +116,12 @@ public sealed class StrataBackend : IServerBackend
         if (string.IsNullOrWhiteSpace(modelPath) || !File.Exists(modelPath))
             return new CompatibilityReport(false, ["请先选择已下载完成的 GGUF 模型。"], [], "未选择模型。", null);
         var md = await Task.Run(() => GgufService.ReadShards(modelPath, ct), ct).ConfigureAwait(false);
+        if (_profile.Id == PolyProfile.Id)
+        {
+            var poly = PolyStrataCompatibility.Analyze(md);
+            return new CompatibilityReport(poly.Runnable, poly.Blockers, poly.Notes, poly.Summary,
+                Estimate(md, modelPath));
+        }
         var report = StrataCompatibility.Analyze(md);
         var estimate = Estimate(md, modelPath);
         return new CompatibilityReport(report.IsPackable, report.Blockers, report.Notes,
@@ -101,15 +138,15 @@ public sealed class StrataBackend : IServerBackend
     {
         var config = request.Config;
         var model = ResolveModel(config);
-        var engine = ResolveEngine(config) ?? throw new FileNotFoundException("未找到 strata.exe。");
+        var engine = ResolveEngine(config) ?? throw new FileNotFoundException($"未找到 {_profile.EngineExeName}。");
         var server = ResolveServer(config) ?? throw new FileNotFoundException("未找到 serve\\server.py。");
         var python = ResolvePython(config) ?? throw new FileNotFoundException("未找到 Python 3.10+。");
         var port = ResolvePort(request);
         var host = Param(config, "host") ?? (string.IsNullOrWhiteSpace(config.Strata.Host) ? "127.0.0.1" : config.Strata.Host);
 
-        var tokenizer = TokenizerDir(config, model);
+        var tokenizer = TokenizerDir(config, _profile.Id, model);
         var runconfig = BuildRunConfig(config, engine, model, tokenizer, port, host);
-        var configPath = RunConfigPath(model);
+        var configPath = RunConfigPath(_profile.Id, model);
 
         var args = new List<string> { "-m", "serve.server", "--engine", "strata", "--config", configPath, "--port", port.ToString() };
         if (!string.Equals(host, "127.0.0.1", StringComparison.Ordinal)) { args.Add("--host"); args.Add(host); }
@@ -128,7 +165,7 @@ public sealed class StrataBackend : IServerBackend
         var server = ResolveServer(request.Config)!;
         var serveRoot = Path.GetDirectoryName(Path.GetDirectoryName(server))!;
         log.Write("准备分词表…");
-        await StrataPackService.EnsureTokenizerDirAsync(serveRoot, model, TokenizerDir(request.Config, model),
+        await StrataPackService.EnsureTokenizerDirAsync(serveRoot, model, TokenizerDir(request.Config, _profile.Id, model),
             Param(request.Config, "pythonPath") ?? request.Config.Strata.PythonPath, log.Write, ct).ConfigureAwait(false);
         // Materialize generated files (the runconfig) before launching.
         foreach (var (path, content) in plan.GeneratedFiles)
@@ -140,23 +177,23 @@ public sealed class StrataBackend : IServerBackend
         if (ServerService.TestPortInUse(port))
             throw new InvalidOperationException($"端口 {port} 已被占用。请改用其它端口。");
         var args = string.Join(" ", plan.Arguments.Select(LauncherArguments.Quote));
-        log.Write($"启动 Strata 服务：{plan.FileName} {args}");
+        log.Write($"启动 {_profile.DisplayName} 服务：{plan.FileName} {args}");
         var process = DetachedProcess.Start(plan.FileName, args,
-            Path.Combine(ConfigService.GetManagerRoot(), "logs", "strata-serve.stdout.log"),
-            Path.Combine(ConfigService.GetManagerRoot(), "logs", "strata-serve.stderr.log"));
+            Path.Combine(ConfigService.GetManagerRoot(), "logs", $"engine-{_profile.Id}.stdout.log"),
+            Path.Combine(ConfigService.GetManagerRoot(), "logs", $"engine-{_profile.Id}.stderr.log"));
         var session = new EngineSession
         {
-            BackendId = Id,
+            BackendId = _profile.Id,
             ProcessId = process.Id,
             StartTimeUtcTicks = process.StartTime.ToUniversalTime().Ticks,
             ExecutablePath = plan.FileName,
             ModelPath = model,
             Arguments = args,
             Port = port,
-            Extra = { ["runconfig"] = RunConfigPath(model) },
+            Extra = { ["runconfig"] = RunConfigPath(_profile.Id, model) },
         };
         process.Dispose();
-        ConfigService.SaveSessionSlot(request.Config, Id, ToServerSession(session));
+        ConfigService.SaveSessionSlot(request.Config, _profile.Id, ToServerSession(session));
         await WaitReadyAsync(session, log, ct).ConfigureAwait(false);
         return session;
     }
@@ -180,18 +217,18 @@ public sealed class StrataBackend : IServerBackend
         }
         if (process == null)
         {
-            ConfigService.SaveSessionSlot(ConfigService.ReadConfig(), Id, null);
-            log.Write("记录的 Strata 服务进程已不存在，已清理记录。");
+            ConfigService.SaveSessionSlot(ConfigService.ReadConfig(), _profile.Id, null);
+            log.Write($"记录的 {_profile.DisplayName} 服务进程已不存在，已清理记录。");
             return;
         }
         using (process)
         {
-            log.Write($"正在停止 Strata 服务，PID {process.Id}。");
+            log.Write($"正在停止 {_profile.DisplayName} 服务，PID {process.Id}。");
             process.Kill(entireProcessTree: true);
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             try { await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false); } catch (OperationCanceledException) { }
         }
-        ConfigService.SaveSessionSlot(ConfigService.ReadConfig(), Id, null);
+        ConfigService.SaveSessionSlot(ConfigService.ReadConfig(), _profile.Id, null);
     }
 
     public Task<bool> ReadyAsync(EngineSession session, CancellationToken ct) =>
@@ -207,7 +244,7 @@ public sealed class StrataBackend : IServerBackend
 
     // ---- helpers ----
 
-    private static async Task WaitReadyAsync(EngineSession session, ILogSink log, CancellationToken ct)
+    private async Task WaitReadyAsync(EngineSession session, ILogSink log, CancellationToken ct)
     {
         var deadline = DateTime.UtcNow.AddSeconds(180);
         while (DateTime.UtcNow < deadline)
@@ -215,10 +252,10 @@ public sealed class StrataBackend : IServerBackend
             ct.ThrowIfCancellationRequested();
             using var process = TryGetProcess(session);
             if (process is { HasExited: true })
-                throw new InvalidOperationException("Strata 服务提前退出。请查看 logs\\strata-serve.stderr.log。");
+                throw new InvalidOperationException($"{_profile.DisplayName} 服务提前退出。请查看 logs\\engine-{_profile.Id}.stderr.log。");
             if (await ServerService.TestApiReadyAsync(session.Port, ct).ConfigureAwait(false))
             {
-                log.Write($"Strata 服务已就绪：http://127.0.0.1:{session.Port}/v1");
+                log.Write($"{_profile.DisplayName} 服务已就绪：http://127.0.0.1:{session.Port}/v1");
                 return;
             }
             await Task.Delay(500, ct).ConfigureAwait(false);
@@ -251,8 +288,8 @@ public sealed class StrataBackend : IServerBackend
             ["cwd"] = Path.GetDirectoryName(engine)!,
             ["tokenizer"] = tokenizer,
             ["model_name"] = Path.GetFileNameWithoutExtension(model).ToLowerInvariant(),
-            ["arch"] = "qwen35moe",
-            ["log"] = Path.Combine(ConfigService.GetManagerRoot(), "logs", "strata-serve-engine.log"),
+            ["arch"] = _profile.Arch,
+            ["log"] = Path.Combine(ConfigService.GetManagerRoot(), "logs", $"engine-{_profile.Id}.log"),
             ["port"] = port,
             ["host"] = host,
         };
@@ -263,34 +300,40 @@ public sealed class StrataBackend : IServerBackend
         return cfg;
     }
 
-    private static string RunConfigPath(string model)
-    {
-        var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
-            System.Text.Encoding.UTF8.GetBytes(PathIdentity.Normalize(model))))[..16];
-        return Path.Combine(ConfigService.GetManagerRoot(), "data", "strata-serve", hash, "strata-runconfig.json");
-    }
+    private static string RunConfigPath(string backendId, string model) =>
+        Path.Combine(DataDir(backendId, model), "strata-runconfig.json");
 
     /// <summary>The tokenizer directory the server reads (vocab.json etc.); prepared from the GGUF.</summary>
-    public static string TokenizerDir(ManagerConfig config, string model)
+    public static string TokenizerDir(ManagerConfig config, string model) => TokenizerDir(config, "strata-upstream", model);
+
+    public static string TokenizerDir(ManagerConfig config, string backendId, string model) =>
+        Path.Combine(DataDir(backendId, model), "tokenizer");
+
+    private static string DataDir(string backendId, string model)
     {
         var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
             System.Text.Encoding.UTF8.GetBytes(PathIdentity.Normalize(model))))[..16];
-        return Path.Combine(ConfigService.GetManagerRoot(), "data", "strata-serve", hash, "tokenizer");
+        return Path.Combine(ConfigService.GetManagerRoot(), "data", backendId, hash);
     }
 
-    public static string? ResolveEngine(ManagerConfig config)
+    /// <summary>Resolves the engine exe for the upstream profile (legacy static entry point).</summary>
+    public static string? ResolveEngine(ManagerConfig config) => ResolveEngine(config, UpstreamProfile);
+
+    public static string? ResolveEngine(ManagerConfig config, StrataEngineProfile profile)
     {
-        // Prefer the backend's own settings; fall back to the legacy StrataConfig block.
-        var root = Param(config, "packageRoot") ?? config.Strata.PackageRoot;
+        var root = Param(config, profile.Id, "packageRoot") ?? config.Strata.PackageRoot;
         if (string.IsNullOrWhiteSpace(root)) return null;
-        var engine = Path.Combine(Path.GetFullPath(root), "engine", "strata.exe");
+        var engine = Path.Combine(Path.GetFullPath(root), profile.EngineSubdir, profile.EngineExeName);
         return File.Exists(engine) ? engine : null;
     }
 
-    public static string? ResolveServer(ManagerConfig config)
+    /// <summary>Resolves serve/server.py for the upstream profile (legacy static entry point).</summary>
+    public static string? ResolveServer(ManagerConfig config) => ResolveServer(config, UpstreamProfile);
+
+    public static string? ResolveServer(ManagerConfig config, StrataEngineProfile profile)
     {
-        var serveRoot = Param(config, "serveRoot") ?? config.Strata.ServeRoot;
-        var packageRoot = Param(config, "packageRoot") ?? config.Strata.PackageRoot;
+        var serveRoot = Param(config, profile.Id, "serveRoot") ?? config.Strata.ServeRoot;
+        var packageRoot = Param(config, profile.Id, "packageRoot") ?? config.Strata.PackageRoot;
         foreach (var root in new[] { serveRoot, packageRoot })
         {
             if (string.IsNullOrWhiteSpace(root)) continue;
@@ -300,9 +343,11 @@ public sealed class StrataBackend : IServerBackend
         return null;
     }
 
-    internal static string? ResolvePython(ManagerConfig config)
+    internal static string? ResolvePython(ManagerConfig config) => ResolvePython(config, UpstreamProfile);
+
+    internal static string? ResolvePython(ManagerConfig config, StrataEngineProfile profile)
     {
-        var configured = Param(config, "pythonPath") ?? config.Strata.PythonPath;
+        var configured = Param(config, profile.Id, "pythonPath") ?? config.Strata.PythonPath;
         if (!string.IsNullOrWhiteSpace(configured) && File.Exists(configured))
             return configured;
         foreach (var candidate in new[] { "python", "py" })
@@ -355,14 +400,25 @@ public sealed class StrataBackend : IServerBackend
         return null;
     }
 
-    internal static string ResolveModel(ManagerConfig config)
+    internal static string ResolveModel(ManagerConfig config) => ResolveModel(config, UpstreamProfile);
+
+    internal static string ResolveModel(ManagerConfig config, StrataEngineProfile profile)
     {
         // The engine page stores the model in the backend's settings; the legacy Strata block
         // is the fallback for installs that predate it.
-        var model = config.Engines.GetValueOrDefault(Id)?.ModelPath;
+        var model = config.Engines.GetValueOrDefault(profile.Id)?.ModelPath;
         if (string.IsNullOrWhiteSpace(model)) model = config.Strata.ModelPath;
         if (!string.IsNullOrWhiteSpace(model) && File.Exists(model)) return Path.GetFullPath(model);
         throw new FileNotFoundException("请先选择已下载完成的 GGUF 模型。", model);
+    }
+
+    /// <summary>Reads a backend's own parameter, falling back to the legacy Strata block.</summary>
+    private static string? Param(ManagerConfig config, string backendId, string key)
+    {
+        var settings = config.Engines.GetValueOrDefault(backendId);
+        if (settings != null && settings.Parameters.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value))
+            return value;
+        return null;
     }
 
     public static bool EngineSupportsQwen35(string strataExe) => StrataService.EngineSupportsQwen35(strataExe);
@@ -373,7 +429,7 @@ public sealed class StrataBackend : IServerBackend
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
     }
 
-    private static ServerSession ToServerSession(EngineSession session) => new()
+    private ServerSession ToServerSession(EngineSession session) => new()
     {
         ProcessId = session.ProcessId,
         StartTimeUtcTicks = session.StartTimeUtcTicks,

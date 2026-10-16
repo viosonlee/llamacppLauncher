@@ -179,6 +179,10 @@ internal static class StrataRegression
         var config = new ManagerConfig { Strata = new StrataConfig { PackageRoot = package, ModelPath = qwen35, Prompt = "hello" } };
         ConfigService.SaveStrata(config);
 
+        // Warm the fresh engine copy: its first launch pays antivirus scanning + cold JIT, which
+        // can exceed the 5 s probe timeout on a busy machine (observed as "q36 family not detected").
+        StrataService.EngineSupportsQwen35(Path.Combine(engine, "strata.exe"));
+
         Program.Check(StrataService.EngineSupportsQwen35(Path.Combine(engine, "strata.exe")), "q36 family not detected");
         // The old engine (no --families) is not mistaken for one that runs qwen35moe.
         File.WriteAllText(Path.Combine(engine, "no-qwen35"), "");

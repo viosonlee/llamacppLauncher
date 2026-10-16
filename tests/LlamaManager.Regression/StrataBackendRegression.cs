@@ -34,6 +34,10 @@ internal static class StrataBackendRegression
         var engineDir = Path.Combine(package, "engine");
         Fixtures.CopyRuntime(engineDir);
         File.Copy(Environment.ProcessPath!, Path.Combine(engineDir, "strata.exe"), true);
+        // Warm the fresh copy once: a first launch pays for antivirus scanning and cold JIT,
+        // which can exceed the probe's 5 s timeout on a busy machine and flake the run.
+        // The warm-up result is ignored; the probe below re-checks with a hot process.
+        StrataBackend.EngineSupportsQwen35(Path.Combine(engineDir, "strata.exe"));
 
         // The tokenizer prep tool must exist; pre-seed the tokenizer dir so no Python is needed.
         File.WriteAllText(Path.Combine(source, "tools", "strata_tokenizer.py"), "# fixture\n");

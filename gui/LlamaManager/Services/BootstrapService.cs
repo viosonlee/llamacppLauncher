@@ -1,14 +1,15 @@
 using System.Diagnostics;
 using System.IO;
-using System.Text.Json;
+using LlamaManager.Engines;
 using LlamaManager.Models;
 
 namespace LlamaManager.Services;
 
 /// <summary>
-/// One-click engine environment setup. Small, licence-compatible resources ship with the
-/// launcher; anything large or version-bound (Python packages, engine binaries) is fetched
-/// here. Every step is idempotent and a failure only marks that backend unavailable.
+/// One-click engine setup. Small, licence-compatible resources ship with the launcher; anything
+/// large or version-bound (engine binaries, Python packages) is fetched here. Every step is
+/// idempotent: an engine that already probes as available is left alone, and a failure only marks
+/// that backend unavailable.
 /// </summary>
 public static class BootstrapService
 {
@@ -17,7 +18,7 @@ public static class BootstrapService
     public sealed record StepResult(string Name, bool Ok, string Detail);
 
     /// <summary>Runs the bootstrap for one backend id and returns the steps it performed.</summary>
-    public static async Task<IReadOnlyList<StepResult>> RunAsync(string backendId, Engines.ILogSink log, CancellationToken ct = default)
+    public static async Task<IReadOnlyList<StepResult>> RunAsync(string backendId, ILogSink log, CancellationToken ct = default)
     {
         if (!await Gate.WaitAsync(0, ct).ConfigureAwait(false))
             throw new InvalidOperationException("已有一个初始化任务在运行。");
@@ -26,14 +27,17 @@ public static class BootstrapService
             return backendId switch
             {
                 "llamacpp" => await BootstrapLlamaCppAsync(log, ct).ConfigureAwait(false),
-                "strata-upstream" => await BootstrapStrataAsync(log, ct).ConfigureAwait(false),
+                "strata-upstream" or "polystrata" => await BootstrapStrataAsync(backendId, log, ct).ConfigureAwait(false),
                 _ => await BootstrapPluginAsync(backendId, log, ct).ConfigureAwait(false),
             };
         }
         finally { Gate.Release(); }
     }
 
-    private static async Task<IReadOnlyList<StepResult>> BootstrapLlamaCppAsync(Engines.ILogSink log, CancellationToken ct)
+    /// <summary>Whether the bootstrap can fetch this backend's engine automatically.</summary>
+    public static bool CanDownload(string backendId) => EngineAcquisitionService.CanAcquire(backendId);
+
+    private static async Task<IReadOnlyList<StepResult>> BootstrapLlamaCppAsync(ILogSink log, CancellationToken ct)
     {
         var steps = new List<StepResult>();
         var engine = ConfigService.GetLlamaServerPath();
@@ -41,42 +45,63 @@ public static class BootstrapService
         {
             log.Write("llama.cpp：已找到 llama-server.exe。");
             steps.Add(new StepResult("llama-server", true, engine));
+            return steps;
         }
-        else
+        log.Write("llama.cpp：未找到 llama-server.exe，尝试从官方发布下载…");
+        try
         {
-            log.Write("llama.cpp：未找到 llama-server.exe；请把引擎放到安装目录，或在设置中指定。");
-            steps.Add(new StepResult("llama-server", false, "未找到；请手动放置或指定引擎目录。"));
+            var dir = await EngineAcquisitionService.AcquireAsync("llamacpp", log, ct).ConfigureAwait(false);
+            steps.Add(new StepResult("llama-server", true, dir));
         }
-        await Task.CompletedTask;
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            log.Write("llama.cpp 下载失败：" + ex.Message);
+            log.Write("请手动把 llama-server.exe 放到安装目录，或在设置中指定。");
+            steps.Add(new StepResult("llama-server", false, "下载失败；请手动放置或指定引擎目录。"));
+        }
         return steps;
     }
 
     /// <summary>
-    /// Strata upstream: locate the engine + source tree, then create a venv and install the
-    /// pinned packages the HTTP service needs. The dependency list is read from the engine's
-    /// own requirements.txt; a built-in fallback is used only when the source is absent.
+    /// Strata family (strata-upstream / polystrata): find the engine + source tree, download them
+    /// when missing, then create a venv and install the pinned packages the HTTP service needs.
+    /// The dependency list is read from the engine's own requirements.txt.
     /// </summary>
-    private static async Task<IReadOnlyList<StepResult>> BootstrapStrataAsync(Engines.ILogSink log, CancellationToken ct)
+    private static async Task<IReadOnlyList<StepResult>> BootstrapStrataAsync(string backendId, ILogSink log, CancellationToken ct)
     {
         var steps = new List<StepResult>();
+        var profile = backendId == "polystrata" ? StrataBackend.PolyProfile : StrataBackend.UpstreamProfile;
         var config = ConfigService.ReadConfig();
-        var s = config.Strata;
 
-        var engine = Engines.StrataBackend.ResolveEngine(config);
+        var engine = StrataBackend.ResolveEngine(config, profile);
+        var server = StrataBackend.ResolveServer(config, profile);
+        if (engine == null || server == null)
+        {
+            log.Write($"{profile.DisplayName}：引擎或服务源码缺失，尝试从官方发布下载…");
+            try
+            {
+                await EngineAcquisitionService.AcquireAsync(backendId, log, ct).ConfigureAwait(false);
+                config = ConfigService.ReadConfig();
+                engine = StrataBackend.ResolveEngine(config, profile);
+                server = StrataBackend.ResolveServer(config, profile);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex) { log.Write("下载失败：" + ex.Message); }
+        }
         steps.Add(engine != null
-            ? new StepResult("strata.exe", true, engine)
-            : new StepResult("strata.exe", false, "未找到；请选择 Strata 包目录。"));
-        if (engine != null) log.Write("strata.exe：" + engine);
+            ? new StepResult(profile.EngineExeName, true, engine)
+            : new StepResult(profile.EngineExeName, false, "未找到；请选择引擎包目录或手动放置。"));
+        if (engine != null) log.Write(profile.EngineExeName + "：" + engine);
 
-        var server = Engines.StrataBackend.ResolveServer(config);
         steps.Add(server != null
             ? new StepResult("serve/server.py", true, server)
-            : new StepResult("serve/server.py", false, "未找到；请设置 Strata 源码根目录。"));
+            : new StepResult("serve/server.py", false, "未找到；请设置服务源码根目录。"));
         if (server != null) log.Write("serve/server.py：" + server);
         if (server == null || engine == null) return steps;
 
         // Python 3.10+ is required.
-        var python = Engines.StrataBackend.ResolvePython(config);
+        var python = StrataBackend.ResolvePython(config, profile);
         if (python == null)
         {
             log.Write("未找到 Python 3.10+。请安装 Windows x64 Python（勾选 PATH），或在面板中选择 python.exe。");
@@ -87,7 +112,7 @@ public static class BootstrapService
         log.Write("Python：" + python);
 
         var serveRoot = Path.GetDirectoryName(Path.GetDirectoryName(server))!;
-        var venv = Path.Combine(ConfigService.GetManagerRoot(), "venvs", "strata");
+        var venv = Path.Combine(ConfigService.GetManagerRoot(), "venvs", backendId);
         var venvPython = Path.Combine(venv, "Scripts", "python.exe");
         if (!File.Exists(venvPython))
         {
@@ -107,10 +132,10 @@ public static class BootstrapService
         return steps;
     }
 
-    private static async Task<IReadOnlyList<StepResult>> BootstrapPluginAsync(string backendId, Engines.ILogSink log, CancellationToken ct)
+    private static async Task<IReadOnlyList<StepResult>> BootstrapPluginAsync(string backendId, ILogSink log, CancellationToken ct)
     {
         var steps = new List<StepResult>();
-        var backend = Engines.BackendRegistry.ById(backendId);
+        var backend = BackendRegistry.ById(backendId);
         if (backend == null)
         {
             steps.Add(new StepResult(backendId, false, "未注册的引擎。"));
@@ -144,7 +169,7 @@ public static class BootstrapService
         return ["numpy", "jinja2", "regex", "pyyaml", "tqdm", "requests", "pillow", "psutil"];
     }
 
-    private static async Task<int> RunAsync(string exe, IReadOnlyList<string> arguments, Engines.ILogSink log, CancellationToken ct)
+    private static async Task<int> RunAsync(string exe, IReadOnlyList<string> arguments, ILogSink log, CancellationToken ct)
     {
         try
         {

@@ -84,15 +84,17 @@ PolyStrata 同样在 localhost 提供 OpenAI / Anthropic API。llama.cpp 的 `ll
 +---------------------------------------------------------------+
    |                    |                    |
    v                    v                    v
- LlamaCppBackend   StrataBackend       ProcessPluginBackend
- (内置)            (内置, upstream)     (清单驱动: polystrata)
-   |                    |                    |
-   v                    v                    v
- llama-server.exe   python -m           strata-poly (server)
-                     serve.server
-                     --engine strata
-                     --config <json>
+  LlamaCppBackend   StrataBackend       StrataBackend
+  (内置)            (内置, upstream)     (内置, polystrata)
+    |                    |                    |
+    v                    v                    v
+  llama-server.exe   python -m           python -m
+                     serve.server        serve.server
+                     --engine strata     --engine strata
+                     --config <json>     --config <json>
 ```
+
+> 注：PolyStrata 最初以 `plugin.json` 清单形式接入，后来发现其 `strata-poly.exe` 与 Strata 一样只说**行协议**（`--serve`），HTTP API 由 `serve/server.py` 提供。因此它与 Strata 是同一形态，改为**内置 `StrataBackend` 的一个 profile**（`polystrata`），而非清单插件。清单机制仍保留给真正「自带 HTTP 服务」的第三方引擎。
 
 ## 5. 核心抽象
 
@@ -345,18 +347,20 @@ public class EngineSettings
 
 ### 15.2 一键初始化（`bootstrap`）
 
-启动器提供「初始化引擎环境」入口（GUI 按钮 + CLI `--bootstrap <backend>`），按后端执行：
+启动器提供「初始化引擎环境」入口（GUI 按钮 + CLI `--bootstrap --backend <id>`），按后端执行：
 
-- **llamacpp**：定位/下载 `llama-server.exe`（用户现有安装优先）；Prism 变体按需。
+- **llamacpp**：定位 `llama-server.exe`；缺失则从 `ggml-org/llama.cpp` 发布下载 Windows CUDA 包 + cudart（`llama-<build>-bin-win-cuda-13.4-x64.zip`；CUDA 13.4 优先，12.4 回退）。注意 llama.cpp 的 Windows 二进制位于**预发布（nightly）**，因此取「发布列表中第一个含可用 Windows CUDA 资产的版本」。
 - **strata-upstream**：
-  1. 探测 Python ≥ 3.10（`py -3` / `python` / 配置项）；缺失则提示安装或引导下载。
-  2. 创建本地 venv（`<ManagerRoot>/venvs/strata`；已确认）。
-  3. `pip install` 固定版本依赖：`numpy jinja2 regex pyyaml tqdm requests pillow psutil`（`jsonschema`/`referencing` 供 `serve/structured.py` 结构化输出，按需）。固定版本随引擎版本记录。
-  4. 取得 `strata.exe`：优先复用用户已构建/已下载的引擎；否则从发布包下载并校验 SHA-256。
-  5. 校验 `serve/` 与 `strata_tokenizer` 可用（`--families` 探测）。
-- **polystrata**：定位/下载 `strata-poly`，校验版本；无需 Python。
+  1. 定位 `engine/strata.exe` 与 `serve/server.py`；缺失则从 `Niko1221/Strata` 下载 `strata-windows-x64.zip`（引擎）与该 tag 的源码归档（`serve/` + `requirements.txt`），校验 SHA-256 后解压。
+  2. 探测 Python ≥ 3.10（`py -3` / `python` / 配置项）；缺失则提示安装或引导下载。
+  3. 创建本地 venv（`<ManagerRoot>/venvs/<backendId>`）。
+  4. `pip install` 依赖：优先读取引擎源码根的 `requirements.txt`（版本已固定）；源码缺失时回退内置列表。
+  5. 校验 `--families` 含 `qwen35moe`。
+- **polystrata**：与 strata-upstream 同流程，下载 `VecSzn/PolyStrata` 的 `strata-poly-windows-x64-<hash>.zip`（引擎）与源码归档；同样需要 Python 服务。
 
 依赖清单来源（已确认）：优先读取引擎源码根的 `requirements.txt`（版本已固定）；仅在源码缺失时回退到启动器内置的兼容版本表（带版本标记）。启动器**不复制** `requirements.txt` 内容。
+
+下载实现：`EngineDownloadService`（HTTP 流式下载 + SHA-256 校验 + zip-slip 防护解压）、`EngineCatalog`（把 GitHub 发布 JSON 映射为安装计划，纯函数、可测）、`EngineAcquisitionService`（查询发布 → 下载 → 解压 → 写回配置路径）。
 
 ### 15.3 校验与幂等
 

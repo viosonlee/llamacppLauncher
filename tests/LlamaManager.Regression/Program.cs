@@ -262,6 +262,12 @@ internal static class Program
                 Run(() => PluginRegression.RunManifest(_root)));
             await Test("plugins: discovery rejects built-in id collisions", () =>
                 Run(() => PluginRegression.RunDiscovery(_root)));
+            await Test("download: release-to-plan mapping and repo routing", () =>
+                Run(DownloadRegression.RunCatalog));
+            await Test("download: extract, zip-slip guard and checksum enforcement", () =>
+                DownloadRegression.RunDownloadMechanicsAsync(_root));
+            await Test("download: real GitHub release dumps map to install plans", () =>
+                Run(() => DownloadRegression.RunAgainstRealReleases(_root)));
             await Test("compatibility: every backend reports a verdict and estimate", () =>
                 CompatibilityRegression.RunAsync(_root));
             await Test("CLI: backend routing, help and bootstrap requirements", () =>
