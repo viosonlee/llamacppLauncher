@@ -22,6 +22,13 @@ The regression suite is a console runner, not a dotnet-test project. It uses an 
 LLAMA_MANAGER_ROOT, generated GGUF headers and local fake servers, without GPU/model downloads.
 Publish to a separate output folder when an existing installation is in use.
 
+## Fresh machine
+
+To configure this tool on a brand-new Windows PC (engines, Python, verification, troubleshooting),
+follow `docs/AGENT-GUIDE.md` - it is the authoritative step list for that task. Requirements are
+tracked by id in `docs/REQUIREMENTS.md`; decisions in `docs/CHANGELOG-DECISIONS.md`; run
+`pwsh -File tools/docs-gate.ps1` before committing doc or behavior changes.
+
 ## Structure
 
 - MainWindow.xaml.cs: initialization and settings persistence.

@@ -16,7 +16,8 @@ function Fail($m) { $script:failures.Add($m) }
 
 # 1. Required documents.
 foreach ($doc in 'README.md', 'docs/REQUIREMENTS.md', 'docs/CHANGELOG-DECISIONS.md',
-                 'docs/architecture.md', 'docs/engine-plugins.md', 'THIRD-PARTY-NOTICES.md') {
+                 'docs/architecture.md', 'docs/engine-plugins.md',
+                 'docs/AGENT-GUIDE.md', 'THIRD-PARTY-NOTICES.md') {
     if (-not (Test-Path (Join-Path $root $doc))) { Fail "缺少文档：$doc" }
 }
 
@@ -41,7 +42,7 @@ foreach ($line in $definitionLines) {
 }
 
 # 3. Cross-references resolve.
-foreach ($doc in 'docs/CHANGELOG-DECISIONS.md', 'AGENTS.md', 'docs/engine-plugins.md', 'README.md') {
+foreach ($doc in 'docs/CHANGELOG-DECISIONS.md', 'AGENTS.md', 'docs/engine-plugins.md', 'docs/AGENT-GUIDE.md', 'README.md') {
     $path = Join-Path $root $doc
     if (-not (Test-Path $path)) { continue }
     $text = Get-Content $path -Raw -Encoding UTF8

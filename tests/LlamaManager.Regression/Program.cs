@@ -272,6 +272,17 @@ internal static class Program
                 Run(DoctorRegression.RunVersionComparison));
             await Test("doctor: local checks, update detection and network degradation", () =>
                 DoctorRegression.RunLocalChecksAsync(_root));
+            await Test("python: install-name parsing and newest-install selection", () => Run(() =>
+            {
+                PythonRegression.RunVersionParsing();
+                PythonRegression.RunCandidateSelection();
+            }));
+            await Test("python: silent user-scope install arguments and pinned fallback", () =>
+                Run(PythonRegression.RunArgumentShapes));
+            await Test("python: auto-install routes, offline and failure degradation", () =>
+                PythonRegression.RunEnsureAsync());
+            await Test("python: doctor points at the automatic install", () =>
+                Run(PythonRegression.RunDoctorActionMentionsInstall));
             await Test("compatibility: every backend reports a verdict and estimate", () =>
                 CompatibilityRegression.RunAsync(_root));
             await Test("CLI: backend routing, help and bootstrap requirements", () =>

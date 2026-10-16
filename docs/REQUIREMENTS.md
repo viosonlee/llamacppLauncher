@@ -91,3 +91,17 @@
 - REQ-090 已废弃：Strata cyber pack 一次性推理路径（2026-10 归档；统一走 HTTP 服务）。
 - REQ-091 已废弃：polystrata 以 plugin.json 清单接入（strata-poly 说行协议而非 HTTP，
   清单无法表达 `serve/server.py` 包装，改为内置后端）。
+
+## 10. 全新电脑部署
+
+- REQ-100 已实现：strata-upstream / polystrata 初始化时若缺 Python 3.10+，自动安装：
+  winget 优先（`Python.Python.3.12`、用户级、静默、免管理员），回退 python.org
+  3.12.10 amd64 安装包（`/quiet InstallAllUsers=0 PrependPath=1`）；装完建 venv 并按引擎
+  `requirements.txt` 装依赖。两条路都失败时明确提示手动安装，不静默。安装逻辑具备可替换的
+  探测/执行/下载接缝，回归测试不触网、不改本机。
+- REQ-101 已实现：一键体检是**全局**功能，放在顶部控制条（与「刷新」并列且相互独立：刷新=本地
+  快速探测，体检=联网深度检查）；结果写入全局「日志」页并自动切到该页，不随引擎选择消失。
+- REQ-102 已实现：提供面向 agent 的全新电脑配置指南 `docs/AGENT-GUIDE.md`，纳入文档门禁
+  必填清单与交叉引用检查。
+- REQ-103 已实现：CLI 支持无值开关（如 `--doctor --offline` 的 `--offline`）；带值选项缺值时
+  报错并指明选项名。

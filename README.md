@@ -1,4 +1,4 @@
-# 本地大模型助手（LlamaManager）
+﻿# 本地大模型助手（LlamaManager）
 
 Windows 本地大模型启动器，使用 .NET 8 WPF。
 图形界面、命令行和登录自启动共用同一套模型路由、配置和进程管理逻辑。
@@ -15,9 +15,6 @@ Windows 本地大模型启动器，使用 .NET 8 WPF。
 - **插件后端**：`plugins/<id>/plugin.json`（`schema:1`）声明如何启动自带 HTTP 服务的第三方引擎、
   如何探测就绪、参数表。插件是独立进程，崩溃不影响启动器，新增引擎无需重编译。
 
-「引擎」页可切换后端、生成参数控件、一键初始化运行环境（`--bootstrap`，自动下载引擎二进制并安装
-Python 依赖），并显示可直接复制给 pi / Claude Code / Codex 的接入地址
-（`http://127.0.0.1:<port>/v1`）。同一个 GPU 上同时只运行一个重负载后端；切换时统一提示。
 
 「一键体检」（GUI 按钮 / CLI `--doctor`）检查所有引擎：缺失、可用、有更新（联网比对发布版本）、
 需手动（Prism 无公开下载源）。llama.cpp 下载按 GPU 计算能力选择 CUDA 大版本：
@@ -107,9 +104,9 @@ llama.cpp/
 ```
 
 EXE 对应开关：`--start`、`--service`、`--stop`、`--status`、`--open`、
-`--print-preset`、`--bootstrap`、`--doctor`、`--enable-autostart`、`--disable-autostart`、`--help`。
-模型/端口覆盖使用 `--model PATH --port N`，只影响本次命令。
-`--backend ID` 选择后端（默认取配置的 `ActiveBackendId`，如 `llamacpp`、`strata-upstream`、`polystrata`）。
+「初始化」会补齐缺失引擎、按 GPU 自动选 CUDA 版的引擎，并创建 Python venv（`--bootstrap`）；
+若本机没有 Python 3.10+，会**自动安装**（winget 优先，回退 python.org，均用户级静默、免管理员），
+完成后把 `http://127.0.0.1:<port>/v1` 交给 pi / Claude Code / Codex。GPU 独占时自动换用其它引擎。
 `--bootstrap --backend ID` 一键初始化该后端运行环境（下载引擎 + Python venv 与依赖）。
 `--doctor` 一键体检：报告各引擎缺失/可用/有更新；`--offline` 跳过联网查询。
 `--start` 遇到已经运行的实例会保留它；切换需先停止再启动。
@@ -117,3 +114,5 @@ EXE 对应开关：`--start`、`--service`、`--stop`、`--status`、`--open`、
 
 开发或测试可设置 `LLAMA_MANAGER_ROOT` 指向独立目录，隔离配置、日志与进程锁。
 详见 [架构和测试说明](docs/architecture.md)。
+
+全新电脑部署请按 [agent 部署指南](docs/AGENT-GUIDE.md)（含 Python 自动安装与排障表）。

@@ -363,7 +363,8 @@ public sealed class StrataBackend : IServerBackend
             var path = FindOnPath(candidate);
             if (path != null) return path;
         }
-        return null;
+        // Installed by us (winget / python.org), but not on this process's PATH yet.
+        return Services.PythonInstaller.ProbeInstalledDirectories();
     }
 
     private static async Task<string?> ResolvePythonAsync(ManagerConfig config, CancellationToken ct)

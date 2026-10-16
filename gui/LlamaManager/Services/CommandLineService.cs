@@ -7,6 +7,13 @@ namespace LlamaManager.Services;
 
 public static class CommandLineService
 {
+    /// <summary>Consumes the value that must follow the option at <paramref name="i"/>.</summary>
+    private static string TakeValue(string[] args, ref int i)
+    {
+        if (i + 1 >= args.Length) throw new ArgumentException("命令选项缺少值：" + args[i]);
+        return args[++i];
+    }
+
     public static async Task<int> RunAsync(string[] args, TextWriter output, CancellationToken ct = default)
     {
         var command = args.FirstOrDefault()?.ToLowerInvariant();
@@ -23,12 +30,12 @@ public static class CommandLineService
         string? overrideBackend = null;
         for (int i = 1; i < args.Length; i++)
         {
-            if (i + 1 >= args.Length) throw new ArgumentException("命令选项缺少值。");
             switch (args[i])
             {
-                case "--model": config.ModelPath = Path.GetFullPath(args[++i]); overrideModel = true; break;
-                case "--port": overridePort = new LauncherArguments("--port " + args[++i]).GetPort(); break;
-                case "--backend": overrideBackend = args[++i]; break;
+                case "--model": config.ModelPath = Path.GetFullPath(TakeValue(args, ref i)); overrideModel = true; break;
+                case "--port": overridePort = new LauncherArguments("--port " + TakeValue(args, ref i)).GetPort(); break;
+                case "--backend": overrideBackend = TakeValue(args, ref i); break;
+                case "--offline": break; // value-less; only meaningful for --doctor
                 default: throw new ArgumentException("未知命令选项：" + args[i]);
             }
         }

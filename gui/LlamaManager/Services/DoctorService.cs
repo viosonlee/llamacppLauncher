@@ -130,12 +130,18 @@ public static class DoctorService
     {
         var config = ConfigService.ReadConfig();
         var python = StrataBackend.ResolvePython(config, StrataBackend.UpstreamProfile);
+        var venvs = new[] { "strata-upstream", "polystrata" }
+            .Count(id => File.Exists(Path.Combine(ConfigService.GetManagerRoot(), "venvs", id, "Scripts", "python.exe")));
+        return DescribePython(python, venvs);
+    }
+
+    /// <summary>The Python finding, given the resolved interpreter (null when absent) and the venv count.</summary>
+    public static Finding DescribePython(string? python, int venvs)
+    {
         if (python == null)
             return new Finding("python", "missing",
                 "未找到 Python 3.10+；Strata 家族的 HTTP 服务需要它。",
-                "安装 Windows x64 Python 3.10+（勾选 Add to PATH）。");
-        var venvs = new[] { "strata-upstream", "polystrata" }
-            .Count(id => File.Exists(Path.Combine(ConfigService.GetManagerRoot(), "venvs", id, "Scripts", "python.exe")));
+                "点「初始化环境」即会自动安装（winget 优先，回退 python.org）；也可手动安装 Windows x64 Python 3.10+。");
         return new Finding("python", "ok", $"{python}（{venvs}/2 个引擎 venv 已就绪）");
     }
 

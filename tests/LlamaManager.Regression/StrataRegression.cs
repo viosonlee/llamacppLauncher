@@ -6,6 +6,23 @@ using LlamaManager.Services;
 
 internal static class StrataRegression
 {
+    /// <summary>
+    /// Reads a started.pid the fake child rewrites on every launch. Its write can win the race
+    /// against our open, so retry for a bounded window instead of failing the whole run.
+    /// </summary>
+    private static async Task<int> ReadStartedPidAsync(string pidFile)
+    {
+        var wait = Stopwatch.StartNew();
+        while (true)
+        {
+            try { return int.Parse(File.ReadAllText(pidFile)); }
+            catch (Exception ex) when ((ex is IOException or FormatException) && wait.Elapsed < TimeSpan.FromSeconds(10))
+            {
+                await Task.Delay(20);
+            }
+        }
+    }
+
     public static async Task<int> RunChildAsync(string[] args)
     {
         var folder = Path.GetDirectoryName(Environment.ProcessPath!)!;
@@ -110,7 +127,7 @@ internal static class StrataRegression
                 var deadline = Stopwatch.StartNew();
                 while (!File.Exists(pidFile) && deadline.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(20);
                 Program.Check(File.Exists(pidFile), "fake child did not start");
-                var pid = int.Parse(File.ReadAllText(pidFile));
+                var pid = await ReadStartedPidAsync(pidFile);
                 using var child = Process.GetProcessById(pid);
                 if (stage == engine)
                 {
@@ -143,21 +160,9 @@ internal static class StrataRegression
         try
         {
             var deadline = Stopwatch.StartNew();
-            async Task<string> ReadPidFile()
-            {
-                // The child rewrites this file on every start; a concurrent write can win the
-                // race against our open, so read with retry instead of failing the run.
-                var wait = Stopwatch.StartNew();
-                while (wait.Elapsed < TimeSpan.FromSeconds(10))
-                {
-                    try { return File.ReadAllText(Path.Combine(engine, "started.pid")); }
-                    catch (IOException) when (File.Exists(Path.Combine(engine, "started.pid"))) { await Task.Delay(20); }
-                }
-                throw new IOException("started.pid 不可读（子进程写入竞争）。");
-            }
             while (!File.Exists(Path.Combine(engine, "started.pid")) && deadline.Elapsed < TimeSpan.FromSeconds(10))
                 await Task.Delay(20);
-            var pid = int.Parse(await ReadPidFile());
+            var pid = await ReadStartedPidAsync(Path.Combine(engine, "started.pid"));
             using var child = Process.GetProcessById(pid);
             Program.Check(StrataService.Stop(config), "Stop reported nothing stopped with a live child");
             Program.Check(child.HasExited, "Stop left the engine running");

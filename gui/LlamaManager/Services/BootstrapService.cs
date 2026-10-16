@@ -100,15 +100,22 @@ public static class BootstrapService
         if (server != null) log.Write("serve/server.py：" + server);
         if (server == null || engine == null) return steps;
 
-        // Python 3.10+ is required.
+        // Python 3.10+ is required. Install it when absent so a fresh machine needs no manual step.
         var python = StrataBackend.ResolvePython(config, profile);
         if (python == null)
         {
-            log.Write("未找到 Python 3.10+。请安装 Windows x64 Python（勾选 PATH），或在面板中选择 python.exe。");
-            steps.Add(new StepResult("python", false, "未找到 Python 3.10+。"));
-            return steps;
+            log.Write("未找到 Python 3.10+，尝试自动安装…");
+            var install = await PythonInstaller.EnsureAsync(log, ct).ConfigureAwait(false);
+            steps.Add(new StepResult("python", install.Ok,
+                install.Ok ? install.PythonPath! : install.Detail));
+            if (!install.Ok)
+            {
+                log.Write("请安装 Windows x64 Python 3.10+（勾选 PATH），或在面板中选择 python.exe。");
+                return steps;
+            }
+            python = install.PythonPath!;
         }
-        steps.Add(new StepResult("python", true, python));
+        else steps.Add(new StepResult("python", true, python));
         log.Write("Python：" + python);
 
         var serveRoot = Path.GetDirectoryName(Path.GetDirectoryName(server))!;

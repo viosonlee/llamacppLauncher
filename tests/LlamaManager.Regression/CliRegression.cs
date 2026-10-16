@@ -24,6 +24,21 @@ internal static class CliRegression
         Equal(0, await CommandLineService.RunAsync(["--help"], help));
         Check(help.ToString().Contains("--bootstrap") && help.ToString().Contains("--backend"), "help missing new options");
 
+        // A value-less flag must not be mistaken for a missing value: "--doctor --offline" used
+        // to fail with "命令选项缺少值" because the loop demanded a value after every token.
+        var doctor = new StringWriter();
+        var doctorCode = await CommandLineService.RunAsync(["--doctor", "--offline"], doctor);
+        Check(doctorCode is 0 or 1, "doctor returned an unexpected exit code: " + doctorCode);
+        Check(doctor.ToString().Contains("python"), "doctor report does not mention python");
+
+        // A value-bearing option with no value is still rejected, and named.
+        try
+        {
+            await CommandLineService.RunAsync(["--status", "--model"], new StringWriter());
+            throw new Exception("missing option value accepted");
+        }
+        catch (ArgumentException ex) { Check(ex.Message.Contains("缺少值"), "wrong error for a missing value: " + ex.Message); }
+
         // Requirements: the engine's own pinned list wins.
         var serveRoot = Path.Combine(root, "reqs");
         Directory.CreateDirectory(serveRoot);
