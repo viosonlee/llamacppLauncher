@@ -10,7 +10,14 @@ namespace LlamaManager.Services;
 /// <summary>Redirects directly to files so the server survives GUI/CLI exit without broken pipes.</summary>
 internal static class DetachedProcess
 {
-    public static Process Start(string executable, string arguments, string stdout, string stderr)
+    public static Process Start(string executable, string arguments, string stdout, string stderr) =>
+        Start(executable, arguments, stdout, stderr, Path.GetDirectoryName(executable)!);
+
+    /// <param name="workingDirectory">
+    /// The child's working directory. Callers that launch interpreters with module arguments
+    /// (<c>python -m serve.server</c>) must pass the package root, since module resolution uses it.
+    /// </param>
+    public static Process Start(string executable, string arguments, string stdout, string stderr, string workingDirectory)
     {
         var security = new SecurityAttributes { Length = Marshal.SizeOf<SecurityAttributes>(), InheritHandle = true };
         using var output = CreateFile(stdout, 0x40000000, 3, ref security, 2, 0x80, IntPtr.Zero);
@@ -41,7 +48,7 @@ internal static class DetachedProcess
             if (!UpdateProcThreadAttribute(startup.Attributes, 0, (nuint)0x20002, handles, (nuint)(3 * IntPtr.Size), IntPtr.Zero, IntPtr.Zero))
                 throw new Win32Exception(Marshal.GetLastWin32Error());
             if (!CreateProcess(executable, command, IntPtr.Zero, IntPtr.Zero, true, 0x08080000,
-                IntPtr.Zero, Path.GetDirectoryName(executable), ref startup, out var process))
+                IntPtr.Zero, workingDirectory, ref startup, out var process))
                 throw new Win32Exception(Marshal.GetLastWin32Error());
             try { return Process.GetProcessById((int)process.Id); }
             finally { CloseHandle(process.Process); CloseHandle(process.Thread); }

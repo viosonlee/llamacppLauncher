@@ -178,7 +178,8 @@ public sealed class ProcessPluginBackend : IServerBackend
         var logName = _manifest.Id;
         var process = DetachedProcess.Start(plan.FileName, args,
             Path.Combine(ConfigService.GetManagerRoot(), "logs", $"engine-{logName}.stdout.log"),
-            Path.Combine(ConfigService.GetManagerRoot(), "logs", $"engine-{logName}.stderr.log"));
+            Path.Combine(ConfigService.GetManagerRoot(), "logs", $"engine-{logName}.stderr.log"),
+            plan.WorkingDirectory);
         var session = new EngineSession
         {
             BackendId = _manifest.Id,

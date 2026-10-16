@@ -134,7 +134,10 @@ public sealed class StrataBackend : IServerBackend
         return Task.FromResult(new EngineStatus(true, false, session.Port, null));
     }
 
-    public LaunchPlan BuildLaunch(EngineStartRequest request)
+    public LaunchPlan BuildLaunch(EngineStartRequest request) =>
+        BuildLaunch(request, TokenizerDir(request.Config, _profile.Id, ResolveModel(request.Config)));
+
+    public LaunchPlan BuildLaunch(EngineStartRequest request, string tokenizer)
     {
         var config = request.Config;
         var model = ResolveModel(config);
@@ -144,7 +147,6 @@ public sealed class StrataBackend : IServerBackend
         var port = ResolvePort(request);
         var host = Param(config, "host") ?? (string.IsNullOrWhiteSpace(config.Strata.Host) ? "127.0.0.1" : config.Strata.Host);
 
-        var tokenizer = TokenizerDir(config, _profile.Id, model);
         var runconfig = BuildRunConfig(config, engine, model, tokenizer, port, host);
         var configPath = RunConfigPath(_profile.Id, model);
 
@@ -153,20 +155,25 @@ public sealed class StrataBackend : IServerBackend
 
         var env = new Dictionary<string, string> { ["PYTHONUTF8"] = "1", ["PYTHONUNBUFFERED"] = "1" };
         var files = new Dictionary<string, string> { [configPath] = JsonSerializer.Serialize(runconfig, new JsonSerializerOptions { WriteIndented = true }) };
-        var cwd = Path.GetDirectoryName(server)!;
+        // `python -m serve.server` resolves the `serve` package from the working directory, so
+        // this must be the source root (serve/'s parent), not the serve/ folder itself.
+        var cwd = Path.GetDirectoryName(Path.GetDirectoryName(server))!;
         return new LaunchPlan(python, args, cwd, env, files);
     }
 
     public async Task<EngineSession> StartAsync(EngineStartRequest request, ILogSink log, CancellationToken ct)
     {
-        var plan = BuildLaunch(request);
         var model = ResolveModel(request.Config);
-        // The server needs the tokenizer directory (vocab.json etc.) next to the runconfig.
+        // The server needs the tokenizer directory (vocab.json etc.); prepare it first so the
+        // runconfig can point at the directory the tool actually produced.
         var server = ResolveServer(request.Config)!;
         var serveRoot = Path.GetDirectoryName(Path.GetDirectoryName(server))!;
         log.Write("准备分词表…");
-        await StrataPackService.EnsureTokenizerDirAsync(serveRoot, model, TokenizerDir(request.Config, _profile.Id, model),
+        var tokenizer = await StrataPackService.EnsureTokenizerDirAsync(serveRoot, model,
+            TokenizerDir(request.Config, _profile.Id, model),
             Param(request.Config, "pythonPath") ?? request.Config.Strata.PythonPath, log.Write, ct).ConfigureAwait(false);
+        log.Write("分词表：" + tokenizer);
+        var plan = BuildLaunch(request, tokenizer);
         // Materialize generated files (the runconfig) before launching.
         foreach (var (path, content) in plan.GeneratedFiles)
         {
@@ -180,7 +187,8 @@ public sealed class StrataBackend : IServerBackend
         log.Write($"启动 {_profile.DisplayName} 服务：{plan.FileName} {args}");
         var process = DetachedProcess.Start(plan.FileName, args,
             Path.Combine(ConfigService.GetManagerRoot(), "logs", $"engine-{_profile.Id}.stdout.log"),
-            Path.Combine(ConfigService.GetManagerRoot(), "logs", $"engine-{_profile.Id}.stderr.log"));
+            Path.Combine(ConfigService.GetManagerRoot(), "logs", $"engine-{_profile.Id}.stderr.log"),
+            plan.WorkingDirectory);
         var session = new EngineSession
         {
             BackendId = _profile.Id,

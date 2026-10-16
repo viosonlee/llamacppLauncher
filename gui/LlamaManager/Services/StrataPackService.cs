@@ -46,14 +46,24 @@ public static class StrataPackService
     /// Prepare the tokenizer directory the Strata HTTP service reads (vocab.json / merges.txt /
     /// token_type.json / chat_template.jinja) from the GGUF, reusing it per model. Requires the
     /// Strata source tree (tools/strata_tokenizer.py) and Python 3.10+.
+    /// Returns the directory that actually contains vocab.json: tool variants differ on whether
+    /// they write into --out directly or into --out/tokenizer (the upstream tool nests), so the
+    /// caller must point the runconfig at the real location rather than assuming one.
     /// </summary>
     public static async Task<string> EnsureTokenizerDirAsync(string serveRoot, string model, string tokenizerDir,
         string pythonPath = "", Action<string>? progress = null, CancellationToken ct = default)
     {
-        var marker = Path.Combine(tokenizerDir, "vocab.json");
+        string? FindMarker(string directory) =>
+            File.Exists(Path.Combine(directory, "vocab.json")) ? directory
+            : File.Exists(Path.Combine(directory, "tokenizer", "vocab.json")) ? Path.Combine(directory, "tokenizer")
+            : null;
+
         var source = new FileInfo(model);
-        if (File.Exists(marker) && source.Exists && File.GetLastWriteTimeUtc(marker) >= source.LastWriteTimeUtc)
-            return tokenizerDir;
+        var existing = Directory.Exists(tokenizerDir) ? FindMarker(tokenizerDir) : null;
+        if (existing != null && source.Exists &&
+            File.GetLastWriteTimeUtc(Path.Combine(existing, "vocab.json")) >= source.LastWriteTimeUtc)
+            return existing;
+
         var tools = Path.Combine(Path.GetFullPath(serveRoot), "tools");
         var tool = Path.Combine(tools, "strata_tokenizer.py");
         if (!File.Exists(tool)) throw new FileNotFoundException("Strata 源码缺少 tools/strata_tokenizer.py，无法准备分词表。", tool);
@@ -63,8 +73,9 @@ public static class StrataPackService
         Directory.CreateDirectory(tokenizerDir);
         await RunCheckedAsync(PythonStart(python.Executable, ["-u", tool, "--gguf", model, "--out", tokenizerDir], python.GgufRoot),
             logPath, "tokenizer", progress ?? (_ => { }), ct).ConfigureAwait(false);
-        if (!File.Exists(marker)) throw new IOException("分词表准备失败：" + logPath);
-        return tokenizerDir;
+        var produced = FindMarker(tokenizerDir)
+            ?? throw new IOException("分词表准备失败（工具已运行但未找到 vocab.json）：" + logPath);
+        return produced;
     }
 
     public static async Task<Result> PrepareAsync(Options options, Action<string>? progress = null, CancellationToken ct = default)
