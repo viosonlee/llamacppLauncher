@@ -72,11 +72,16 @@ public partial class MainWindow
             EngineBaseUrlTextBox.Text = running ? $"http://127.0.0.1:{session!.Port}/v1" : "";
 
             // Embedding is llama.cpp-only.
-            EmbeddingStatusText.Text = embeddingSession == null ? "嵌入: 未启动" :
-                $"嵌入: {(embeddingReadyTask.Result ? "就绪" : "加载中")} · {embeddingSession.Port}";
+            EmbeddingStatusText.Text = embeddingSession == null ? "未启动" :
+                $"{(embeddingReadyTask.Result ? "就绪" : "加载中")} · PID {embeddingSession.ProcessId} · :{embeddingSession.Port}";
             EmbeddingStatusDot.Fill = (Brush)FindResource(embeddingSession == null ? "TextFillColorSecondaryBrush" : embeddingReadyTask.Result ? "SystemFillColorSuccessBrush" : "SystemFillColorCautionBrush");
-            EmbeddingToggleButton.Content = _embeddingStarting ? "终止启动" : embeddingSession == null ? "启动" : "停止";
+            EmbeddingToggleButton.Content = _embeddingStarting ? "终止启动" : embeddingSession == null ? "启动服务" : "停止服务";
             EmbeddingToggleButton.IsEnabled = !_embeddingStarting && isLlamacpp;
+            if (_updateCount == 0)
+            {
+                EmbeddingPortBox.Text = embeddingSession?.Port > 0 ? embeddingSession.Port.ToString() : _config.EmbeddingPort.ToString();
+                EmbeddingModelBox.Text = _config.EmbeddingModelPath;
+            }
 
             AutostartStatusText.Text = autostartTask.Result.Text;
             AutostartButton.Content = autostartTask.Result.Enabled ? "关闭自启" : "开启自启";
@@ -261,6 +266,45 @@ public partial class MainWindow
             _embeddingStarting = false; _statusVersion++;
             await RefreshStatusAsync();
         }
+    }
+
+    private void EmbeddingPortBox_LostFocus(object sender, RoutedEventArgs e)
+    {
+        if (!_loaded || _updateCount > 0) return;
+        if (int.TryParse(EmbeddingPortBox.Text.Trim(), out var port) && port is >= 1 and <= 65535 && port != _config.EmbeddingPort)
+        {
+            _config.EmbeddingPort = port;
+            ConfigService.SaveConfig(_config);
+            _statusVersion++;
+            _ = RefreshStatusAsync();
+        }
+    }
+
+    private void EmbeddingModelBox_LostFocus(object sender, RoutedEventArgs e)
+    {
+        if (!_loaded || _updateCount > 0) return;
+        var path = EmbeddingModelBox.Text.Trim();
+        if (path != _config.EmbeddingModelPath)
+        {
+            _config.EmbeddingModelPath = path;
+            ConfigService.SaveConfig(_config);
+        }
+    }
+
+    private void EmbeddingModelBrowse_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "选择嵌入模型",
+            Filter = "GGUF 模型|*.gguf|所有文件|*.*",
+            InitialDirectory = string.IsNullOrWhiteSpace(_config.ModelsDirectory)
+                ? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
+                : _config.ModelsDirectory,
+        };
+        if (dialog.ShowDialog() != true) return;
+        EmbeddingModelBox.Text = dialog.FileName;
+        _config.EmbeddingModelPath = dialog.FileName;
+        ConfigService.SaveConfig(_config);
     }
 
     private async void AutostartButton_Click(object sender, RoutedEventArgs e)

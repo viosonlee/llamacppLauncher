@@ -85,18 +85,19 @@ public static class EngineCatalog
         assets.FirstOrDefault(a => Regex.IsMatch(a.Name, pattern, RegexOptions.IgnoreCase));
 
     /// <summary>
-    /// llama.cpp: a nightly Windows build. CUDA 13.4 is preferred (matches a current driver);
-    /// CUDA 12.4 is the fallback for older drivers. The cudart zip carries the CUDA DLLs the
-    /// binary loads, and both extract to the same folder as <c>llama-server.exe</c>.
+    /// llama.cpp: a nightly Windows build. The CUDA major follows the GPU: official CUDA 13.4
+    /// builds stopped shipping Turing/Volta SASS, so older cards (compute capability &lt; 8.0)
+    /// get the CUDA 12.4 build, which still carries their kernels; newer cards get 13.4.
+    /// The cudart zip carries the CUDA DLLs the binary loads, and both extract to the same
+    /// folder as <c>llama-server.exe</c>.
     /// </summary>
-    public static EngineInstallPlan? LlamaCppPlan(ReleaseInfo release, string managerRoot)
+    public static EngineInstallPlan? LlamaCppPlan(ReleaseInfo release, string managerRoot, double computeCapability = 0)
     {
-        var binary = Find(release.Assets, @"^llama-.*-bin-win-cuda-13\.4-x64\.zip$")
-                  ?? Find(release.Assets, @"^llama-.*-bin-win-cuda-12\.4-x64\.zip$");
+        var cuda = computeCapability > 0 && computeCapability < 8.0 ? "12.4" : "13.4";
+        var binary = Find(release.Assets, $@"^llama-.*-bin-win-cuda-{Regex.Escape(cuda)}-x64\.zip$");
         if (binary == null) return null;
         var archives = new List<ReleaseAsset> { binary };
-        var cudart = Find(release.Assets, @"^cudart-llama-bin-win-cuda-13\.4-x64\.zip$")
-                  ?? Find(release.Assets, @"^cudart-llama-bin-win-cuda-12\.4-x64\.zip$");
+        var cudart = Find(release.Assets, $@"^cudart-llama-bin-win-cuda-{Regex.Escape(cuda)}-x64\.zip$");
         if (cudart != null) archives.Add(cudart);
         // llama-server.exe sits at the manager root so ConfigService finds it as the llama.cpp root.
         return new EngineInstallPlan("llamacpp", archives, managerRoot, null, null);

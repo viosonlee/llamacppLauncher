@@ -54,7 +54,7 @@ public static class StrataService
             if (process == null) return false;
             var stdout = process.StandardOutput.ReadToEndAsync();
             var stderr = process.StandardError.ReadToEndAsync();
-            if (!process.WaitForExit(5000)) return false;
+            if (!process.WaitForExit(15000)) return false;
             var text = stdout.GetAwaiter().GetResult();
             return process.ExitCode == 0 && text.Contains("qwen35moe", StringComparison.Ordinal);
         }
@@ -191,7 +191,7 @@ public static class StrataService
             using var process = Process.Start(start);
             if (process == null) return 0;
             var text = process.StandardOutput.ReadToEnd().Trim();
-            process.WaitForExit(5000);
+            process.WaitForExit(15000);
             var first = text.Split('\n').FirstOrDefault()?.Trim();
             return long.TryParse(first, out var mib) ? mib : 0;
         }

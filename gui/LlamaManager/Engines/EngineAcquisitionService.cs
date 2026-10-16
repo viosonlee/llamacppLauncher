@@ -45,10 +45,38 @@ public static class EngineAcquisitionService
     /// <summary>Builds the install plan for a backend from a release, or null when unsupported.</summary>
     public static EngineInstallPlan? PlanFor(string backendId, ReleaseInfo release, string managerRoot) => backendId switch
     {
-        "llamacpp" => EngineCatalog.LlamaCppPlan(release, managerRoot),
+        "llamacpp" => EngineCatalog.LlamaCppPlan(release, managerRoot, DetectComputeCapability()),
         "strata-upstream" => EngineCatalog.StrataPlan(release, managerRoot),
         "polystrata" => EngineCatalog.PolyStrataPlan(release, managerRoot),
         _ => null,
+    };
+
+    /// <summary>
+    /// The GPU's compute capability (e.g. 7.5 for Turing), via nvidia-smi; 0 when unknown.
+    /// Decides which CUDA build of llama.cpp to fetch - the 13.4 nightlies no longer carry
+    /// kernels for pre-Ampere cards.
+    /// </summary>
+    public static Func<double> DetectComputeCapability { get; set; } = () =>
+    {
+        try
+        {
+            var output = Services.ProcessProbe.RunAsync("nvidia-smi",
+                "--query-gpu=compute_cap --format=csv,noheader", TimeSpan.FromSeconds(10))
+                .GetAwaiter().GetResult();
+            if (double.TryParse(output.Trim().Split('\n')[0].Trim(),
+                    System.Globalization.CultureInfo.InvariantCulture, out var cap))
+            {
+                LogService.Write($"GPU 计算能力：{cap}（选择 CUDA {(cap < 8.0 ? "12.4" : "13.4")} 构建）。");
+                return cap;
+            }
+            LogService.Write("无法解析 nvidia-smi 的计算能力输出，按 CUDA 13.4 选择：" + output.Trim());
+            return 0;
+        }
+        catch (Exception ex) when (ex is IOException or System.ComponentModel.Win32Exception or InvalidOperationException or TimeoutException)
+        {
+            LogService.Write("nvidia-smi 探测失败（按 CUDA 13.4 选择）：" + ex.Message);
+            return 0;
+        }
     };
 
     /// <summary>Whether the launcher can download this backend's engine automatically.</summary>

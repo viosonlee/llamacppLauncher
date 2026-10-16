@@ -268,6 +268,10 @@ internal static class Program
                 DownloadRegression.RunDownloadMechanicsAsync(_root));
             await Test("download: real GitHub release dumps map to install plans", () =>
                 Run(() => DownloadRegression.RunAgainstRealReleases(_root)));
+            await Test("doctor: version comparison across release schemes", () =>
+                Run(DoctorRegression.RunVersionComparison));
+            await Test("doctor: local checks, update detection and network degradation", () =>
+                DoctorRegression.RunLocalChecksAsync(_root));
             await Test("compatibility: every backend reports a verdict and estimate", () =>
                 CompatibilityRegression.RunAsync(_root));
             await Test("CLI: backend routing, help and bootstrap requirements", () =>

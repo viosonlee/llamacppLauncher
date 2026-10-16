@@ -16,6 +16,7 @@ namespace LlamaManager;
 public partial class MainWindow
 {
     private bool _engineUpdate;
+    private bool _doctorRunning;
     private readonly Dictionary<string, TextBox> _engineParameterBoxes = new(StringComparer.OrdinalIgnoreCase);
 
     private async Task ApplyEngineConfigAsync()
@@ -241,6 +242,27 @@ public partial class MainWindow
         catch (OperationCanceledException) { AppendEngineOutput("已取消。"); }
         catch (Exception ex) { ShowError("初始化失败", ex); }
         finally { await RefreshEngineAsync(); }
+    }
+
+    private async void EngineDoctorButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_doctorRunning) return;
+        _doctorRunning = true;
+        EngineDoctorButton.IsEnabled = false;
+        EngineOutputBox.Clear();
+        try
+        {
+            var report = await Task.Run(() => DoctorService.RunAsync(checkUpdates: true, _lifetime.Token), _lifetime.Token);
+            foreach (var finding in report.Findings)
+            {
+                AppendEngineOutput($"[{finding.Status}] {finding.Engine}: {finding.Detail}");
+                if (finding.Action != null) AppendEngineOutput("    → " + finding.Action);
+            }
+            AppendEngineOutput(report.Summary);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { ShowError("体检失败", ex); }
+        finally { _doctorRunning = false; EngineDoctorButton.IsEnabled = true; }
     }
 
     private void EngineCopyUrlButton_Click(object sender, RoutedEventArgs e)

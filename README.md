@@ -1,6 +1,6 @@
-# LlamaManager
+# 本地大模型助手（LlamaManager）
 
-Windows 上的 llama.cpp / Prism 模型启动器，使用 .NET 8 WPF。
+Windows 本地大模型启动器，使用 .NET 8 WPF。
 图形界面、命令行和登录自启动共用同一套模型路由、配置和进程管理逻辑。
 
 ## 引擎后端（可插拔）
@@ -18,6 +18,13 @@ Windows 上的 llama.cpp / Prism 模型启动器，使用 .NET 8 WPF。
 「引擎」页可切换后端、生成参数控件、一键初始化运行环境（`--bootstrap`，自动下载引擎二进制并安装
 Python 依赖），并显示可直接复制给 pi / Claude Code / Codex 的接入地址
 （`http://127.0.0.1:<port>/v1`）。同一个 GPU 上同时只运行一个重负载后端；切换时统一提示。
+
+「一键体检」（GUI 按钮 / CLI `--doctor`）检查所有引擎：缺失、可用、有更新（联网比对发布版本）、
+需手动（Prism 无公开下载源）。llama.cpp 下载按 GPU 计算能力选择 CUDA 大版本：
+pre-Ampere（如 RTX 20 系）取 CUDA 12.4 构建，更新的卡取 13.4。
+
+标签页：模型 / 参数 / 高级 / **嵌入** / 日志。嵌入页管理独立的向量化服务
+（如 bge-m3，供资料量化 / RAG 使用），与主模型服务相互独立。
 
 模型文件（`.gguf`）由用户自备；引擎二进制首次使用时下载，不随启动器分发。
 
@@ -100,12 +107,13 @@ llama.cpp/
 ```
 
 EXE 对应开关：`--start`、`--service`、`--stop`、`--status`、`--open`、
-`--print-preset`、`--bootstrap`、`--enable-autostart`、`--disable-autostart`、`--help`。
+`--print-preset`、`--bootstrap`、`--doctor`、`--enable-autostart`、`--disable-autostart`、`--help`。
 模型/端口覆盖使用 `--model PATH --port N`，只影响本次命令。
 `--backend ID` 选择后端（默认取配置的 `ActiveBackendId`，如 `llamacpp`、`strata-upstream`、`polystrata`）。
-`--bootstrap --backend ID` 一键初始化该后端运行环境（Python venv 与依赖等）。
+`--bootstrap --backend ID` 一键初始化该后端运行环境（下载引擎 + Python venv 与依赖）。
+`--doctor` 一键体检：报告各引擎缺失/可用/有更新；`--offline` 跳过联网查询。
 `--start` 遇到已经运行的实例会保留它；切换需先停止再启动。
-退出码：0 成功；1 错误；2 进程仍在加载，但 90 秒内 API 尚未就绪。
+退出码：0 成功；1 错误（`--doctor` 有问题时也是 1）；2 进程仍在加载，但 90 秒内 API 尚未就绪。
 
 开发或测试可设置 `LLAMA_MANAGER_ROOT` 指向独立目录，隔离配置、日志与进程锁。
 详见 [架构和测试说明](docs/architecture.md)。

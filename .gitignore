@@ -39,3 +39,9 @@ __pycache__/
 *.orig
 *.rej
 *.lnk
+
+# Engine installs, downloads and generated runtime data (REQ-054)
+engines/
+downloads/
+data/
+venvs/

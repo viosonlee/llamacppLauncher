@@ -111,13 +111,17 @@ internal static class UiRegression
                 ((TextBlock)window.FindName("LiveSpeedText")).Text = "上次速度：23.29 tok/s · 256 tokens";
                 ((TextBlock)window.FindName("ModelInfoText")).Text = "qwen3 · 64 层 · 原生上下文 32768\n含 TQ1_0 张量；部分引擎的 CUDA 后端不支持此类型，可能回退 CPU。请以加载日志中的 GPU 权重为准。";
                 var logTab = tabs.Items.Count - 1;
-                Program.Check(tabs.Items.Count == 4, $"expected 4 nav pages, found {tabs.Items.Count}");
+                var embeddingTab = tabs.Items.Count - 2;
+                Program.Check(tabs.Items.Count == 5, $"expected 5 nav pages (model/params/advanced/embedding/log), found {tabs.Items.Count}");
                 Program.Check(((TextBlock)window.FindName("ProcessInfoText")).Text == "进程: 无", "log tab lost process info");
                 Program.Check(window.FindName("LogScrollViewer") is ScrollViewer, "log scroll viewer missing");
                 Program.Check(window.FindName("EngineBackendBox") != null, "engine backend selector missing");
                 Program.Check(window.FindName("EngineBaseUrlTextBox") != null, "engine base URL field missing");
                 Program.Check(window.FindName("AutoOpenBrowserCheckBox") != null, "auto-open checkbox missing");
-                foreach (var tab in new[] { 0, 1, 2, 3 })
+                Program.Check(window.FindName("EngineDoctorButton") != null, "doctor button missing");
+                Program.Check(window.FindName("EmbeddingModelBox") != null && window.FindName("EmbeddingPortBox") != null,
+                    "embedding tab fields missing");
+                foreach (var tab in new[] { 0, 1, 2, 3, 4 })
                 {
                     tabs.SelectedIndex = tab;
                     content.Measure(new Size(690, 775)); content.Arrange(new Rect(0, 0, 690, 775)); content.UpdateLayout();

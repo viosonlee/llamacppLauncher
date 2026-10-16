@@ -25,6 +25,10 @@ internal static class DownloadRegression
               "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
             { "name": "cudart-llama-bin-win-cuda-13.4-x64.zip",
               "browser_download_url": "https://x/cudart-cuda13.zip" },
+            { "name": "llama-b11642-bin-win-cuda-12.4-x64.zip",
+              "browser_download_url": "https://x/llama-cuda12.zip" },
+            { "name": "cudart-llama-bin-win-cuda-12.4-x64.zip",
+              "browser_download_url": "https://x/cudart-cuda12.zip" },
             { "name": "llama-b11642-bin-win-cpu-x64.zip", "browser_download_url": "https://x/cpu.zip" }
           ]
         }
@@ -40,13 +44,27 @@ internal static class DownloadRegression
         Equal("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             llamaPlan.EngineArchives[0].Sha256);
 
-        // CUDA 12.4 fallback when 13.4 is absent.
+        // A release with only the 12.4 asset still serves a pre-Ampere GPU.
         var cuda12 = JsonNode.Parse("""
         { "tag_name": "b1", "assets": [
           { "name": "llama-b1-bin-win-cuda-12.4-x64.zip", "browser_download_url": "https://x/c12.zip" } ] }
         """)!;
-        var c12Plan = EngineCatalog.LlamaCppPlan(EngineCatalog.ParseRelease(cuda12), @"C:\root");
+        var c12Plan = EngineCatalog.LlamaCppPlan(EngineCatalog.ParseRelease(cuda12), @"C:\root", 7.5);
         Check(c12Plan != null && c12Plan.EngineArchives[0].Url.EndsWith("c12.zip"), "CUDA 12 fallback failed");
+
+        // Pre-Ampere GPUs (compute capability < 8.0) must get the CUDA 12.4 build even when a
+        // 13.4 asset exists: the 13.4 nightlies dropped Turing/Volta SASS (verified live on an
+        // RTX 2060 - the 13.4 build fails with "PTX compiled with an unsupported toolchain").
+        var c12Choice = EngineCatalog.LlamaCppPlan(llamaRelease, @"C:\root", 7.5);
+        Check(c12Choice != null, "no plan for sm_75");
+        Check(c12Choice!.EngineArchives[0].Name.Contains("cuda-12.4"), "12.4 asset not selected for sm_75");
+        Check(c12Choice.EngineArchives.Any(a => a.Name.Contains("cudart-llama-bin-win-cuda-12.4")), "12.4 cudart not paired for sm_75");
+        // Ampere and newer keep 13.4.
+        var c13Choice = EngineCatalog.LlamaCppPlan(llamaRelease, @"C:\root", 8.6);
+        Check(c13Choice!.EngineArchives[0].Name.Contains("cuda-13.4"), "Ampere GPU did not keep CUDA 13.4");
+        // Unknown capability defaults to 13.4 (the common case for current cards).
+        Check(EngineCatalog.LlamaCppPlan(llamaRelease, @"C:\root", 0)!.EngineArchives[0].Name.Contains("cuda-13.4"),
+            "unknown capability did not default to 13.4");
 
         // A release with no Windows CUDA asset yields no plan (honest failure, not a wrong pick).
         var none = JsonNode.Parse("""{ "tag_name": "b1", "assets": [] }""")!;
