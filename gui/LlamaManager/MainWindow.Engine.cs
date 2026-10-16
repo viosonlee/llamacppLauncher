@@ -249,20 +249,27 @@ public partial class MainWindow
         if (_doctorRunning) return;
         _doctorRunning = true;
         EngineDoctorButton.IsEnabled = false;
-        EngineOutputBox.Clear();
+        LogService.Write("—— 一键体检开始 ——");
         try
         {
             var report = await Task.Run(() => DoctorService.RunAsync(checkUpdates: true, _lifetime.Token), _lifetime.Token);
             foreach (var finding in report.Findings)
             {
-                AppendEngineOutput($"[{finding.Status}] {finding.Engine}: {finding.Detail}");
-                if (finding.Action != null) AppendEngineOutput("    → " + finding.Action);
+                LogService.Write($"[体检] {finding.Engine}: {finding.Status} — {finding.Detail}");
+                if (finding.Action != null) LogService.Write($"[体检]     → {finding.Action}");
             }
-            AppendEngineOutput(report.Summary);
+            LogService.Write($"—— 一键体检结束：{report.Summary} ——");
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException) { LogService.Write("—— 一键体检已取消 ——"); }
         catch (Exception ex) { ShowError("体检失败", ex); }
-        finally { _doctorRunning = false; EngineDoctorButton.IsEnabled = true; }
+        finally
+        {
+            _doctorRunning = false;
+            EngineDoctorButton.IsEnabled = true;
+            // Results are global (they cover every engine), so surface the log page.
+            ConfigurationTabs.SelectedIndex = ConfigurationTabs.Items.Count - 1;
+            RefreshLog();
+        }
     }
 
     private void EngineCopyUrlButton_Click(object sender, RoutedEventArgs e)

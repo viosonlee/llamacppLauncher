@@ -48,9 +48,14 @@
                     <ComboBox Grid.Column="1" x:Name="EngineBackendBox" Style="{StaticResource FluentComboBox}"
                               FontSize="12" MinWidth="180" VerticalAlignment="Center"
                               SelectionChanged="EngineBackendBox_SelectionChanged"/>
-                    <ui:Button Grid.Column="2" x:Name="EngineRefreshButton" Content="刷新"
-                               Click="EngineRefreshButton_Click" Margin="6,0,0,0" Padding="8,3" FontSize="11"
-                               ToolTip="重新探测所有引擎并刷新设备检测"/>
+                    <StackPanel Grid.Column="2" Orientation="Horizontal">
+                        <ui:Button x:Name="EngineRefreshButton" Content="刷新"
+                                   Click="EngineRefreshButton_Click" Padding="8,3" FontSize="11"
+                                   ToolTip="重新探测所有引擎并刷新设备检测"/>
+                        <ui:Button x:Name="EngineDoctorButton" Content="体检"
+                                   Click="EngineDoctorButton_Click" Margin="4,0,0,0" Padding="8,3" FontSize="11"
+                                   ToolTip="一键体检：检查所有引擎是否缺失、是否有更新（联网查询发布版本），结果见「日志」页。"/>
+                    </StackPanel>
 
                     <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0,0,0">
                         <Ellipse x:Name="StatusDot" Width="12" Height="12" Fill="{DynamicResource SystemFillColorCriticalBrush}" Margin="0,0,8,0"/>
@@ -575,13 +580,10 @@
                                       Checked="AutoOpenBrowserCheckBox_Changed" Unchecked="AutoOpenBrowserCheckBox_Changed"/>
                         </StackPanel>
 
-                        <!-- Shared: doctor + bootstrap (both engines) -->
+                        <!-- Current engine: bootstrap (doctor is global, see the top bar) -->
                         <DockPanel Margin="0,14,0,10">
-                            <ui:Button DockPanel.Dock="Left" x:Name="EngineDoctorButton" Content="一键体检"
-                                       Click="EngineDoctorButton_Click" Padding="12,5" FontSize="11"
-                                       ToolTip="检查所有引擎：是否缺失、是否有更新（联网查询发布版本）。"/>
                             <ui:Button DockPanel.Dock="Left" x:Name="EngineBootstrapButton" Content="初始化环境"
-                                       Click="EngineBootstrapButton_Click" Padding="12,5" FontSize="11" Margin="8,0,0,0"
+                                       Click="EngineBootstrapButton_Click" Padding="12,5" FontSize="11"
                                        ToolTip="探测并安装当前引擎所需的运行时（引擎二进制、Python 依赖）。"/>
                             <TextBlock x:Name="EngineRunStatusText" Text="" FontSize="11" TextWrapping="Wrap"
                                        Margin="10,0,0,0" VerticalAlignment="Center"
