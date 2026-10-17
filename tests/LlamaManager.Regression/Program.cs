@@ -289,6 +289,8 @@ internal static class Program
                 CliRegression.RunAsync(_root));
             await Test("strata: compatibility roles, native heads, required tensors and MTP structure", () =>
                 Run(StrataCompatibilityRegression.RunFormats));
+            await Test("parameters: VisibleWhen grammar hides, groups and never throws", () =>
+                Run(ParameterVisibilityRegression.Run));
             await Test("strata: complete GGUF shards, duplicate detection and cancellation", () =>
                 Run(() => StrataCompatibilityRegression.RunShards(_root)));
             await Test("presets: reject a known signature mismatch on identical names", () => Run(() =>

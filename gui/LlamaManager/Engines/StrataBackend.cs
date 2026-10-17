@@ -54,25 +54,74 @@ public sealed class StrataBackend : IServerBackend
         var isPoly = profile.Id == PolyProfile.Id;
         var list = new List<ParameterSpec>
         {
-            new("packageRoot", "引擎包目录", "路径", ParamType.FolderPath, "", "包含 engine\\" + profile.EngineExeName + " 与 serve\\server.py 的根目录。留空自动匹配默认目录。"),
-            new("serveRoot", "服务源码根", "路径", ParamType.FolderPath, "", "包含 serve\\server.py 的 Python 服务目录；留空默认使用引擎包目录。"),
-            new("pythonPath", "Python 解释器", "路径", ParamType.FilePath, "", "Python 3.10+ 的 python.exe；留空自动使用一键配置好的专属虚拟环境。"),
-            new("servePort", "服务端口", "基本", ParamType.Integer, "8091", "Strata HTTP API 监听端口（默认 8091，供 Claude Code / Agent 客户端接入）。", 1, 65535),
-            new("host", "监听地址", "基本", ParamType.Text, "127.0.0.1", "监听 IP 地址。默认 127.0.0.1 仅本机安全访问；设为 0.0.0.0 允许局域网设备访问。"),
-            new("context", "上下文", "基本", ParamType.Integer, "4096", "单次最大上下文 Token 数（--max-context）。显存紧张设 2048~4096，显存充裕可设 8192 或更大。", 256, 1048576),
+            new("packageRoot", "引擎包目录", "路径", ParamType.FolderPath, "",
+                "包含 engine\\" + profile.EngineExeName + " 与 serve\\server.py 的根目录。留空自动匹配默认目录。",
+                Help: "【引擎包目录】\n• 作用：Strata 引擎二进制与配套服务脚本所在的根目录。\n• 建议：留空，系统会自动匹配 engines/strata-upstream 或 engines/polystrata。\n• 包含：engine\\" + profile.EngineExeName + " 与 serve\\server.py。"),
+            new("serveRoot", "服务源码根", "路径", ParamType.FolderPath, "",
+                "包含 serve\\server.py 的 Python 服务目录；留空默认使用引擎包目录。",
+                Help: "【服务源码根】\n• 作用：提供 OpenAI / Anthropic 兼容 HTTP API 的 Python 服务源码根目录。\n• 建议：留空即可，默认使用“引擎包目录”。"),
+            new("pythonPath", "Python 解释器", "路径", ParamType.FilePath, "",
+                "Python 3.10+ 的 python.exe；留空自动使用一键配置好的专属虚拟环境。",
+                Help: "【Python 解释器】\n• 作用：启动 API 服务端所需的 Python 3.10+ 可执行文件。\n• 建议：留空即可，系统会使用「一键配置环境」准备好的专属虚拟环境。"),
+            new("servePort", "服务端口", "基本", ParamType.Integer, "8091",
+                "Strata HTTP API 监听端口（默认 8091，供 Claude Code / Agent 客户端接入）。", 1, 65535,
+                Help: "【服务端口】\n• 作用：Strata HTTP API 监听端口，外部客户端通过它连接模型。\n• 默认：8091（已避开 llama.cpp 的 8080）。\n• 冲突时改成 1024–65535 内任意空闲端口。",
+                RangeHint: "1–65535，推荐 8091"),
+            new("host", "监听地址", "基本", ParamType.Text, "127.0.0.1",
+                "监听 IP 地址。默认 127.0.0.1 仅本机安全访问；设为 0.0.0.0 允许局域网设备访问。",
+                Help: "【监听地址】\n• 作用：HTTP API 监听哪个网络地址。\n• 127.0.0.1（默认）：仅本机访问，最安全。\n• 0.0.0.0：允许局域网内其他设备调用，注意防火墙与鉴权。"),
+            new("context", "上下文", "基本", ParamType.Integer, "4096",
+                "单次最大上下文 Token 数（--max-context）。显存紧张设 2048~4096，显存充裕可设 8192 或更大。", 256, 1048576,
+                Help: "【上下文】\n• 作用：引擎单次能处理的上下文 Token 上限（--max-context）。\n• 显存：上下文越大，KV 缓存占用越多。\n• 参考：6GB 显存建议 2048–4096；8–12GB 建议 4096–8192；16GB+ 可到 16384。",
+                Unit: "tokens", RangeHint: "256–1,048,576，推荐 4096 / 8192"),
         };
         if (isPoly)
         {
-            list.Add(new("vramReserveMib", "显存预留 MiB", "基本", ParamType.Integer, "256", "为操作系统界面和显卡驱动预留的安全显存量（--vram-reserve-mib，默认 256），PolyStrata 自动将剩余显存用于缓存 MoE 专家。", 0, 60000));
+            list.Add(new("vramReserveMib", "显存预留", "基本", ParamType.Integer, "256",
+                "为桌面与显卡驱动预留的安全显存量（--vram-reserve-mib，默认 256）。", 0, 60000,
+                Help: "【显存预留】\n• 作用：引擎分配显存时强行预留指定 MiB（--vram-reserve-mib），剩余显存用于缓存 MoE 专家。\n• 为什么需要：防止显存被 100% 占满导致桌面黑屏或驱动重置。\n• 参考：单显卡或笔记本独显推荐 256–500 MiB；双显卡可设 256 MiB 腾出更多显存。",
+                Unit: "MiB", RangeHint: "0–60,000，推荐 256"));
+            list.Add(new("tailSkip", "尾部跳过层", "基本", ParamType.Integer, "0",
+                "末尾若干层交回 GPU/CPU 路由处理（--tail-skip）。0 表示不启用。", 0, 64,
+                Help: "【尾部跳过层】\n• 作用：让末尾 N 层改用另一条执行路径（--tail-skip）。\n• 实测：PolyStrata 会读取本参数并在日志中确认；0 关闭。\n• 建议：先用 0，确认速度瓶颈后再逐层尝试。",
+                RangeHint: "0–64，推荐 0"));
         }
         else
         {
-            list.Add(new("mtpDrafts", "MTP 草稿数", "基本", ParamType.Integer, "2", "每步投机采样的草稿 Token 数（--mtp，默认 2）。对于带有 MTP 模块的模型可带来约 1.8~2.5x 的解码加速；设为 0 关闭投机加速。", 0, 7));
-            list.Add(new("expertSlots", "显存专家槽位", "基本", ParamType.Integer, "16", "每层常驻显存的专家槽位数（--expert-slots，默认 16）。6GB 显卡在 4K 上下文建议 16；大于 8K 的上下文默认交给引擎自动计算，避免显存超额换页。", 0, 256));
+            list.Add(new("prefill", "预填充批大小", "基本", ParamType.Integer, "2048",
+                "预填充阶段每批处理的 Token 数（--prefill）。", 1, 32768,
+                Help: "【预填充批大小】\n• 作用：处理输入提示时每批的 Token 数（--prefill）。\n• 影响：越大首字延迟的平稳性越好，但峰值显存更高。\n• 建议：保持 2048；显存紧张可降到 512–1024。",
+                Unit: "tokens", RangeHint: "1–32,768，推荐 2048"));
+            list.Add(new("maxNew", "单次生成上限", "基本", ParamType.Integer, "256",
+                "单次请求最多生成的 Token 数（--max-new）。", 1, 131072,
+                Help: "【单次生成上限】\n• 作用：单次请求允许生成的最大 Token 数（--max-new）。\n• 建议：256 适合对话；写作类可调到 1024 以上。",
+                Unit: "tokens", RangeHint: "1–131,072，推荐 256"));
+            list.Add(new("mtpDrafts", "MTP 草稿数", "基本", ParamType.Integer, "2",
+                "每步投机采样的草稿 Token 数（--mtp，默认 2）。设为 0 关闭投机加速。", 0, 7,
+                Help: "【MTP 草稿数】\n• 作用：每步投机采样同时预测的草稿 Token 数（--mtp）。\n• 原理：带 MTP 头的模型一次可预测多个未来 Token，命中即一次输出多个，实测约 1.8–2.5x 解码加速。\n• 建议：2（默认）兼顾接受率与吞吐；0 关闭投机采样。",
+                VisibleWhen: "model.mtp", RangeHint: "0–7，推荐 2"));
+            list.Add(new("expertSlots", "显存专家槽位", "基本", ParamType.Integer, "16",
+                "每层常驻显存的专家槽位数（--expert-slots，默认 16）。", 0, 256,
+                Help: "【显存专家槽位】\n• 作用：每个 MoE 层常驻显存的专家槽位数（--expert-slots）。\n• 原理：高频专家预载进显存，未命中的专家走 CPU 线程池，提升 GPU 命中率。\n• 参考：6GB 显存约 16（约 0.75 GiB）；8–12GB 可从 32 试起；16GB+ 继续增大并看日志。\n• 0：交给引擎自动计算。上下文 > 8192 且未显式设置时同样按 0 处理，避免 40K 上下文在 6GB 卡上换页掉速。",
+                VisibleWhen: "model.moe", RangeHint: "0–256，推荐 16（4K 上下文）/ 0（>8K）"));
         }
-        list.Add(new("poolWorkers", "CPU 池线程", "高级", ParamType.Integer, "0", "CPU 密集任务工作线程数（--pool-workers）。默认 0 为由引擎根据 CPU 物理核心自动分配最佳线程。", 0, 256));
-        list.Add(new("reasoningBudget", "reasoning 预算", "高级", ParamType.Integer, "0", "思考模型单次推理最大 Token 预算（--reasoning-budget）。0 为不限制，填正数可限制思考深度以加速。", 0, 65536));
-        list.Add(new("anthropicThinking", "Anthropic 思考", "高级", ParamType.Choice, "model", "Anthropic 协议客户端未要求思考时的行为：model 遵循模型原生设定，on_request 仅在客户端请求时才思考。", Choices: ["model", "on_request"]));
+        list.Add(new("poolWorkers", "CPU 池线程", "高级", ParamType.Integer, "0",
+            "CPU 密集任务工作线程数（--pool-workers）。0 表示由引擎自动分配。", 0, 256,
+            Help: "【CPU 池线程】\n• 作用：CPU 侧辅助计算（分词调度、候选搜索等）的线程池大小（--pool-workers）。\n• 建议：默认 0，由引擎按物理核心自动分配。",
+            Advanced: true, RangeHint: "0–256，推荐 0（自动）"));
+        list.Add(new("reasoningBudget", "reasoning 预算", "高级", ParamType.Integer, "0",
+            "思考模型单次推理最大 Token 预算。0 为不限制。", 0, 65536,
+            Help: "【reasoning 预算】\n• 作用：限制带思维链的模型单次思考输出的 Token 上限。\n• 0（默认）：不设上限，由模型自主推理完再作答。\n• 正数（如 1024、2048）：限制思考深度，换取更快响应。",
+            Advanced: true, Unit: "tokens", RangeHint: "0–65,536，0 表示不限"));
+        list.Add(new("anthropicThinking", "Anthropic 思考", "高级", ParamType.Choice, "model",
+            "Anthropic 协议客户端未要求思考时的行为。",
+            Help: "【Anthropic 协议思考行为】\n• 作用：Anthropic 客户端未显式指定 thinking 时的默认行为。\n• 跟随模型（默认）：按模型自身设定决定是否思考。\n• 按客户端请求：仅当请求中显式包含 thinking 时才思考。",
+            Choices:
+            [
+                new ParamChoice("model", "跟随模型", "由模型的系统提示与思考模板决定是否思考（默认）。", Recommended: true),
+                new ParamChoice("on_request", "按客户端请求", "仅在 Anthropic 客户端显式要求思考时才产生思考内容。"),
+            ],
+            Advanced: true));
         Parameters = list;
     }
 
@@ -97,6 +146,21 @@ public sealed class StrataBackend : IServerBackend
         var value = Param(config, key);
         return value != null && int.TryParse(value, out var parsed) ? parsed : fallback;
     }
+
+    // The panel shows what the engine will actually receive. Fields that predate the schema
+    // panel still resolve from the legacy StrataConfig block, so read them from there when the
+    // user has not overridden them yet. Empty means "fall back to the declared default".
+    internal string? LegacyPrefill(ManagerConfig config) => config.Strata.Prefill > 0 ? config.Strata.Prefill.ToString() : null;
+
+    internal string? LegacyMaxNew(ManagerConfig config) => config.Strata.MaxNew > 0 ? config.Strata.MaxNew.ToString() : null;
+
+    internal string? LegacyWorkers(ManagerConfig config) => config.Strata.Workers > 0 ? config.Strata.Workers.ToString() : null;
+
+    internal string? LegacyReasoningBudget(ManagerConfig config) =>
+        config.Strata.ReasoningBudgetTokens > 0 ? config.Strata.ReasoningBudgetTokens.ToString() : null;
+
+    internal string? LegacyAnthropicThinking(ManagerConfig config) =>
+        string.IsNullOrWhiteSpace(config.Strata.AnthropicThinking) ? null : config.Strata.AnthropicThinking;
 
     public async Task<BackendStatus> ProbeAsync(CancellationToken ct)
     {
@@ -322,8 +386,12 @@ public sealed class StrataBackend : IServerBackend
             // collapses decode. Larger contexts therefore use the engine's auto sizing unless
             // the user explicitly chooses a slot count.
             var slots = ParamInt(config, "expertSlots", context <= 8192 ? 16 : 0);
-            if (s.Prefill > 0) { args.Add("--prefill"); args.Add(s.Prefill.ToString()); }
-            if (s.MaxNew > 0) { args.Add("--max-new"); args.Add(s.MaxNew.ToString()); }
+            // Both flags are read through ParamInt so the panel's value wins; the legacy
+            // StrataConfig block stays the fallback for installs that predate these fields.
+            var prefill = ParamInt(config, "prefill", s.Prefill);
+            var maxNew = ParamInt(config, "maxNew", s.MaxNew);
+            if (prefill > 0) { args.Add("--prefill"); args.Add(prefill.ToString()); }
+            if (maxNew > 0) { args.Add("--max-new"); args.Add(maxNew.ToString()); }
             if (workers > 0) { args.Add("--pool-workers"); args.Add(workers.ToString()); }
             if (mtp > 0) { args.Add("--mtp"); args.Add(mtp.ToString()); }
             if (slots > 0) { args.Add("--expert-slots"); args.Add(slots.ToString()); }
@@ -331,7 +399,10 @@ public sealed class StrataBackend : IServerBackend
         else
         {
             var reserve = ParamInt(config, "vramReserveMib", 256);
+            var tailSkip = ParamInt(config, "tailSkip", 0);
             if (reserve > 0) { args.Add("--vram-reserve-mib"); args.Add(reserve.ToString()); }
+            // PolyStrata reads this flag (upstream strata.exe logs "ignoring --tail-skip").
+            if (tailSkip > 0) { args.Add("--tail-skip"); args.Add(tailSkip.ToString()); }
         }
         var cfg = new Dictionary<string, object>
         {

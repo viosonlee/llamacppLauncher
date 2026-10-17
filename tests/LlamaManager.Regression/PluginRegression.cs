@@ -63,6 +63,68 @@ internal static class PluginRegression
         Check(bad.Validate() != null, "bad schema accepted");
         var noExe = new PluginManifest { Schema = 1, Id = "x", DisplayName = "x" };
         Check(noExe.Validate() != null, "manifest without executable accepted");
+
+        RunParameterSchemaV2(root);
+    }
+
+    /// <summary>
+    /// A plugin may describe parameters with the v2 fields, and <c>choices</c> written either as
+    /// bare strings (the original form) or as objects with label/note/recommended. Both must map
+    /// onto the same <see cref="ParameterSpec"/>, so existing plugin.json files keep loading.
+    /// </summary>
+    private static void RunParameterSchemaV2(string root)
+    {
+        var dir = Path.Combine(root, "plugins", "v2");
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, "plugin.json");
+        File.WriteAllText(path, """
+        {
+          "schema": 1,
+          "id": "v2",
+          "displayName": "V2 Engine",
+          "executable": { "windows": "v2.exe" },
+          "launch": { "arguments": ["--model", "{model}"] },
+          "ready": { "type": "http", "path": "/health" },
+          "parameters": [
+            { "key": "legacy", "label": "旧式下拉", "group": "基本", "type": "Choice",
+              "default": "b", "choices": ["a", "b"] },
+            { "key": "modern", "label": "新式下拉", "group": "基本", "type": "Choice",
+              "default": "q8_0", "editable": true, "advanced": true, "unit": "量化",
+              "help": "详细说明", "rangeHint": "见说明书", "visibleWhen": "model.moe",
+              "choices": [
+                { "value": "q8_0", "label": "q8_0 (8-bit)", "note": "画质优先", "recommended": true },
+                { "value": "q4_0" }
+              ] }
+          ]
+        }
+        """);
+
+        var manifest = JsonSerializer.Deserialize<PluginManifest>(File.ReadAllText(path))!;
+        Check(manifest.Validate() == null, "v2 manifest rejected: " + manifest.Validate());
+        var specs = manifest.Parameters.Select(p => p.ToParameterSpec()).ToList();
+        Equal(2, specs.Count);
+
+        var legacy = specs[0];
+        Equal(2, legacy.Choices?.Length ?? 0);
+        Equal("a", legacy.Choices![0].Value);
+        Equal("a", legacy.Choices[0].Label);
+
+        var modern = specs[1];
+        Equal("详细说明", modern.Help);
+        Equal("量化", modern.Unit);
+        Equal("见说明书", modern.RangeHint);
+        Equal("model.moe", modern.VisibleWhen);
+        Check(modern.Editable, "editable flag lost");
+        Check(modern.Advanced, "advanced flag lost");
+        Equal(2, modern.Choices?.Length ?? 0);
+        Equal("q8_0 (8-bit)", modern.Choices![0].Label);
+        Equal("画质优先", modern.Choices[0].Note);
+        Check(modern.Choices[0].Recommended, "recommended flag lost");
+        // A choice without a label falls back to its value so the combo never shows blank.
+        Equal("q4_0", modern.Choices[1].Label);
+        // The v2 fields must feed the same effective values the panel reads.
+        Equal("详细说明", modern.EffectiveHelp);
+        Equal("见说明书", modern.EffectiveRangeHint);
     }
 
     /// <summary>Discovery scans the plugins folder and rejects id collisions with built-ins.</summary>

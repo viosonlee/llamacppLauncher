@@ -5,6 +5,47 @@
 
 ## 2026-10-17
 
+- **llama.cpp 参数面板迁到 schema，删除手写控件块**（REQ-109）：
+  - **背景**：P1 让 schema 能表达完整参数交互后，llama.cpp 仍保留 385 行手写 XAML 与一套
+    `SyncSelection` / `SyncArgsFromControls` 双向同步代码，同一个参数要在两处维护，且它的
+    MoE/MTP 分区靠代码手动显隐，与其它引擎的 `VisibleWhen` 规则不一致。
+  - **决策**：llama.cpp 与其它引擎共用同一套 schema 面板，但保留「原始参数串」作为唯一数据源。
+    `Engines/LlamaCppParameters.cs` 声明 16 个字段并负责双向投射：`ReadFromArgs` 把 flag 投影成
+    面板值，`Apply` 只改写该字段自己的 flag，用户手写的其它 flag 原样保留；「高级」页的原始
+    参数框仍是任意 flag 的兜底，输入后即时回填面板。
+  - **删除**：`MainWindow.xaml` 的手写控件块、逐控件同步处理器、`GetEngineParamDetailedHelp`
+    与 `InfoButton_Click` 的 switch（帮助文案已随 P1 迁入后端）、`MoeSection`/`MtpSection` 的
+    手动显隐、以及构造函数里手工填充 CPU 核心下拉的代码。
+  - **顺带修掉的两个真 bug**：可编辑下拉的 `SelectionChanged` 里 `Text` 尚未更新，会把旧值写回
+    参数串；`ComboBoxItem.Content` 带「（推荐）」后缀，使默认值被当作非法数字而标红。
+  - **验证**：离屏渲染 `logs/ui-regression-1.png` 确认面板无报错、默认值/开关/搜索/恢复默认完整；
+    回归改为按 `Param_<key>` 取控件，覆盖「面板编辑 → 原始参数串」「原始参数串 → 面板」两个方向、
+    可编辑下拉的自由输入与预设切换、以及切引擎后旧控件不残留。
+
+- **参数面板 schema v2 与 Strata 参数按实测收敛**（REQ-107、REQ-108）：
+  - **背景**：三个引擎里只有 `llamacpp` 是 llama.cpp；`strata-upstream`（`strata.exe`）与
+    `polystrata`（`strata-poly.exe`）是独立引擎，能接受的命令行标志并不相同。此前面板
+    `VisibleWhen` 已声明但从未被消费，`Choice`/`Boolean` 的编辑值也不会落盘（控件注册只覆盖
+    `TextBox`），且 Strata 面板缺少单位、范围、说明与推荐值。
+  - **决策**：不把 llama.cpp 的面板照搬到其它引擎，而是把 schema 升级到能表达同样的交互
+    （`Help`/`Unit`/`Editable`/`Advanced`/`RangeHint`、`Choices` 带说明与推荐、`VisibleWhen` 求值），
+    再不支持的引擎上只显示它真正认的参数。
+  - **标志实测**（真实模型 + `--serve`，不是占位路径）：upstream `strata.exe` 接受
+    `--native`、`--max-context`、`--prefill`、`--max-new`、`--mtp`、`--expert-slots`、
+    `--pool-workers`；`--parallel`、`--batch`、`--slots`、`--warm-start`、`--fit-max-tokens`、
+    `--tail-skip`、`--adapt-async`、`--expert-cache`、`--peer-slots`、
+    `--conversation-cache-slots`、`--vram-reserve-mib` 会被日志标记为 `ignoring …`
+    （`not an option of this engine`），因此它们**不是**面板字段，也不会被写进命令行。
+    poly `strata-poly.exe` 确实接受 `--tail-skip` 与 `--vram-reserve-mib`，但 `--expert-slots`
+    是硬错误（`unknown option`），所以它只在 upstream 出现。
+  - **后果**：`prefill`/`maxNew` 之前只从旧 `StrataConfig` 块读取，现在改由面板字段驱动
+    （`ParamInt` 查找，旧值仍作回退）；poly 新增 `tailSkip` 字段。批量并发若将来要做，
+    应由 `serve/server.py` 的 `parallel` 转 `--batch`/`--slots`（上限 8），而不是伪造 CLI 参数。
+  - **校验**：越界值红框加内联错误并阻止启动，绝不静默改写；只有用户真正改动过的值才落盘，
+    未改动的字段仍由引擎或旧配置块决定。
+  - **回归**：新增 `VisibleWhen` 语法测试、插件清单 v2 兼容测试，以及“只发引擎认识的标志”的
+    runconfig 断言（覆盖 `--prefill`/`--max-new`/`--pool-workers` 生效与 `--tail-skip` 等不出现）。
+
 - **strata-upstream 投机加速与显存槽位性能修复**（REQ-106）：
   - **根本原因排查**：在 RTX 3060 Laptop (6GB) 上，此前 `strata-upstream` 测速仅有 27 tok/s，而同一模型在 `polystrata` 下可达 50+ tok/s。经深度反查源码与运行日志，定位到两个性能杀手：
     1. `strata.exe` 并不支持 `--vram-reserve-mib`（日志显式输出 `ignoring --vram-reserve-mib ...`），且默认 `expert_slots` 为 0。引擎内部计算 `budget = free - 768 MiB` 后被双重缓冲的 MMQ 提示分块（`staging = 1.59 GiB`）完全吞噬，导致分配给显存的专家槽位 `S` 坍缩为 0（`0 of 256 per layer in VRAM (0.00 GiB)`），100% 的 MoE 专家全部在 CPU 线程池计算。

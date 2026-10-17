@@ -18,8 +18,9 @@ public sealed class LlamaCppBackend : IServerBackend
         BuiltIn: true,
         GpuHeavy: true);
 
-    // The hand-written parameter panel in MainWindow.Parameters.cs drives llama.cpp.
-    public IReadOnlyList<ParameterSpec> Parameters => [];
+    // llama.cpp shares the schema-driven panel with every other backend; the values live in the
+    // raw Args string, which LlamaCppParameters projects onto and writes back from.
+    public IReadOnlyList<ParameterSpec> Parameters => LlamaCppParameters.Specs;
 
     public async Task<BackendStatus> ProbeAsync(CancellationToken ct)
     {

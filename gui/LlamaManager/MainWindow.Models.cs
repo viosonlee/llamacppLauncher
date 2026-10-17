@@ -63,10 +63,11 @@ public partial class MainWindow
         if (string.IsNullOrEmpty(path)) { SelectedModelText.Text = "未选择模型"; ModelInfoText.Text = ""; return; }
         SelectedModelText.Text = Path.GetFileName(path);
         var metadata = GgufService.TryRead(path);
-        MoeSection.Visibility = ModelInfo.DetectIsMoE(path) ? Visibility.Visible : Visibility.Collapsed;
-        MtpSection.Visibility = metadata is { HasMtp: true } ? Visibility.Visible : Visibility.Collapsed;
         ModelInfoText.Text = metadata == null ? "无法读取 GGUF 元数据，请检查文件。" :
             $"{metadata.Architecture} · {metadata.LayerCount} 层 · 原生上下文 {metadata.ContextLength}\n{metadata.CompatibilityNote}";
+        // The MoE / MTP sections are no longer hand-hidden here: the schema panel decides with
+        // VisibleWhen="model.moe" / "model.mtp", so one rule covers every backend.
+        RebuildEngineParameters();
     }
 
     private async Task SelectModelAsync(string path)

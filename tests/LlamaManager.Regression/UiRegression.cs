@@ -20,6 +20,27 @@ internal static class UiRegression
         return (bool?)property!.GetValue(control);
     }
 
+    /// <summary>The schema panel's control for a llama.cpp parameter, e.g. "flashAttention".</summary>
+    private static ComboBox ParamCombo(MainWindow window, string key) =>
+        (ComboBox)window.FindName("Param_" + key)!;
+
+    private static TextBox ParamText(MainWindow window, string key) =>
+        (TextBox)window.FindName("Param_" + key)!;
+
+    /// <summary>Machine value a schema Choice control currently holds (ParamChoice.Value).</summary>
+    private static string ParamValue(MainWindow window, string key) =>
+        ParamCombo(window, key).SelectedItem is ComboBoxItem { Tag: LlamaManager.Engines.ParamChoice choice }
+            ? choice.Value
+            : "";
+
+    /// <summary>Selects the Choice item whose machine value matches.</summary>
+    private static void SetParam(MainWindow window, string key, string value)
+    {
+        var combo = ParamCombo(window, key);
+        combo.SelectedItem = combo.Items.OfType<ComboBoxItem>()
+            .First(item => item.Tag is LlamaManager.Engines.ParamChoice choice && choice.Value == value);
+    }
+
     private static void SetFlag(MainWindow window, string field, bool value) =>
         typeof(MainWindow).GetField(field, BindingFlags.Instance | BindingFlags.NonPublic)!
             .SetValue(window, value);
@@ -72,56 +93,73 @@ internal static class UiRegression
                 Program.Check(probeLabel.Foreground is SolidColorBrush { Color: var c } && (c.R + c.G + c.B) / 3 < 128,
                     $"label foreground too light for a light theme: {probeLabel.Foreground}");
                 var args = (TextBox)window.FindName("ArgsTextBox");
-                ComboBox Box(string name) => (ComboBox)window.FindName(name);
-                args.Text = "--flash-attn off --reasoning-budget 0 --threads 4 --threads-batch 2 --prompt \"a  b\"";
-                Program.Check(Box("FlashAttentionBox").SelectedItem is ComboBoxItem item && item.Content.ToString()!.StartsWith("off"), "off displayed as enabled");
-                Program.Equal("0", Box("ReasoningBudgetBox").Text);
-                Box("CpuCoresBox").SelectedItem = "8";
+                // The schema panel only exists once a backend is selected, so initialise the engine
+                // list before touching generated controls (the old hand-written XAML needed no such step).
+                var initEngine = typeof(MainWindow).GetMethod("ApplyEngineConfigAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                window.Dispatcher.Invoke(() => initEngine.Invoke(window, null));
+                for (var i = 0; i < 40; i++) window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+                var llamaBackendIndex = ((ComboBox)window.FindName("EngineBackendBox")).ItemsSource!.Cast<string>()
+                    .ToList().FindIndex(n => n.Contains("llama.cpp"));
+                ((ComboBox)window.FindName("EngineBackendBox")).SelectedIndex = llamaBackendIndex;
                 window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+                Program.Check(window.FindName("Param_flashAttention") != null, "llama.cpp schema controls not registered");
+                // The llama.cpp panel is now generated from LlamaCppParameters.Specs. Each control
+                // is registered under "Param_<key>", so the test addresses parameters, not XAML names.
+                args.Text = "--flash-attn off --reasoning-budget 0 --threads 4 --threads-batch 2 --prompt \"a  b\"";
+                window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+                Program.Equal("off", ParamValue(window, "flashAttention"));
+                Program.Equal("0", ParamValue(window, "reasoningBudget"));
+                SetParam(window, "cpuCores", "8");
+                window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+                Program.Check(args.Text.Contains("-t 8") || args.Text.Contains("--threads 8"),
+                    $"cpuCores edit did not reach the raw args: [{args.Text}]");
                 var parsed = new LauncherArguments(args.Text);
                 Program.Equal("8", parsed.Get("-t")); Program.Equal("2", parsed.Get("-tb"));
                 Program.Equal("off", parsed.Get("-fa")); Program.Equal("0", parsed.Get("--reasoning-budget"));
                 Program.Equal("a  b", parsed.Get("--prompt"));
                 args.Text = "-fa auto --reasoning-budget -1 -ctk q8_0";
-                Program.Equal("-1", Box("ReasoningBudgetBox").Text);
-                Program.Check(Box("ContextQuantVBox").SelectedIndex == 0, "V default silently inherited K");
-                Box("ReasoningBudgetBox").SelectedIndex = 3;
+                window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+                Program.Equal("-1", ParamValue(window, "reasoningBudget"));
+                Program.Equal("", ParamValue(window, "contextQuantV"));
+                SetParam(window, "reasoningBudget", "1024");
                 window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
                 Program.Equal("1024", new LauncherArguments(args.Text).Get("--reasoning-budget"));
                 args.Text = "--spec-type draft-mtp -md \"C:/models/mtp-head-q4_0.gguf\"";
-                Program.Check(Box("SpecTypeBox").SelectedItem is ComboBoxItem mtp && mtp.Content.ToString() == "draft-mtp", "spec type parsed to control");
-                Program.Equal("C:/models/mtp-head-q4_0.gguf", ((TextBox)window.FindName("DraftModelBox")).Text);
-                ((TextBox)window.FindName("DraftModelBox")).Text = "C:/draft/head.gguf";
+                window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+                Program.Equal("draft-mtp", ParamValue(window, "specType"));
+                Program.Equal("C:/models/mtp-head-q4_0.gguf", ParamText(window, "draftModel").Text);
+                ParamText(window, "draftModel").Text = "C:/draft/head.gguf";
                 window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
                 var specArgs = new LauncherArguments(args.Text);
                 Program.Equal("C:/draft/head.gguf", specArgs.Get("-md"));
                 Program.Equal("draft-mtp", specArgs.Get("--spec-type"));
-                Program.Check(IsChecked(window, "MtpCheckbox") == true, "mtp checkbox reflects draft-mtp");
+                Program.Check(IsChecked(window, "Param_mtp") == true, "mtp toggle reflects draft-mtp");
                 args.Text = "--spec-type ngram-mod";
-                Program.Check(IsChecked(window, "MtpCheckbox") == false, "mtp checkbox ignores other spec types");
+                window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+                Program.Check(IsChecked(window, "Param_mtp") == false, "mtp toggle ignores other spec types");
                 args.Text = "";
-                Program.Equal("默认", Box("ReasoningBudgetBox").Text);
-                Program.Equal("", ((TextBox)window.FindName("DraftModelBox")).Text);
-                Program.Equal(0, Box("FlashAttentionBox").SelectedIndex);
+                window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+                Program.Equal("", ParamValue(window, "reasoningBudget"));
+                Program.Equal("", ParamText(window, "draftModel").Text);
+                Program.Equal("", ParamValue(window, "flashAttention"));
 
-                // Editable combo tests: typing custom values, LostFocus commit, and selecting dropdown items
-                Box("OffloadLayersBox").Text = "35";
-                Box("OffloadLayersBox").RaiseEvent(new RoutedEventArgs(UIElement.LostFocusEvent));
+                // Free text in an editable Choice must reach the arguments, and picking a preset
+                // must overwrite it — the behaviour the old hand-written combos had.
+                ParamCombo(window, "offloadLayers").Text = "35";
+                ParamCombo(window, "offloadLayers").RaiseEvent(new RoutedEventArgs(UIElement.LostFocusEvent));
                 window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
                 Program.Equal("35", new LauncherArguments(args.Text).Get("-ngl"));
-                Box("OffloadLayersBox").SelectedIndex = 1; // "auto"
+                SetParam(window, "offloadLayers", "auto");
                 window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
                 Program.Equal("auto", new LauncherArguments(args.Text).Get("-ngl"));
-                Program.Equal("auto", Box("OffloadLayersBox").Text);
 
-                Box("BatchSizeBox").Text = "4096";
-                Box("BatchSizeBox").RaiseEvent(new RoutedEventArgs(UIElement.LostFocusEvent));
+                ParamCombo(window, "batchSize").Text = "4096";
+                ParamCombo(window, "batchSize").RaiseEvent(new RoutedEventArgs(UIElement.LostFocusEvent));
                 window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
                 Program.Equal("4096", new LauncherArguments(args.Text).Get("-b"));
-                Box("BatchSizeBox").SelectedIndex = 2; // "512"
+                SetParam(window, "batchSize", "512");
                 window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
                 Program.Equal("512", new LauncherArguments(args.Text).Get("-b"));
-                Program.Equal("512", Box("BatchSizeBox").Text);
                 args.Text = "";
 
                 // Render both changed panels without opening a desktop window.
@@ -228,7 +266,6 @@ internal static class UiRegression
                 window.Dispatcher.Invoke(() => applyEngine.Invoke(window, null));
                 for (var i = 0; i < 40; i++) window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
                 var engineBox = (ComboBox)window.FindName("EngineBackendBox");
-                var llamaParams = (FrameworkElement)window.FindName("LlamaCppParamsScroll");
                 var engineParams = (FrameworkElement)window.FindName("EngineParamsScroll");
                 var llamaAdv = (FrameworkElement)window.FindName("LlamaCppAdvancedPanel");
                 var engineAdv = (FrameworkElement)window.FindName("EngineAdvancedPanel");
@@ -243,18 +280,55 @@ internal static class UiRegression
 
                 engineBox.SelectedIndex = llamaIndex;
                 window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
-                Program.Check(llamaParams.Visibility == Visibility.Visible, "llamacpp params hidden for llamacpp");
-                Program.Check(engineParams.Visibility == Visibility.Collapsed, "schema params shown for llamacpp");
+                // llama.cpp now renders through the same schema panel as every other backend, so
+                // the parameter surface no longer swaps; only the raw-args/advanced tab and the
+                // embedding page remain llama.cpp-specific.
+                Program.Check(engineParams.Visibility == Visibility.Visible, "schema params hidden for llamacpp");
                 Program.Check(llamaAdv.Visibility == Visibility.Visible, "llamacpp advanced hidden for llamacpp");
                 Program.Check(embeddingPanel.Visibility == Visibility.Visible, "embedding panel hidden for llamacpp");
+                Program.Check(engineAdv.Visibility == Visibility.Collapsed, "foreign advanced panel shown for llamacpp");
+                var llamaParamsPanel = (StackPanel)window.FindName("EngineParametersPanel");
+                Program.Check(llamaParamsPanel.Children.Count > 0, "schema panel rendered nothing for llamacpp");
+                Program.Check(window.FindName("Param_flashAttention") != null,
+                    "llama.cpp schema controls missing for llamacpp");
 
                 engineBox.SelectedIndex = strataIndex;
                 window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
-                Program.Check(llamaParams.Visibility == Visibility.Collapsed, "llamacpp params shown for Strata");
                 Program.Check(engineParams.Visibility == Visibility.Visible, "schema params hidden for Strata");
                 Program.Check(llamaAdv.Visibility == Visibility.Collapsed, "llamacpp advanced shown for Strata");
                 Program.Check(engineAdv.Visibility == Visibility.Visible, "engine advanced hidden for Strata");
                 Program.Check(embeddingPanel.Visibility == Visibility.Collapsed, "embedding panel shown for Strata (llama.cpp only)");
+                // A backend swap must rebuild the panel, not leave llama.cpp's controls behind.
+                Program.Check(window.FindName("Param_flashAttention") == null,
+                    "llama.cpp controls survived the switch to Strata");
+                Program.Check(window.FindName("Param_context") != null, "Strata controls not rebuilt on switch");
+
+                // The schema panel must actually build controls, carry the search box and the
+                // "advanced" fold, and keep every declared field reachable either directly or
+                // folded — a silently empty panel is the failure this guards against.
+                var paramsPanel = (StackPanel)window.FindName("EngineParametersPanel");
+                Program.Check(paramsPanel.Children.Count > 0, "schema parameter panel rendered nothing for Strata");
+                Program.Check(window.FindName("EngineParamSearchBox") is Wpf.Ui.Controls.TextBox,
+                    "parameter search box missing");
+                Program.Check(window.FindName("EngineResetAllButton") != null, "restore-all button missing");
+                var strataBackend = LlamaManager.Engines.BackendRegistry.ServerById("strata-upstream")!;
+                Program.Check(strataBackend.Parameters.Count >= 8,
+                    $"strata panel declares only {strataBackend.Parameters.Count} parameters");
+                Program.Check(strataBackend.Parameters.Any(p => p.Advanced), "no advanced parameters to fold");
+                Program.Check(strataBackend.Parameters.All(p => !string.IsNullOrWhiteSpace(p.EffectiveHelp)),
+                    "a parameter has no help text for its '?' button");
+                Program.Check(strataBackend.Parameters.Any(p => p.VisibleWhen != null),
+                    "no parameter uses VisibleWhen, so model-dependent fields would always show");
+                // Filtering must hide rows without destroying them.
+                var search = (Wpf.Ui.Controls.TextBox)window.FindName("EngineParamSearchBox")!;
+                search.Text = "上下文";
+                window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+                var visibleRows = paramsPanel.Children.OfType<FrameworkElement>()
+                    .Count(c => c.Visibility == Visibility.Visible);
+                Program.Check(visibleRows > 0 && visibleRows < paramsPanel.Children.Count,
+                    $"filter did not narrow the panel ({visibleRows}/{paramsPanel.Children.Count})");
+                search.Text = "";
+                window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
 
                 // Leave the persisted active backend as llama.cpp so later tests start clean.
                 ConfigService.SaveActiveBackend(ConfigService.ReadConfig(), "llamacpp");

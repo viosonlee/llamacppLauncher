@@ -48,10 +48,35 @@
 
 - REQ-030 已实现：顶部统一控制条——引擎下拉 + 一套启动/停止/打开页面/测速按钮。
 - REQ-031 已实现：标签页按功能分：模型 / 参数 / 高级 / 嵌入 / 日志。
-- REQ-032 已实现：llama.cpp 专属控件（原始参数、嵌入、自动开页）仅在选择 llama.cpp 时显示；
-  其它引擎使用 schema 生成的参数面板。
+- REQ-032 已实现：所有引擎（含 llama.cpp）共用同一套 schema 生成的参数面板；llama.cpp 专属的
+  原始参数框、嵌入服务与「自动打开页面」仅在选择 llama.cpp 时显示。
+- REQ-107 已实现：参数面板 schema v2（`docs/parameter-ui-design.md`）：
+  - `ParameterSpec` 增加 `Help` / `Unit` / `Editable` / `Advanced` / `RangeHint`，`Choices` 由
+    `string[]` 升级为 `ParamChoice[]`（值 / 展示文案 / 说明 / 推荐）；
+  - `VisibleWhen` 由 `Engines/ParameterVisibility.cs` 求值（`profile==…`、`model.moe`、`model.mtp`、
+    `param.<key>` 比较，支持 `&&` / `||` / `!` / 括号），未知变量按隐藏处理并记日志，绝不抛异常；
+  - 面板按声明顺序分组生成，`Advanced` 字段折叠进「高级参数」，每个字段显示默认值、单位与范围，
+    失焦与启动前校验 `Min/Max`，越界红框加内联错误并阻止启动（不静默改写用户输入）；
+  - 提供分组与全局「恢复默认」、按标签/Key/分组过滤；只有用户改动过的值才落盘；
+  - 插件清单 `schema:1` 兼容扩展：`help` / `unit` / `rangeHint` / `editable` / `advanced` /
+    `visibleWhen`，`choices` 既可写字符串数组也可写对象数组。
+- REQ-108 已实现：Strata 家族参数按引擎实测能力收敛（真实模型 + `--serve` 验证）：  - upstream `strata.exe` 只暴露其真正接受的参数：`context`、`prefill`、`maxNew`、`mtpDrafts`
+    （`VisibleWhen=model.mtp`）、`expertSlots`（`VisibleWhen=model.moe`）、`poolWorkers`、
+    `reasoningBudget`、`anthropicThinking`；
+  - polystrata 只暴露 `context`、`vramReserveMib`、`tailSkip` 等其真正读取的参数；
+  - `parallel` / `slots` / `batch` / `warm-start` / `fit-max-tokens` / `tail-skip` 在 `strata.exe`
+    上会被日志标记为 ignoring，`--expert-slots` 在 `strata-poly.exe` 上是硬错误，均不作为面板字段，
+    也不会被写进命令行。
 - REQ-033 已实现：嵌入（Embedding）服务独立成「嵌入」页——模型选择、端口、启停；
   供资料量化 / RAG 使用，与主服务相互独立。
+- REQ-109 已实现：llama.cpp 参数面板迁到 schema，消除双维护：
+  - `Engines/LlamaCppParameters.cs` 声明 16 个字段（上下文、K/V 缓存量化、GPU 卸载层数、
+    CPU 线程、思考模式与预算、Flash Attention、批大小与物理批大小、MoE 卸载层数与全部走 CPU、
+    投机解码类型与草稿模型、内置 MTP 开关、详细日志）；
+  - 面板与原始参数串双向投射：`ReadFromArgs` 投影，`Apply` 只改写该字段自己的 flag，
+    手写 flag 原样保留；「高级」页原始参数框仍是任意 flag 的兜底，输入后即时回填面板；
+  - `MainWindow.xaml` 中 385 行手写控件块与其同步/帮助 switch 已删除，MoE/MTP 分区改为
+    `VisibleWhen="model.moe"` / `"model.mtp"`，随模型元数据自动显隐。
 - REQ-034 已实现：模型列表按引擎感知——切换引擎时选择其自有的模型路径。
 
 ## 5. 体检与维护

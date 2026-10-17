@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace LlamaManager.Engines;
@@ -108,13 +109,95 @@ public sealed class PluginManifest
         [JsonPropertyName("max")]
         public double? Max { get; set; }
 
+        /// <summary>Either a bare value ("model") or an object ("value", "label", "note", "recommended").</summary>
         [JsonPropertyName("choices")]
-        public List<string>? Choices { get; set; }
+        public List<ChoiceManifest>? Choices { get; set; }
+
+        /// <summary>Long explanation shown in the help popup; falls back to <see cref="ToolTip"/>.</summary>
+        [JsonPropertyName("help")]
+        public string? Help { get; set; }
+
+        /// <summary>Unit suffix shown after the box, for example "token" or "MiB".</summary>
+        [JsonPropertyName("unit")]
+        public string? Unit { get; set; }
+
+        /// <summary>True when the field is an editable free-text box even though it has choices.</summary>
+        [JsonPropertyName("editable")]
+        public bool Editable { get; set; }
+
+        /// <summary>True to place the field with the advanced settings.</summary>
+        [JsonPropertyName("advanced")]
+        public bool Advanced { get; set; }
+
+        /// <summary>Overrides the derived "min–max" hint.</summary>
+        [JsonPropertyName("rangeHint")]
+        public string? RangeHint { get; set; }
+
+        /// <summary>A mini-expression that decides whether the field is shown (see ParameterVisibility).</summary>
+        [JsonPropertyName("visibleWhen")]
+        public string? VisibleWhen { get; set; }
 
         public ParameterSpec ToParameterSpec() => new(
             Key, string.IsNullOrWhiteSpace(Label) ? Key : Label, Group,
             Enum.TryParse<ParamType>(Type, ignoreCase: true, out var parsed) ? parsed : ParamType.Text,
-            Default, ToolTip, Min, Max, Choices?.ToArray(), null);
+            Default, ToolTip, Min, Max,
+            Choices is { Count: > 0 } ? Choices.Select(c => c.ToParamChoice()).ToArray() : null,
+            VisibleWhen, Help, Unit, Editable, Advanced, RangeHint);
+    }
+
+    /// <summary>
+    /// One choice of a Choice parameter. A manifest may write it as a plain string, which keeps
+    /// simple plugins simple, or as an object when the label, a note or a recommended mark helps.
+    /// </summary>
+    [JsonConverter(typeof(ChoiceManifestConverter))]
+    public sealed class ChoiceManifest
+    {
+        [JsonPropertyName("value")]
+        public string Value { get; set; } = "";
+
+        [JsonPropertyName("label")]
+        public string? Label { get; set; }
+
+        [JsonPropertyName("note")]
+        public string? Note { get; set; }
+
+        [JsonPropertyName("recommended")]
+        public bool Recommended { get; set; }
+
+        public ParamChoice ToParamChoice() => new(
+            Value, string.IsNullOrWhiteSpace(Label) ? Value : Label!, Note, Recommended);
+    }
+
+    /// <summary>Reads a choice written as a bare string or as an object; writes it as an object.</summary>
+    public sealed class ChoiceManifestConverter : JsonConverter<ChoiceManifest>
+    {
+        public override ChoiceManifest Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        {
+            using var doc = JsonDocument.ParseValue(ref reader);
+            var root = doc.RootElement;
+            if (root.ValueKind == JsonValueKind.String) return new ChoiceManifest { Value = root.GetString() ?? "" };
+            if (root.ValueKind != JsonValueKind.Object) return new ChoiceManifest();
+            var choice = new ChoiceManifest();
+            if (root.TryGetProperty("value", out var value) && value.ValueKind == JsonValueKind.String)
+                choice.Value = value.GetString() ?? "";
+            if (root.TryGetProperty("label", out var label) && label.ValueKind == JsonValueKind.String)
+                choice.Label = label.GetString();
+            if (root.TryGetProperty("note", out var note) && note.ValueKind == JsonValueKind.String)
+                choice.Note = note.GetString();
+            if (root.TryGetProperty("recommended", out var recommended))
+                choice.Recommended = recommended.ValueKind == JsonValueKind.True;
+            return choice;
+        }
+
+        public override void Write(Utf8JsonWriter writer, ChoiceManifest value, JsonSerializerOptions options)
+        {
+            writer.WriteStartObject();
+            writer.WriteString("value", value.Value);
+            if (value.Label != null) writer.WriteString("label", value.Label);
+            if (value.Note != null) writer.WriteString("note", value.Note);
+            if (value.Recommended) writer.WriteBoolean("recommended", true);
+            writer.WriteEndObject();
+        }
     }
 
     public sealed class LogSpec

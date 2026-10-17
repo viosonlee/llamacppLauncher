@@ -41,7 +41,10 @@ __pycache__/
 *.lnk
 
 # Engine installs, downloads and generated runtime data (REQ-054)
-engines/
-downloads/
-data/
-venvs/
+# Anchored with a leading slash: an unanchored "engines/" also matches the source
+# directory gui/LlamaManager/Engines/, which hid new backend code from git on Windows
+# (case-insensitive matching).
+/engines/
+/downloads/
+/data/
+/venvs/

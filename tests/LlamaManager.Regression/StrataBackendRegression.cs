@@ -8,14 +8,29 @@ using static Program;
 
 internal static class StrataBackendRegression
 {
+    /// <summary>Panel values a user could plausibly type; each must reach the runconfig.</summary>
+    private static void settings_ApplyPanelValues(ManagerConfig config)
+    {
+        var settings = config.Engines["strata-upstream"];
+        settings.Parameters["prefill"] = "1024";
+        settings.Parameters["maxNew"] = "512";
+        settings.Parameters["poolWorkers"] = "8";
+    }
+
+    private static void settings_ClearPanelValues(ManagerConfig config)
+    {
+        var settings = config.Engines["strata-upstream"];
+        settings.Parameters.Remove("prefill");
+        settings.Parameters.Remove("maxNew");
+        settings.Parameters.Remove("poolWorkers");
+    }
     /// <summary>
     /// Phase 3: the Strata backend starts the engine's own HTTP service
     /// (<c>python -m serve.server --engine strata --config &lt;json&gt; --port N</c>) and maps the
     /// launched process into a canonical session. A fake serve/server.py stands in for Python.
     /// </summary>
     public static async Task RunLaunchAsync(string root, string model)
-    {
-        // A qwen35moe fixture so the Strata analyzer sees a runnable model.
+    {        // A qwen35moe fixture so the Strata analyzer sees a runnable model.
         model = Path.Combine(root, "apex model.gguf");
         File.WriteAllBytes(model, Fixtures.StrataGguf());
         // A fake Strata source tree: serve/server.py + tools/strata_tokenizer.py + a fake engine.
@@ -88,6 +103,25 @@ internal static class StrataBackendRegression
         Check(runArgs.Contains("--mtp") && runArgs.Contains("2"), "strata-upstream must pass --mtp 2 by default");
         Check(runArgs.Contains("--expert-slots") && runArgs.Contains("16"), "strata-upstream must pass --expert-slots 16 by default");
         Check(!runArgs.Contains("--vram-reserve-mib"), "strata-upstream must not pass --vram-reserve-mib");
+        // The panel's own fields must reach the command line, and nothing the engine silently
+        // ignores may be emitted: strata.exe logs "ignoring <flag>" for parallel/slots/batch/
+        // warm-start/fit-max-tokens/tail-skip, and rejects --expert-slots outright.
+        settings_ApplyPanelValues(config);
+        var panelPlan = backend.BuildLaunch(new EngineStartRequest { Config = config });
+        var panelArgs = panelPlan.Arguments.ToList();
+        var panelConfigPath = panelArgs[panelArgs.IndexOf("--config") + 1];
+        var panelRunconfig = JsonNode.Parse(panelPlan.GeneratedFiles[panelConfigPath])!.AsObject();
+        var panelRunArgs = panelRunconfig["args"]!.AsArray().Select(n => n!.GetValue<string>()).ToList();
+        Check(panelRunArgs.Contains("--prefill") && panelRunArgs.Contains("1024"), "--prefill must follow the panel value");
+        Check(panelRunArgs.Contains("--max-new") && panelRunArgs.Contains("512"), "--max-new must follow the panel value");
+        Check(panelRunArgs.Contains("--pool-workers") && panelRunArgs.Contains("8"), "--pool-workers must follow the panel value");
+        Check(!panelRunArgs.Contains("--tail-skip"), "strata-upstream ignores --tail-skip; never emit it");
+        foreach (var ignored in new[] { "--parallel", "--slots", "--batch", "--warm-start", "--fit-max-tokens" })
+            Check(!panelRunArgs.Contains(ignored), $"strata-upstream ignores {ignored}; never emit it");
+        foreach (var spec in backend.Parameters)
+            Check(spec.Key is not ("parallel" or "slots" or "batch" or "warmStart" or "fitMaxTokens" or "tailSkip"),
+                $"{spec.Key} is not a strata-upstream option and must not appear in the panel");
+        settings_ClearPanelValues(config);
 
         // Large contexts use the engine's automatic sizing unless the user explicitly chooses a count.
         var settings = config.Engines["strata-upstream"];

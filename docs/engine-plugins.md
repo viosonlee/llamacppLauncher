@@ -125,11 +125,26 @@ public sealed record CompatibilityReport(
 ```csharp
 public enum ParamType { Integer, Decimal, Text, Boolean, Choice, FilePath, FolderPath, Multiline }
 
+public sealed record ParamChoice(
+    string Value,        // 真正写进配置/命令行的值
+    string Label,        // 展示文案
+    string? Note,        // 下拉里的一行说明
+    bool Recommended);   // 加「推荐」后缀
+
 public sealed record ParameterSpec(
     string Key, string Label, string Group, ParamType Type,
     string? Default, string? ToolTip,
-    double? Min, double? Max, string[]? Choices, string? VisibleWhen);
+    double? Min, double? Max, ParamChoice[]? Choices,
+    string? VisibleWhen,   // 小型布尔表达式，见 §9
+    string? Help,          // 「?」按钮正文；为空回退 ToolTip
+    string? Unit,          // tokens / MiB / 线程
+    bool Editable,         // 下拉可直接输入
+    bool Advanced,         // 默认折叠进「高级参数」
+    string? RangeHint);    // 如 "256–1,048,576，推荐 4096"
+
 ```
+
+面板按 `Group` 的声明顺序生成控件，`Advanced=true` 的字段收进折叠区，`VisibleWhen` 为假的字段隐藏但保留已填的值（见 §9）。
 
 ### 5.3 后端契约
 
@@ -185,7 +200,10 @@ public sealed record EngineSession
 ### 6.1 LlamaCppBackend（`llamacpp`）
 
 - 定位 `ConfigService.GetLlamaServerPath` / `GetPrismServerPath`（保留 Prism 选择）。
-- 参数：现有 llama.cpp 参数页（`MainWindow.Parameters.cs`）保持不变。
+- 参数：与其它引擎一样由 schema 生成（`Engines/LlamaCppParameters.cs` 声明 16 个字段）。
+  与别的后端不同，llama.cpp 的值保存在原始参数串 `Args` 里，所以 `LlamaCppParameters`
+  负责双向投射：`ReadFromArgs` 把 flag 投影成面板值，`Apply` 只改写自己拥有的那个 flag，
+  手写 flag 原样保留。「高级」页的原始参数框仍是任意 flag 的兜底，输入后即时回填面板。
 - 启动/停止/端口恢复/会话身份：内部调用现有 `ServerService` 逻辑，不复制。
 - 就绪：`GET /health`。
 
@@ -234,8 +252,17 @@ public sealed record EngineSession
   "ready": { "type": "http", "path": "/health", "timeoutSeconds": 180 },
   "parameters": [
     { "key": "port",    "label": "端口",   "group": "基本", "type": "Integer", "default": "8080" },
-    { "key": "context", "label": "上下文", "group": "基本", "type": "Integer", "default": "4096", "min": 256, "max": 1048576 },
-    { "key": "maxNew",  "label": "生成长度","group": "基本", "type": "Integer", "default": "256",  "min": 1,   "max": 65536 }
+    { "key": "context", "label": "上下文", "group": "基本", "type": "Integer", "default": "4096", "min": 256, "max": 1048576,
+      "unit": "tokens", "rangeHint": "256–1,048,576，推荐 4096", "help": "【上下文】\n上下文越大，KV 缓存占用显存越多。" },
+    { "key": "maxNew",  "label": "生成长度","group": "基本", "type": "Integer", "default": "256",  "min": 1,   "max": 65536 },
+    { "key": "quant",   "label": "量化",   "group": "基本", "type": "Choice",  "default": "q8_0",
+      "choices": [
+        { "value": "q8_0", "label": "q8_0 (8-bit)", "note": "画质优先", "recommended": true },
+        { "value": "q4_0", "label": "q4_0 (4-bit)" }
+      ] },
+    { "key": "vramReserve", "label": "显存预留", "group": "基本", "type": "Integer", "default": "256",
+      "visibleWhen": "profile==polystrata" },
+    { "key": "debug", "label": "调试日志", "group": "高级", "type": "Boolean", "default": "0", "advanced": true }
   ],
   "logs": { "perfRegex": { "prefill": "prefill .* ([0-9.]+) tok/s", "decode": "decode .* ([0-9.]+) tok/s" } },
   "compatibility": { "driver": "polystrata-matrix" }
@@ -245,6 +272,12 @@ public sealed record EngineSession
 - `arguments` 里的 `{model}` `{port}` `{context}` 等由参数值替换。
 - `ready.type`：`http`（GET `path` 200）或 `tcp`（端口监听）。
 - `compatibility.driver`：`none` / `strata-matrix` / `polystrata-matrix`（启动器内置的已知矩阵，见 §8）。
+- 参数项的 v2 可选字段（向后兼容，`schema` 仍为 `1`）：
+  - `help`、`unit`、`rangeHint`：面板上的说明、单位与范围提示；
+  - `editable`：`Choice` 下拉允许直接输入；
+  - `advanced`：默认折叠进「高级参数」；
+  - `visibleWhen`：布尔表达式，语法见 §9；
+  - `choices` 既可用字符串数组（旧写法：`["q8_0", "q4_0"]`），也可用对象数组（带 `label` / `note` / `recommended`）。
 
 ### 7.3 隔离与版本协商
 
@@ -266,10 +299,24 @@ public sealed record EngineSession
 ## 9. 参数 schema 与动态 UI
 
 - 引擎标签页顶部：后端下拉框（`BackendRegistry` 枚举可用后端）。
-- 选中后端：参数区按 `ParameterSpec.Group` 生成控件；路径类挂选择按钮；`Choice` 生成下拉。
-- 内置后端保留手写面板（llama.cpp 参数页、Strata 面板），插件后端走生成面板。
-- 参数值存 `EngineSettings.Parameters`；后端 `Validate` 返回结构化错误。
+- 选中后端：参数区按 `ParameterSpec.Group` 生成控件，按声明顺序排列；路径类挂选择按钮；`Choice` 生成下拉；`Boolean` 生成开关；`Advanced=true` 收进「高级参数」折叠区。
+- 每个字段显示默认值、单位与范围提示；失焦与启动前校验 `Min/Max`，越界时红框加内联错误并**阻止启动**，绝不静默改写用户输入。
+- 分组标题右侧有「恢复默认」，面板顶部有「全部恢复默认」和过滤框（按标签/Key/分组过滤）。
+- 参数值存 `EngineSettings.Parameters`；只有用户真正改动过的字段才落盘，未改动的仍由引擎或旧配置块决定。
 - 状态区显示：后端可用性、模型兼容性、运行状态（端口/就绪）、最近 tok/s、可复制给 agent 的 base URL。
+
+### 9.1 VisibleWhen 表达式
+
+`VisibleWhen` 是一个刻意做小的布尔表达式，由 `Engines/ParameterVisibility.cs` 求值，不引入脚本引擎：
+
+| 表达式 | 求值依据 |
+|---|---|
+| `profile==upstream` / `profile==poly` | 后端 profile id |
+| `model.moe` / `model.mtp` | 所选 GGUF 的元数据（`GgufService.ReadShards`） |
+| `param.expertSlots>0` | 面板内其他参数的当前值 |
+| `true` / 空 | 恒显示 |
+
+支持 `==` `!=` `>` `>=` `<` `<=`、`&&`、`||`、`!` 与括号。未知变量或语法错误一律按「隐藏」处理并记一条日志，绝不把异常抛到 UI 线程。
 
 ## 10. 配置与持久化（迁移即删）
 

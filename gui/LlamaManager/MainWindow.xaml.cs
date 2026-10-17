@@ -26,8 +26,7 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
     public MainWindow()
     {
         InitializeComponent();
-        CpuCoresBox.Items.Add("默认");
-        for (int i = 1; i <= Environment.ProcessorCount; i++) CpuCoresBox.Items.Add(i.ToString());
+        // CPU-core choices are built by the schema (LlamaCppParameters), not by hand here.
         Loaded += MainWindow_Loaded;
         Closing += MainWindow_Closing;
     }
@@ -79,7 +78,7 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
             PortTextBox.Text = _config.Port.ToString();
             ModelsDirTextBox.Text = string.IsNullOrEmpty(_config.ModelsDirectory) ? Path.Combine(ConfigService.GetRoot(), "models") : _config.ModelsDirectory;
             AutoOpenBrowserCheckBox.IsChecked = _config.AutoOpenBrowser;
-            ParseArgsToControls();
+            // Projects the loaded model's MoE/MTP flags and the raw args onto the schema panel.
             UpdateSelectedModelText();
         }
         finally { _updateCount--; }

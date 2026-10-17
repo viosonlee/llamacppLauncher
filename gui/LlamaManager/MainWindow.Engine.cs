@@ -1,6 +1,8 @@
+using System.Globalization;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using LlamaManager.Engines;
 using LlamaManager.Models;
@@ -17,7 +19,12 @@ public partial class MainWindow
 {
     private bool _engineUpdate;
     private bool _doctorRunning;
-    private readonly Dictionary<string, TextBox> _engineParameterBoxes = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, Control> _engineParameterControls = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, ParameterSpec> _engineParameterSpecs = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, TextBlock> _engineParameterErrors = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<(ParameterSpec Spec, FrameworkElement Row)> _engineParameterRows = [];
+    private readonly List<string> _registeredParameterNames = [];
+    private string _engineParamFilter = "";
 
     private async Task ApplyEngineConfigAsync()
     {
@@ -88,122 +95,501 @@ public partial class MainWindow
         await RefreshStatusAsync();
     }
 
-    /// <summary>llama.cpp has hand-written panels; other engines get the schema-driven ones.</summary>
+    /// <summary>
+    /// Every engine now renders through the schema panel, so only the truly engine-specific
+    /// surfaces (raw args, embedding service) swap with the selection.
+    /// </summary>
     private void ApplyEnginePanelVisibility()
     {
         var llamacpp = IsLlamaCppSelected();
-        LlamaCppParamsScroll.Visibility = llamacpp ? Visibility.Visible : Visibility.Collapsed;
-        EngineParamsScroll.Visibility = llamacpp ? Visibility.Collapsed : Visibility.Visible;
         LlamaCppAdvancedPanel.Visibility = llamacpp ? Visibility.Visible : Visibility.Collapsed;
         EngineAdvancedPanel.Visibility = llamacpp ? Visibility.Collapsed : Visibility.Visible;
         EmbeddingPanel.Visibility = llamacpp ? Visibility.Visible : Visibility.Collapsed;
     }
 
+    /// <summary>
+    /// Builds the schema-driven parameter panel: one row per <see cref="ParameterSpec"/>, grouped in
+    /// declaration order, with <see cref="ParameterSpec.Advanced"/> fields folded into a "高级" area.
+    /// Rows carry the default, an inline error line, and honour <see cref="ParameterSpec.VisibleWhen"/>
+    /// so an engine never shows a knob it will ignore.
+    /// </summary>
     private void RebuildEngineParameters()
     {
         _engineUpdate = true;
         try
         {
-            _engineParameterBoxes.Clear();
+            _engineParameterControls.Clear();
+            _engineParameterSpecs.Clear();
+            _engineParameterErrors.Clear();
+            _engineParameterRows.Clear();
             EngineParametersPanel.Children.Clear();
+            // Detached controls keep their registered names; drop them so a stale lookup cannot
+            // find a parameter belonging to the backend that was just deselected.
+            foreach (var name in _registeredParameterNames)
+            {
+                try { UnregisterName(name); }
+                catch (ArgumentException) { /* Already gone. */ }
+            }
+            _registeredParameterNames.Clear();
             var backend = SelectedEngineBackend();
             if (backend == null || backend.Parameters.Count == 0) return;
-            var settings = _config.Engines.GetValueOrDefault(backend.Descriptor.Id);
+            var settings = SettingsFor(backend);
+            var context = BuildParameterContext(backend, settings);
+
+            var advanced = new StackPanel { Visibility = Visibility.Collapsed };
+            var advancedToggle = new Button
+            {
+                Content = "高级参数 ▸",
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Padding = new Thickness(10, 4, 10, 4),
+                Margin = new Thickness(0, 10, 0, 4),
+                FontSize = 11,
+            };
+            advancedToggle.Click += (_, _) =>
+            {
+                var open = advanced.Visibility != Visibility.Visible;
+                advanced.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
+                advancedToggle.Content = open ? "高级参数 ▾" : "高级参数 ▸";
+            };
+
             foreach (var group in backend.Parameters.GroupBy(p => p.Group))
             {
-                EngineParametersPanel.Children.Add(new TextBlock
+                var basics = group.Where(p => !p.Advanced).ToList();
+                var extras = group.Where(p => p.Advanced).ToList();
+                if (basics.Count > 0)
                 {
-                    Text = group.Key,
-                    FontSize = 12,
-                    FontWeight = FontWeights.SemiBold,
-                    Margin = new Thickness(0, 8, 0, 4),
-                    Foreground = (Brush)FindResource("TextFillColorPrimaryBrush"),
-                });
-                foreach (var spec in group)
-                {
-                    var row = new Grid { Margin = new Thickness(0, 0, 0, 6) };
-                    row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(150) });
-                    row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-                    row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(30) });
-                    var label = new TextBlock
+                    EngineParametersPanel.Children.Add(BuildGroupHeader(group.Key, basics, backend));
+                    foreach (var spec in basics)
                     {
-                        Text = spec.Label,
-                        FontSize = 11,
-                        VerticalAlignment = VerticalAlignment.Center,
-                        Foreground = (Brush)FindResource("TextFillColorPrimaryBrush"),
-                        ToolTip = spec.ToolTip,
-                    };
-                    Grid.SetColumn(label, 0);
-                    row.Children.Add(label);
-                    var current = settings?.Parameters.GetValueOrDefault(spec.Key) ?? spec.Default ?? "";
-                    if (spec.Key == "expertSlots" && backend.Descriptor.Id == StrataBackend.UpstreamProfile.Id &&
-                        (settings == null || !settings.Parameters.TryGetValue("expertSlots", out var slotSetting) || string.IsNullOrWhiteSpace(slotSetting)))
-                    {
-                        var context = int.TryParse(settings?.Parameters.GetValueOrDefault("context"), out var parsedContext)
-                            ? parsedContext : 4096;
-                        if (context > 8192) current = "0";
+                        var element = BuildParameterRow(spec, backend, settings, context);
+                        EngineParametersPanel.Children.Add(element);
+                        RegisterParameter(spec, element);
                     }
-                    Control control = spec.Type switch
-                    {
-                        ParamType.Boolean => new CheckBox { IsChecked = current is "1" or "true" or "True" },
-                        ParamType.Choice => BuildChoice(spec, current),
-                        _ => new TextBox { Text = current, FontSize = 11 },
-                    };
-                    if (spec.ToolTip != null) control.ToolTip = spec.ToolTip;
-                    Grid.SetColumn(control, 1);
-                    if (spec.Type is ParamType.FilePath or ParamType.FolderPath && control is TextBox pathBox)
-                    {
-                        var pathRow = new DockPanel { MinWidth = 220 };
-                        var browse = new Button { Content = "浏览…", Padding = new Thickness(8, 3, 8, 3), Margin = new Thickness(6, 0, 0, 0) };
-                        var folder = spec.Type == ParamType.FolderPath;
-                        browse.Click += (_, _) =>
-                        {
-                            if (folder)
-                            {
-                                var dialog = new Microsoft.Win32.OpenFolderDialog { Title = spec.Label };
-                                if (dialog.ShowDialog() == true) pathBox.Text = dialog.FolderName;
-                            }
-                            else
-                            {
-                                var dialog = new Microsoft.Win32.OpenFileDialog { Title = spec.Label, Filter = "可执行文件|*.exe|所有文件|*.*" };
-                                if (dialog.ShowDialog() == true) pathBox.Text = dialog.FileName;
-                            }
-                        };
-                        DockPanel.SetDock(browse, Dock.Right);
-                        pathRow.Children.Add(browse);
-                        pathRow.Children.Add(pathBox);
-                        Grid.SetColumn(pathRow, 1);
-                        row.Children.Add(pathRow);
-                    }
-                    else
-                    {
-                        control.HorizontalAlignment = HorizontalAlignment.Stretch;
-                        Grid.SetColumn(control, 1);
-                        row.Children.Add(control);
-                    }
-
-                    var infoBtn = new Wpf.Ui.Controls.Button
-                    {
-                        Icon = new Wpf.Ui.Controls.SymbolIcon { Symbol = Wpf.Ui.Controls.SymbolRegular.QuestionCircle24 },
-                        FontSize = 11,
-                        Width = 24,
-                        Height = 22,
-                        Padding = new Thickness(0),
-                        Margin = new Thickness(4, 0, 0, 0),
-                        ToolTip = spec.ToolTip ?? "点击查看详细说明与配置建议",
-                    };
-                    var capturedSpec = spec;
-                    var backendDisplayName = backend.Descriptor.DisplayName;
-                    infoBtn.Click += (_, _) => ShowParameterHelp($"{backendDisplayName} - {capturedSpec.Label}", GetEngineParamDetailedHelp(capturedSpec));
-                    Grid.SetColumn(infoBtn, 2);
-                    row.Children.Add(infoBtn);
-
-                    EngineParametersPanel.Children.Add(row);
-                    if (control is TextBox textBox) _engineParameterBoxes[spec.Key] = textBox;
                 }
+                if (extras.Count == 0) continue;
+                advanced.Children.Add(BuildGroupHeader(group.Key, extras, backend));
+                foreach (var spec in extras)
+                {
+                    var element = BuildParameterRow(spec, backend, settings, context);
+                    advanced.Children.Add(element);
+                    RegisterParameter(spec, element);
+                }
+            }
+
+            if (advanced.Children.Count > 0)
+            {
+                EngineParametersPanel.Children.Add(advancedToggle);
+                EngineParametersPanel.Children.Add(advanced);
+            }
+            ApplyParameterFilter();
+            ValidateEngineParameters();
+        }
+        finally { _engineUpdate = false; }
+    }
+
+    /// <summary>
+    /// The values the panel should display. llama.cpp keeps its settings in the raw argument
+    /// string, so they are projected onto the schema; every other backend reads EngineSettings.
+    /// </summary>
+    private EngineSettings SettingsFor(IEngineBackend backend) =>
+        backend is LlamaCppBackend
+            // The raw box is the live source of truth while the window is up; _config.Args is only
+            // written on save, so projecting from it would show stale values after a manual edit.
+            ? new EngineSettings
+            {
+                ModelPath = _config.ModelPath,
+                Parameters = LlamaCppParameters.ReadFromArgs(_loaded ? ArgsTextBox.Text : _config.Args),
+            }
+            : _config.Engines.GetValueOrDefault(backend.Descriptor.Id) ?? new EngineSettings();
+
+    private void RegisterParameter(ParameterSpec spec, FrameworkElement element)
+    {
+        _engineParameterSpecs[spec.Key] = spec;
+        _engineParameterRows.Add((spec, element));
+    }
+
+    /// <summary>A group title with the group's own "restore defaults" action.</summary>
+    private FrameworkElement BuildGroupHeader(string title, IReadOnlyList<ParameterSpec> specs, IEngineBackend backend)
+    {
+        var panel = new DockPanel { Margin = new Thickness(0, 8, 0, 4) };
+        var reset = new Button
+        {
+            Content = "恢复默认",
+            Padding = new Thickness(8, 2, 8, 2),
+            FontSize = 10,
+            ToolTip = "把这一组的参数恢复为引擎声明的默认值",
+        };
+        DockPanel.SetDock(reset, Dock.Right);
+        reset.Click += (_, _) =>
+        {
+            foreach (var spec in specs) RestoreDefault(spec);
+            SaveEngineParameters(backend);
+        };
+        panel.Children.Add(reset);
+        panel.Children.Add(new TextBlock
+        {
+            Text = title,
+            FontSize = 12,
+            FontWeight = FontWeights.SemiBold,
+            VerticalAlignment = VerticalAlignment.Center,
+            Foreground = (Brush)FindResource("TextFillColorPrimaryBrush"),
+        });
+        return panel;
+    }
+
+    private string ResolveCurrentValue(ParameterSpec spec, IEngineBackend backend, EngineSettings? settings)
+    {
+        if (settings != null && settings.Parameters.TryGetValue(spec.Key, out var stored) && !string.IsNullOrWhiteSpace(stored))
+            return stored;
+        // Fields that predate the schema panel still live in the legacy StrataConfig block.
+        // Showing that value keeps the panel honest about what the engine will receive.
+        if (backend is StrataBackend strata)
+        {
+            var legacy = spec.Key switch
+            {
+                "prefill" => strata.LegacyPrefill(_config),
+                "maxNew" => strata.LegacyMaxNew(_config),
+                "poolWorkers" => strata.LegacyWorkers(_config),
+                "reasoningBudget" => strata.LegacyReasoningBudget(_config),
+                "anthropicThinking" => strata.LegacyAnthropicThinking(_config),
+                _ => null,
+            };
+            if (!string.IsNullOrWhiteSpace(legacy)) return legacy!;
+        }
+        var current = spec.Default ?? "";
+        // Strata upstream derives its expert slot count from the context size when unset;
+        // mirror that here so the panel shows the value the engine will actually use.
+        if (spec.Key == "expertSlots" && backend.Descriptor.Id == StrataBackend.UpstreamProfile.Id &&
+            (settings == null || !settings.Parameters.TryGetValue("expertSlots", out var slotSetting) || string.IsNullOrWhiteSpace(slotSetting)))
+        {
+            var context = int.TryParse(settings?.Parameters.GetValueOrDefault("context"), out var parsedContext)
+                ? parsedContext : 4096;
+            if (context > 8192) current = "0";
+        }
+        return current;
+    }
+
+    /// <summary>Builds one parameter row: label + editor + "?" button, with an inline error line.</summary>
+    private FrameworkElement BuildParameterRow(ParameterSpec spec, IEngineBackend backend,
+        EngineSettings? settings, ParameterContext context)
+    {
+        var current = ResolveCurrentValue(spec, backend, settings);
+        var host = new StackPanel { Margin = new Thickness(0, 0, 0, 6) };
+        var row = new Grid();
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(150) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(30) });
+
+        var labelPanel = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+        labelPanel.Children.Add(new TextBlock
+        {
+            Text = spec.Unit == null ? spec.Label : $"{spec.Label}（{spec.Unit}）",
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = (Brush)FindResource("TextFillColorPrimaryBrush"),
+            ToolTip = BuildParameterTip(spec),
+        });
+        if (!string.IsNullOrWhiteSpace(spec.Default))
+        {
+            labelPanel.Children.Add(new TextBlock
+            {
+                Text = $"默认 {spec.Default}",
+                FontSize = 10,
+                Foreground = (Brush)FindResource("TextFillColorSecondaryBrush"),
+            });
+        }
+        Grid.SetColumn(labelPanel, 0);
+        row.Children.Add(labelPanel);
+
+        Control control = spec.Type switch
+        {
+            ParamType.Boolean => BuildToggle(spec, current),
+            ParamType.Choice => BuildChoice(spec, current),
+            _ => new TextBox { Text = current, FontSize = 11 },
+        };
+        if (control is TextBox textBox)
+        {
+            textBox.ToolTip = spec.EffectiveToolTip;
+            if (spec.Type is ParamType.Integer or ParamType.Decimal) FilterNumericInput(textBox, spec);
+            textBox.LostFocus += (_, _) => ValidateEngineParameters();
+            textBox.TextChanged += (_, _) => { if (!_engineUpdate) OnParameterEdited(spec, control); };
+        }
+        else if (control is ComboBox combo)
+        {
+            combo.ToolTip = spec.EffectiveToolTip;
+            combo.SelectionChanged += (_, e) =>
+            {
+                if (_engineUpdate) return;
+                // An editable ComboBox updates its Text after the selection event fires, so read
+                // the picked item's machine value here instead of whatever Text still says.
+                var picked = e.AddedItems.Count > 0 ? e.AddedItems[0] as ComboBoxItem : null;
+                OnParameterEdited(spec, control, picked?.Tag is ParamChoice choice ? choice.Value : null);
+            };
+            // Typed free text commits on focus loss, matching the old hand-written combos.
+            combo.LostFocus += (_, _) => { if (!_engineUpdate) OnParameterEdited(spec, control); };
+        }
+        else if (control is ToggleButton toggle)
+        {
+            toggle.ToolTip = spec.EffectiveToolTip;
+            toggle.Checked += (_, _) => { if (!_engineUpdate) OnParameterEdited(spec, control); };
+            toggle.Unchecked += (_, _) => { if (!_engineUpdate) OnParameterEdited(spec, control); };
+        }
+
+        if (spec.Type is ParamType.FilePath or ParamType.FolderPath && control is TextBox pathBox)
+        {
+            var pathRow = new DockPanel { MinWidth = 220 };
+            var browse = new Button { Content = "浏览…", Padding = new Thickness(8, 3, 8, 3), Margin = new Thickness(6, 0, 0, 0) };
+            var folder = spec.Type == ParamType.FolderPath;
+            browse.Click += (_, _) =>
+            {
+                if (folder)
+                {
+                    var dialog = new Microsoft.Win32.OpenFolderDialog { Title = spec.Label };
+                    if (dialog.ShowDialog() == true) pathBox.Text = dialog.FolderName;
+                }
+                else
+                {
+                    var dialog = new Microsoft.Win32.OpenFileDialog { Title = spec.Label, Filter = "可执行文件|*.exe|所有文件|*.*" };
+                    if (dialog.ShowDialog() == true) pathBox.Text = dialog.FileName;
+                }
+            };
+            DockPanel.SetDock(browse, Dock.Right);
+            pathRow.Children.Add(browse);
+            pathRow.Children.Add(pathBox);
+            Grid.SetColumn(pathRow, 1);
+            row.Children.Add(pathRow);
+        }
+        else
+        {
+            control.HorizontalAlignment = HorizontalAlignment.Stretch;
+            Grid.SetColumn(control, 1);
+            row.Children.Add(control);
+        }
+
+        var infoBtn = new Wpf.Ui.Controls.Button
+        {
+            Icon = new Wpf.Ui.Controls.SymbolIcon { Symbol = Wpf.Ui.Controls.SymbolRegular.QuestionCircle24 },
+            FontSize = 11,
+            Width = 24,
+            Height = 22,
+            Padding = new Thickness(0),
+            Margin = new Thickness(4, 0, 0, 0),
+            ToolTip = spec.EffectiveToolTip ?? "点击查看详细说明与配置建议",
+        };
+        var capturedSpec = spec;
+        var backendDisplayName = backend.Descriptor.DisplayName;
+        infoBtn.Click += (_, _) => ShowParameterHelp($"{backendDisplayName} - {capturedSpec.Label}",
+            capturedSpec.EffectiveHelp ?? GetEngineParamDetailedHelp(capturedSpec));
+        Grid.SetColumn(infoBtn, 2);
+        row.Children.Add(infoBtn);
+
+        var error = new TextBlock
+        {
+            Text = "",
+            FontSize = 10,
+            Margin = new Thickness(150, 2, 30, 0),
+            TextWrapping = TextWrapping.Wrap,
+            Visibility = Visibility.Collapsed,
+            Foreground = (Brush)FindResource("SystemFillColorCriticalBrush"),
+        };
+        host.Children.Add(row);
+        host.Children.Add(error);
+        _engineParameterControls[spec.Key] = control;
+        _engineParameterErrors[spec.Key] = error;
+        // Dynamic controls are not in the XAML namescope; registering them keeps the panel
+        // inspectable from the UI regression test without hard-coding control names again.
+        var testName = "Param_" + spec.Key;
+        try
+        {
+            if (FindName(testName) != null) UnregisterName(testName);
+            RegisterName(testName, control);
+            _registeredParameterNames.Add(testName);
+        }
+        catch (ArgumentException) { /* A duplicate name must not break the panel. */ }
+        return host;
+    }
+
+    /// <summary>Restores one parameter to the backend-declared default.</summary>
+    private void RestoreDefault(ParameterSpec spec)
+    {
+        if (!_engineParameterControls.TryGetValue(spec.Key, out var control)) return;
+        var value = spec.Default ?? "";
+        _engineUpdate = true;
+        try
+        {
+            switch (control)
+            {
+                case TextBox box: box.Text = value; break;
+                case ComboBox combo: SelectChoice(combo, value); break;
+                case ToggleButton toggle: toggle.IsChecked = value is "1" or "true" or "True"; break;
             }
         }
         finally { _engineUpdate = false; }
+        if (SelectedEngineBackend() is LlamaCppBackend) ApplyLlamaCppParameter(spec, control);
+    }
+
+    /// <summary>Re-evaluates visibility after an edit: a condition may depend on another field.</summary>
+    private void OnParameterEdited(ParameterSpec spec, Control control, string? explicitValue = null)
+    {
+        if (SelectedEngineBackend() is LlamaCppBackend) ApplyLlamaCppParameter(spec, control, explicitValue);
+        ValidateEngineParameters();
+        ApplyParameterVisibility();
+        ApplyParameterFilter();
+    }
+
+    /// <summary>
+    /// Writes one edited value back into llama.cpp's raw argument string. The raw box stays the
+    /// single source of truth, so hand-written flags survive and the advanced tab reflects edits.
+    /// </summary>
+    private void ApplyLlamaCppParameter(ParameterSpec spec, Control control, string? explicitValue = null)
+    {
+        var value = explicitValue ?? ReadControlValue(control, spec);
+        var updated = LlamaCppParameters.Apply(ArgsTextBox.Text, spec.Key, value);
+        if (updated == ArgsTextBox.Text) return;
+        _parsingArgs = true;
+        try { ArgsTextBox.Text = updated; }
+        finally { _parsingArgs = false; }
+        // No rebuild here: the edited control already shows the value, and rebuilding the panel
+        // from inside its own selection event would tear down the control mid-event.
+    }
+
+    /// <summary>Hides parameters whose <see cref="ParameterSpec.VisibleWhen"/> is false, keeping their values.</summary>
+    private void ApplyParameterVisibility()
+    {
+        var backend = SelectedEngineBackend();
+        if (backend == null) return;
+        var context = BuildParameterContext(backend, _config.Engines.GetValueOrDefault(backend.Descriptor.Id));
+        foreach (var (spec, row) in _engineParameterRows)
+            row.Tag = ParameterVisibility.Evaluate(spec.VisibleWhen, context);
+    }
+
+    /// <summary>Shows a row only when it is both visible per its condition and matched by the filter.</summary>
+    private void ApplyParameterFilter()
+    {
+        var filter = _engineParamFilter.Trim();
+        ApplyParameterVisibility();
+        foreach (var (spec, row) in _engineParameterRows)
+        {
+            var visible = row.Tag is not false;
+            if (visible && filter.Length > 0)
+                visible = spec.Label.Contains(filter, StringComparison.OrdinalIgnoreCase)
+                    || spec.Key.Contains(filter, StringComparison.OrdinalIgnoreCase)
+                    || spec.Group.Contains(filter, StringComparison.OrdinalIgnoreCase);
+            row.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        }
+    }
+
+    private void EngineParamSearchBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_engineUpdate) return;
+        _engineParamFilter = EngineParamSearchBox.Text ?? "";
+        ApplyParameterFilter();
+    }
+
+    private void EngineResetAllButton_Click(object sender, RoutedEventArgs e)
+    {
+        var backend = SelectedEngineBackend();
+        if (backend == null) return;
+        foreach (var spec in backend.Parameters) RestoreDefault(spec);
+        SaveEngineParameters(backend);
+        ApplyParameterFilter();
+    }
+
+    /// <summary>The tooltip shown on a parameter label: help, range and default.</summary>
+    private static string? BuildParameterTip(ParameterSpec spec)
+    {
+        var parts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(spec.EffectiveToolTip)) parts.Add(spec.EffectiveToolTip!);
+        if (spec.EffectiveRangeHint != null) parts.Add($"范围：{spec.EffectiveRangeHint}");
+        if (!string.IsNullOrWhiteSpace(spec.Default)) parts.Add($"默认：{spec.Default}");
+        return parts.Count == 0 ? null : string.Join("\n", parts);
+    }
+
+    /// <summary>The value every visibility condition and validator sees for the current panel state.</summary>
+    private ParameterContext BuildParameterContext(IEngineBackend backend, EngineSettings? settings)
+    {
+        var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var spec in backend.Parameters)
+        {
+            values[spec.Key] = _engineParameterControls.TryGetValue(spec.Key, out var control)
+                ? ReadControlValue(control, spec)
+                : ResolveCurrentValue(spec, backend, settings);
+        }
+        GgufMetadata? metadata = null;
+        var model = EngineModelFor(backend);
+        if (!string.IsNullOrWhiteSpace(model) && File.Exists(model))
+        {
+            try { metadata = GgufService.TryReadShards(model); }
+            catch (IOException) { metadata = null; }
+        }
+        return new ParameterContext(backend.Descriptor.Id, metadata, values);
+    }
+
+    /// <summary>Rejects non-numeric keystrokes in Integer/Decimal fields without blocking paste.</summary>
+    private static void FilterNumericInput(TextBox box, ParameterSpec spec)
+    {
+        box.PreviewTextInput += (_, e) =>
+        {
+            foreach (var ch in e.Text)
+            {
+                var ok = char.IsDigit(ch) || ch == '-' || (spec.Type == ParamType.Decimal && ch is '.' or ',');
+                if (!ok) { e.Handled = true; return; }
+            }
+        };
+    }
+
+    /// <summary>
+    /// Validates every visible field and paints inline errors. Returns false when something is out of
+    /// range so the caller can refuse to launch; it never rewrites the user's value.
+    /// </summary>
+    private bool ValidateEngineParameters()
+    {
+        var backend = SelectedEngineBackend();
+        if (backend == null) return true;
+        var ok = true;
+        foreach (var spec in backend.Parameters)
+        {
+            if (!_engineParameterControls.TryGetValue(spec.Key, out var control)) continue;
+            var error = _engineParameterErrors.GetValueOrDefault(spec.Key);
+            var problem = ValidateValue(spec, ReadControlValue(control, spec));
+            if (problem != null) ok = false;
+            if (error != null)
+            {
+                error.Text = problem ?? "";
+                error.Visibility = problem == null ? Visibility.Collapsed : Visibility.Visible;
+            }
+            if (problem != null) control.BorderBrush = (Brush)FindResource("SystemFillColorCriticalBrush");
+            else control.ClearValue(Control.BorderBrushProperty);
+        }
+        return ok;
+    }
+
+    /// <summary>Returns a human-readable problem for one value, or null when it is acceptable.</summary>
+    private static string? ValidateValue(ParameterSpec spec, string value)
+    {
+        // A Choice that carries a numeric range holds a number even though it also offers presets
+        // (llama.cpp's -ngl/-b/-ub/-t), so it gets the same range check as a plain Integer.
+        var numeric = spec.Type is ParamType.Integer or ParamType.Decimal
+            || (spec.Type == ParamType.Choice && spec.Min != null);
+        if (!numeric) return null;
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        var text = value.Trim();
+        // -ngl also accepts "all" / "auto", which are not numbers at all.
+        if (text is "all" or "auto") return null;
+        var allowFraction = spec.Type == ParamType.Decimal;
+        if (allowFraction)
+        {
+            if (!double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var real))
+                return "需要一个数字";
+            if (spec.Min != null && real < spec.Min) return $"不能小于 {spec.Min}";
+            if (spec.Max != null && real > spec.Max) return $"不能大于 {spec.Max}";
+            return null;
+        }
+        if (!int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var number))
+            return "需要一个整数";
+        if (spec.Min != null && number < spec.Min) return $"不能小于 {spec.Min:0}";
+        if (spec.Max != null && number > spec.Max) return $"不能大于 {spec.Max:0}";
+        return null;
     }
 
     private static string GetEngineParamDetailedHelp(ParameterSpec spec)
@@ -301,13 +687,62 @@ public partial class MainWindow
         };
     }
 
+    /// <summary>
+    /// Builds the editor for a Choice parameter. The label (and any usage note) is what the user
+    /// reads; the box's SelectedItem is the <see cref="ParamChoice"/> itself, so the engine always
+    /// receives the machine value in <see cref="ParamChoice.Value"/> even when the label differs.
+    /// </summary>
     private static ComboBox BuildChoice(ParameterSpec spec, string current)
     {
         var combo = new ComboBox { FontSize = 11 };
-        foreach (var choice in spec.Choices ?? []) combo.Items.Add(choice);
-        combo.SelectedItem = combo.Items.Contains(current) ? current : combo.Items.Cast<string>().FirstOrDefault();
+        foreach (var choice in spec.Choices ?? [])
+        {
+            combo.Items.Add(new ComboBoxItem
+            {
+                Content = choice.Recommended ? $"{choice.Label}（推荐）" : choice.Label,
+                ToolTip = choice.Note,
+                Tag = choice,
+            });
+        }
+        var selected = combo.Items.OfType<ComboBoxItem>()
+            .FirstOrDefault(item => item.Tag is ParamChoice choice && choice.Value == current)
+            ?? combo.Items.OfType<ComboBoxItem>().FirstOrDefault();
+        combo.SelectedItem = selected;
+        combo.IsEditable = spec.Editable;
         return combo;
     }
+
+    /// <summary>The machine value of a Choice box, or <paramref name="fallback"/> when nothing is selected.</summary>
+    private static string ChoiceValue(ComboBox combo, string fallback)
+    {
+        if (combo.IsEditable)
+        {
+            // An editable Choice also accepts free text (e.g. -ngl 35), so map a known entry back
+            // to its machine value and otherwise keep whatever the user typed. The displayed
+            // Content may carry a "（推荐）" suffix, so it is matched as well as the bare label.
+            var text = (combo.Text ?? "").Trim();
+            var match = combo.Items.OfType<ComboBoxItem>().FirstOrDefault(item =>
+                string.Equals(item.Content?.ToString(), text, StringComparison.OrdinalIgnoreCase)
+                || (item.Tag is ParamChoice choice
+                    && (string.Equals(choice.Label, text, StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(choice.Value, text, StringComparison.OrdinalIgnoreCase))));
+            if (match?.Tag is ParamChoice matched) return matched.Value;
+            return string.IsNullOrEmpty(text) ? fallback : text;
+        }
+        return combo.SelectedItem is ComboBoxItem { Tag: ParamChoice choice } ? choice.Value : fallback;
+    }
+
+    /// <summary>Selects the item whose <see cref="ParamChoice.Value"/> matches; falls back to the first.</summary>
+    private static void SelectChoice(ComboBox combo, string value)
+    {
+        var items = combo.Items.OfType<ComboBoxItem>().ToList();
+        combo.SelectedItem = items.FirstOrDefault(item => item.Tag is ParamChoice choice && choice.Value == value)
+            ?? items.FirstOrDefault();
+    }
+
+    /// <summary>Builds the on/off control a Boolean parameter uses; it writes "1" / "0".</summary>
+    private static Wpf.Ui.Controls.ToggleSwitch BuildToggle(ParameterSpec spec, string current) =>
+        new() { IsChecked = current is "1" or "true" or "True", FontSize = 11 };
 
     private async Task RefreshEngineAsync()
     {
@@ -337,17 +772,67 @@ public partial class MainWindow
         ? _config.ModelPath
         : _config.Engines.GetValueOrDefault(backend.Descriptor.Id)?.ModelPath ?? "";
 
-    /// <summary>Persists the schema panel's values before a start.</summary>
-    private void SaveEngineParameters(IEngineBackend backend)
+    /// <summary>Reads the engine-facing value out of whichever control a spec produced.</summary>
+    private static string ReadControlValue(Control control, ParameterSpec spec) => control switch
     {
-        if (_engineUpdate || backend.Parameters.Count == 0) return;
+        TextBox textBox => textBox.Text,
+        ComboBox combo => ChoiceValue(combo, spec.Default ?? ""),
+        ToggleButton toggle => toggle.IsChecked == true ? "1" : "0",
+        _ => spec.Default ?? "",
+    };
+
+    /// <summary>
+    /// Persists the schema panel's values before a start. Returns false — without saving anything —
+    /// when a field is out of range, so an invalid value can never reach the engine's command line.
+    /// </summary>
+    private bool SaveEngineParameters(IEngineBackend backend)
+    {
+        if (_engineUpdate || backend.Parameters.Count == 0) return true;
+        if (!ValidateEngineParameters())
+        {
+            LogService.Write($"[{backend.Descriptor.Id}] 参数校验未通过，已阻止启动。");
+            return false;
+        }
+        if (backend is LlamaCppBackend)
+        {
+            // llama.cpp's values already live in ArgsTextBox; SaveCurrentConfig validates the
+            // port and writes Args/Port back to the main config.
+            SaveCurrentConfig();
+            return true;
+        }
         var settings = _config.Engines.GetValueOrDefault(backend.Descriptor.Id) ?? new EngineSettings();
         foreach (var spec in backend.Parameters)
-            if (_engineParameterBoxes.TryGetValue(spec.Key, out var box))
-                settings.Parameters[spec.Key] = box.Text;
+        {
+            if (!_engineParameterControls.TryGetValue(spec.Key, out var control)) continue;
+            var value = ReadControlValue(control, spec);
+            // Only record what the user actually chose. Persisting an untouched default would
+            // silently pin behaviour the engine or the legacy config block used to decide,
+            // e.g. Strata's expert slot count that depends on the context size.
+            var untouched = string.Equals(value, spec.Default ?? "", StringComparison.OrdinalIgnoreCase)
+                && !settings.Parameters.ContainsKey(spec.Key);
+            if (untouched) continue;
+            settings.Parameters[spec.Key] = value;
+        }
         if (string.IsNullOrEmpty(settings.ModelPath)) settings.ModelPath = EngineModelFor(backend);
         _config.Engines[backend.Descriptor.Id] = settings;
         ConfigService.SaveEngineSettings(_config, backend.Descriptor.Id, settings);
+        return true;
+    }
+
+    /// <summary>Tells the user why a start was refused and puts the cursor in the offending field.</summary>
+    private void ShowParameterValidationFailure()
+    {
+        var first = _engineParameterRows
+            .Select(r => r.Spec)
+            .FirstOrDefault(spec => _engineParameterErrors.TryGetValue(spec.Key, out var error)
+                && error.Visibility == Visibility.Visible);
+        if (first != null && _engineParameterControls.TryGetValue(first.Key, out var control))
+        {
+            if (control is TextBox box) { box.Focus(); box.SelectAll(); }
+            else control.Focus();
+        }
+        ShowError("参数有误", new InvalidOperationException(
+            first == null ? "有参数超出允许范围，已取消启动。" : $"“{first.Label}”超出允许范围，已取消启动。"));
     }
 
     private async void EngineBootstrapButton_Click(object sender, RoutedEventArgs e)

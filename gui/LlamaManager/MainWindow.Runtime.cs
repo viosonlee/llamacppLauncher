@@ -185,7 +185,11 @@ public partial class MainWindow
             }
             else
             {
-                SaveEngineParameters(backend);
+                if (!SaveEngineParameters(backend))
+                {
+                    ShowParameterValidationFailure();
+                    return;
+                }
                 _config = ConfigService.ReadConfig();
                 await server.StartAsync(new EngineStartRequest { Config = _config },
                     new DelegateLogSink(AppendEngineOutput), _startCancellation.Token);
