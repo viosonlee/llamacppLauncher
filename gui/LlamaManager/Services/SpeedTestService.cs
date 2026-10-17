@@ -30,6 +30,8 @@ public static class SpeedTestService
         public int StreamEvents { get; set; }
         public bool HasUsage { get; set; }
         public double? TtftSeconds { get; set; }
+        /// <summary>Engine-reported decode rate when the server includes it in the final SSE chunk.</summary>
+        public double? ServerDecodeTps { get; set; }
         public double? DecodeTps { get; set; }
         public double TotalSeconds { get; set; }
         public string? Error { get; set; }
@@ -102,6 +104,13 @@ public static class SpeedTestService
                 using var chunk = JsonDocument.Parse(data);
                 var root = chunk.RootElement;
 
+                if (root.TryGetProperty("timings", out var timings) && timings.ValueKind == JsonValueKind.Object)
+                {
+                    var serverRate = GetDouble(timings, "predicted_per_second");
+                    if (serverRate is > 0 && double.IsFinite(serverRate.Value))
+                        result.ServerDecodeTps = serverRate;
+                }
+
                 if (root.TryGetProperty("usage", out var usage) && usage.ValueKind == JsonValueKind.Object)
                 {
                     result.HasUsage = usage.TryGetProperty("completion_tokens", out _);
@@ -128,8 +137,11 @@ public static class SpeedTestService
             result.TotalSeconds = stopwatch.Elapsed.TotalSeconds;
             result.TtftSeconds = firstTokenAt;
 
-            // SSE events can contain several tokens. Only report throughput from server token counts.
-            if (result.HasUsage && firstTokenAt.HasValue && lastTokenAt > firstTokenAt.Value && result.CompletionTokens > 1)
+            // Strata reports the engine's own decode timing. Prefer it because one SSE event can
+            // contain several speculative tokens; event timestamps would understate MTP throughput.
+            result.DecodeTps = result.ServerDecodeTps;
+            if (!result.DecodeTps.HasValue && result.HasUsage && firstTokenAt.HasValue &&
+                lastTokenAt > firstTokenAt.Value && result.CompletionTokens > 1)
                 result.DecodeTps = (result.CompletionTokens - 1) / (lastTokenAt - firstTokenAt.Value);
             if (!firstTokenAt.HasValue) result.Error = "服务未返回生成内容。";
 
@@ -149,6 +161,9 @@ public static class SpeedTestService
 
     private static int GetInt(JsonElement obj, string name) =>
         obj.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var i) ? i : 0;
+
+    private static double? GetDouble(JsonElement obj, string name) =>
+        obj.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetDouble(out var d) ? d : null;
 
     private static string? GetString(JsonElement obj, string name) =>
         obj.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;

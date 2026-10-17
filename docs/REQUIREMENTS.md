@@ -114,7 +114,10 @@
   - 测速监控（SpeedMonitorService）与状态轮询适配 Strata 服务端：在 `serve/server.py` 的 `/slots` 接口暴露当前实时解码 tokens 数（`n_decoded`），使得启动器在推理生成过程中能即时计算实时解码速度；当请求结束空闲时，自动解析 Strata 引擎日志（`[strata] done: ... (XX tok/s)`）或读取 `/v1/status` 的 `last_timings` 显示已完成请求的生成速度。
   - 显存/专家分布诊断：从 `engine-polystrata.log` 及 `engine-strata-upstream.log` 解析 Strata 引擎专有的显存专家分布（`X/Y 专家在显存 (Z GiB)`、`X/Y 专家/层在显存 (Z GiB)`）并在顶部状态信息中直观呈现。
 - REQ-106 已实现：strata-upstream 投机加速与专家槽位性能修复（解决 27 TPS 瓶颈）：
-  - 修正参数传递：`strata.exe` 不支持 `--vram-reserve-mib`（日志提示 ignoring），且默认 `expert_slots` 为 0，在 6GB 显卡上导致所有 routed experts 回退到 CPU 线程池。现为 `strata-upstream` 配置专属的 `expertSlots`（默认 16，占用 0.75 GiB 显存，GPU 专家命中率提升至 40%~50%）。
-  - 激活 MTP 多 Token 投机加速：配置中显式传递 `--mtp 2`（`mtpDrafts`，默认 2），利用模型自带的 MTP 模块进行投机解码（接受率 70%~95%），实测解码速度从 27 tok/s 跃升至 50~72 tok/s。
+  - 修正参数传递：`strata.exe` 不支持 `--vram-reserve-mib`（日志提示 ignoring），且默认 `expert_slots` 为 0，在 6GB 显卡上可能让 routed experts 全部回退到 CPU 线程池。现为 `strata-upstream` 配置专属的 `expertSlots`（默认 16，占用约 0.75 GiB 显存）。
+  - 激活 MTP 多 Token 投机加速：配置中显式传递 `--mtp 2`（`mtpDrafts`，默认 2），利用模型自带的 MTP 模块进行投机解码。
+  - 测速优先采用服务端 `timings.predicted_per_second`，避免 SSE 合并多个 Token 时低估 MTP 吞吐。
+  - 专家槽位按上下文自适应：不超过 8192 时默认 16 槽，大于 8192 时默认交给引擎计算；显式填写的槽位数仍优先。
+  - 同一 RTX 3060 Laptop (6GB) 的 256 Token 实测为 28.0 -> 39.5 tok/s；24 槽为 41.3 tok/s，但仅余约 8 MiB 显存，默认采用更安全的 16 槽。
 
 

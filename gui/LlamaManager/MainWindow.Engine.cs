@@ -136,6 +136,13 @@ public partial class MainWindow
                     Grid.SetColumn(label, 0);
                     row.Children.Add(label);
                     var current = settings?.Parameters.GetValueOrDefault(spec.Key) ?? spec.Default ?? "";
+                    if (spec.Key == "expertSlots" && backend.Descriptor.Id == StrataBackend.UpstreamProfile.Id &&
+                        (settings == null || !settings.Parameters.TryGetValue("expertSlots", out var slotSetting) || string.IsNullOrWhiteSpace(slotSetting)))
+                    {
+                        var context = int.TryParse(settings?.Parameters.GetValueOrDefault("context"), out var parsedContext)
+                            ? parsedContext : 4096;
+                        if (context > 8192) current = "0";
+                    }
                     Control control = spec.Type switch
                     {
                         ParamType.Boolean => new CheckBox { IsChecked = current is "1" or "true" or "True" },
@@ -263,9 +270,11 @@ public partial class MainWindow
                 "• 作用：Strata upstream 引擎中，每个 MoE 层常驻在显存中的专家槽位数（--expert-slots）。\n" +
                 "• 原理：将高频使用的 MoE 专家预载进 GPU 显存，未命中的专家通过 CPU 线程池计算或动态置换，大幅提升 GPU 命中率。\n" +
                 "• 推荐配置：\n" +
-                "  - 6GB 显存：推荐 16 ~ 24（默认 16，约占用 0.75 GiB 显存，GPU 专家命中率可达 40%~50%，速度提升 2~3 倍）。\n" +
-                "  - 8GB ~ 12GB 显存：推荐 32 ~ 64\n" +
-                "  - 16GB+ 显存：推荐 128 或更大",
+                "  - 6GB 显存：默认 16（约占用 0.75 GiB 显存）；24 槽在本机仅剩约 8 MiB 空闲显存，可能触发驱动换页。\n" +
+                "  - 8GB ~ 12GB 显存：可从 32 开始逐步测试\n" +
+                "  - 16GB+ 显存：可继续增大，并以启动日志与实测速度为准\n" +
+                "  - 0：让引擎自动计算；在 6GB 显存和 4096 上下文下可能算出 0，退化为纯 CPU 专家计算。\n" +
+                "  - 上下文大于 8192 时，未显式设置本项会默认使用 0；40K 上下文在 6GB 卡上已没有槽位空间，强行设置 16 会造成 WDDM 显存换页并严重掉速。",
 
             "poolWorkers" =>
                 "【CPU 池线程数 (poolWorkers)】\n" +

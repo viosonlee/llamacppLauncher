@@ -580,14 +580,15 @@ internal static class Program
             });
             await Test("speed test: model lookup excluded from TTFT; events are not token counts", async () =>
             {
-                var config = Config(Fixtures.FreePort()); ConfigService.SaveConfig(config);
+                var config = Config(Fixtures.FreePort()); config.Args += " --fake-timings"; ConfigService.SaveConfig(config);
                 await ServerService.StartAsync(config);
                 var result = await SpeedTestService.RunAsync(config.RunningServer!.Port);
                 Check(result.Success && result.HasUsage && result.CompletionTokens == 6 && result.StreamEvents == 2, "stream usage");
                 Check(result.TtftSeconds < .4, "model lookup incorrectly included");
-                Check(result.DecodeTps > 0, "no throughput");
+                Check(result.ServerDecodeTps == 42.5 && result.DecodeTps == 42.5, "engine timing was not preferred over SSE events");
                 await ServerService.StopAsync(config);
-                config.Args += " --fake-no-usage"; await ServerService.StartAsync(config);
+                config = Config(Fixtures.FreePort()); config.Args += " --fake-no-usage"; ConfigService.SaveConfig(config);
+                await ServerService.StartAsync(config);
                 result = await SpeedTestService.RunAsync(config.RunningServer!.Port);
                 Check(result.Success && !result.HasUsage && result.DecodeTps == null, "fabricated tokens from SSE events");
                 await ServerService.StopAsync(config);

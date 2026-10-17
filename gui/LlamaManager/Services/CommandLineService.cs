@@ -81,7 +81,7 @@ public static class CommandLineService
                 {
                     await BootstrapService.RunAsync(backendId, new DelegateLogSink(LogService.Write), ct);
                 }
-                var session = await backend.StartAsync(new EngineStartRequest { Config = config },
+                var session = await backend.StartAsync(new EngineStartRequest { Config = config, Port = overridePort },
                     new DelegateLogSink(LogService.Write), ct);
                 return session.ProcessId > 0 ? 0 : 2;
             case "--stop":

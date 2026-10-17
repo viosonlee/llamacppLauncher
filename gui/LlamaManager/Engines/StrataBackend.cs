@@ -68,7 +68,7 @@ public sealed class StrataBackend : IServerBackend
         else
         {
             list.Add(new("mtpDrafts", "MTP 草稿数", "基本", ParamType.Integer, "2", "每步投机采样的草稿 Token 数（--mtp，默认 2）。对于带有 MTP 模块的模型可带来约 1.8~2.5x 的解码加速；设为 0 关闭投机加速。", 0, 7));
-            list.Add(new("expertSlots", "显存专家槽位", "基本", ParamType.Integer, "16", "每层常驻显存的专家槽位数（--expert-slots，默认 16）。在 6GB 显卡上推荐设为 16~24，显存充足时可调大以提升 GPU 命中率与生成速度；设为 0 为全部在 CPU 计算。", 0, 256));
+            list.Add(new("expertSlots", "显存专家槽位", "基本", ParamType.Integer, "16", "每层常驻显存的专家槽位数（--expert-slots，默认 16）。6GB 显卡在 4K 上下文建议 16；大于 8K 的上下文默认交给引擎自动计算，避免显存超额换页。", 0, 256));
         }
         list.Add(new("poolWorkers", "CPU 池线程", "高级", ParamType.Integer, "0", "CPU 密集任务工作线程数（--pool-workers）。默认 0 为由引擎根据 CPU 物理核心自动分配最佳线程。", 0, 256));
         list.Add(new("reasoningBudget", "reasoning 预算", "高级", ParamType.Integer, "0", "思考模型单次推理最大 Token 预算（--reasoning-budget）。0 为不限制，填正数可限制思考深度以加速。", 0, 65536));
@@ -272,7 +272,7 @@ public sealed class StrataBackend : IServerBackend
         ServerService.TestApiReadyAsync(session.Port, ct);
 
     public int ResolvePort(EngineStartRequest request) =>
-        ParamInt(request.Config, "servePort", request.Config.Strata.ServePort);
+        request.Port ?? ParamInt(request.Config, "servePort", request.Config.Strata.ServePort);
 
     public string HealthUrl(EngineSession session) => $"http://127.0.0.1:{session.Port}/health";
 
@@ -317,7 +317,11 @@ public sealed class StrataBackend : IServerBackend
         {
             var workers = ParamInt(config, "poolWorkers", s.Workers);
             var mtp = ParamInt(config, "mtpDrafts", 2);
-            var slots = ParamInt(config, "expertSlots", 16);
+            // 16 slots are a safe speed-up at 4K on a 6GB card. At 40K the KV cache already
+            // consumes that card's free VRAM; forcing 16 slots spills them through WDDM and
+            // collapses decode. Larger contexts therefore use the engine's auto sizing unless
+            // the user explicitly chooses a slot count.
+            var slots = ParamInt(config, "expertSlots", context <= 8192 ? 16 : 0);
             if (s.Prefill > 0) { args.Add("--prefill"); args.Add(s.Prefill.ToString()); }
             if (s.MaxNew > 0) { args.Add("--max-new"); args.Add(s.MaxNew.ToString()); }
             if (workers > 0) { args.Add("--pool-workers"); args.Add(workers.ToString()); }

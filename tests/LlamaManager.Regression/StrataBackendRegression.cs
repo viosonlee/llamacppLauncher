@@ -88,9 +88,40 @@ internal static class StrataBackendRegression
         Check(runArgs.Contains("--mtp") && runArgs.Contains("2"), "strata-upstream must pass --mtp 2 by default");
         Check(runArgs.Contains("--expert-slots") && runArgs.Contains("16"), "strata-upstream must pass --expert-slots 16 by default");
         Check(!runArgs.Contains("--vram-reserve-mib"), "strata-upstream must not pass --vram-reserve-mib");
+
+        // Large contexts use the engine's automatic sizing unless the user explicitly chooses a count.
+        var settings = config.Engines["strata-upstream"];
+        settings.Parameters["context"] = "40960";
+        var largePlan = backend.BuildLaunch(new EngineStartRequest { Config = config });
+        var largeArgs = largePlan.Arguments.ToList();
+        var largeConfigPath = largeArgs[largeArgs.IndexOf("--config") + 1];
+        var largeRunconfig = JsonNode.Parse(largePlan.GeneratedFiles[largeConfigPath])!.AsObject();
+        var largeRunArgs = largeRunconfig["args"]!.AsArray().Select(n => n!.GetValue<string>()).ToList();
+        Check(largeRunArgs.Contains("--mtp") && !largeRunArgs.Contains("--expert-slots"),
+            "large context must keep MTP and leave expert slots on auto");
+        settings.Parameters["expertSlots"] = "4";
+        largePlan = backend.BuildLaunch(new EngineStartRequest { Config = config });
+        largeArgs = largePlan.Arguments.ToList();
+        largeConfigPath = largeArgs[largeArgs.IndexOf("--config") + 1];
+        largeRunconfig = JsonNode.Parse(largePlan.GeneratedFiles[largeConfigPath])!.AsObject();
+        largeRunArgs = largeRunconfig["args"]!.AsArray().Select(n => n!.GetValue<string>()).ToList();
+        Check(largeRunArgs.Contains("--expert-slots") && largeRunArgs.Contains("4"),
+            "explicit expert slots must override the large-context auto default");
+        settings.Parameters["context"] = "4096";
+        settings.Parameters.Remove("expertSlots");
+
         // The engine page's settings must actually drive the runconfig (not the legacy Strata block).
         Equal(port, runconfig["port"]!.GetValue<int>());
         Check(args.Contains(port.ToString()), "port not passed to the server");
+
+        // A one-shot CLI --port override must reach the Strata runconfig and serve.server.
+        var overridePort = port + 3;
+        var overridePlan = backend.BuildLaunch(new EngineStartRequest { Config = config, Port = overridePort });
+        var overrideArgs = overridePlan.Arguments.ToList();
+        Check(overrideArgs.Contains(overridePort.ToString()), "one-shot port override not passed to serve.server");
+        var overrideConfigPath = overrideArgs[overrideArgs.IndexOf("--config") + 1];
+        var overrideRunconfig = JsonNode.Parse(overridePlan.GeneratedFiles[overrideConfigPath])!.AsObject();
+        Equal(overridePort, overrideRunconfig["port"]!.GetValue<int>());
 
         // Verify PolyStrata backend resolves its own strata-poly.exe and does not cross-wire to strata.exe.
         var polyPackage = Path.Combine(root, "poly-pkg");

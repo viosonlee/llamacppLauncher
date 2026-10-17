@@ -10,10 +10,13 @@
     1. `strata.exe` 并不支持 `--vram-reserve-mib`（日志显式输出 `ignoring --vram-reserve-mib ...`），且默认 `expert_slots` 为 0。引擎内部计算 `budget = free - 768 MiB` 后被双重缓冲的 MMQ 提示分块（`staging = 1.59 GiB`）完全吞噬，导致分配给显存的专家槽位 `S` 坍缩为 0（`0 of 256 per layer in VRAM (0.00 GiB)`），100% 的 MoE 专家全部在 CPU 线程池计算。
     2. 模型自带的 MTP（Multi-Token Prediction）多 Token 投机块已被加载进显存（`MTP block loaded`），但由于 `StrataBackend` 从未传递 `--mtp 2` 参数，`strata.exe` 内部默认 `mtp_d = 0`，完全未启用投机预测，每次只能按单 Token 逐步解码。
   - **修复措施与参数优化**：
-    1. 为 `strata-upstream` 引入专属参数 `expertSlots`（默认 16，占用约 0.75 GiB 显存），启动时向 `strata.exe` 传递 `--expert-slots 16`，使 GPU 专家命中率提升至 40%~50%，未命中专家与动态置换无缝并行。
-    2. 传递 `--mtp 2`（`mtpDrafts`，默认 2），激活 MTP 投机采样加速，实测草稿接受率达到 70%~95%。
+    1. 为 `strata-upstream` 引入专属参数 `expertSlots`（默认 16，占用约 0.75 GiB 显存），启动时向 `strata.exe` 传递 `--expert-slots 16`，使部分 MoE 专家在 GPU 上计算；设为 0 时仍交给引擎自动计算。
+    2. 传递 `--mtp 2`（`mtpDrafts`，默认 2），激活模型自带 MTP 块的投机采样加速。
     3. `LogService` 扩展诊断正则，支持解析 `hybrid experts: X of Y per layer in VRAM` 并在界面顶部状态栏直观显示。
-  - **实测性能**：在同一 RTX 3060 笔记本上，`strata-upstream` 实测生成速度从 27 tok/s 跃升至 **50.3 ~ 72.3 tok/s**（提升至原先的 1.9x ~ 2.7x）。
+    4. 测速优先采用服务端 `timings.predicted_per_second`，避免 MTP 将多个 Token 合并在一个 SSE 事件时低估速度。`--mtp 2` 实测接受约 70%（212 个草稿接受 149 个），因此上游路径通常仍低于带额外 lookup 加速的 PolyStrata。
+    5. 专家槽位默认按上下文调整：不超过 8192 时使用 16 槽，大于 8192 时交给引擎自动计算；只有用户显式填写槽位数才强制覆盖。6GB 卡在 40960 上下文下启动时已显示 `0.00 GiB of VRAM free`，再强制 16 槽会通过 WDDM 换页，重新掉到约 27 tok/s。
+    6. CLI 的 `--port` 现在也会覆盖 Strata runconfig 与 `serve.server` 监听端口；此前它只改动主配置，实际服务仍使用保存的 `servePort`。
+  - **实测性能**：同一 RTX 3060 Laptop (6GB)、4096 上下文、256 Token 请求，`strata-upstream` 从约 28.0 tok/s 提升到 39.5 tok/s（16 槽）；24 槽实测 41.3 tok/s，但显存只剩约 8 MiB，存在驱动换页风险，因此默认仍保留 16 槽。不同模型量化、提示词与 GPU 配置会有明显差异。
 
 - **多引擎日志与实时速度监控适配**（REQ-105）：
   - **日志查看器按引擎动态路由**：原 `LogService.ReadRecent()` 仅读取 llama.cpp 的日志文件，导致在 polystrata / strata-upstream 后端下日志页完全空白。「打开日志文件」同样硬编码为 `GetMainStderrPath()`。现支持按选定后端读取 `logs/engine-{backendId}.log` 以及 stdout/stderr，并正确定位打开日志。

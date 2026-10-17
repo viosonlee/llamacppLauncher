@@ -9,6 +9,8 @@ namespace LlamaManager.Engines;
 public sealed record EngineStartRequest
 {
     public ManagerConfig Config { get; init; } = new();
+    /// <summary>A one-shot port override (CLI --port). Null uses the backend's saved setting.</summary>
+    public int? Port { get; init; }
     public bool Embedding { get; init; }
     public bool OpenBrowser { get; init; }
 }
