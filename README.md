@@ -1,4 +1,4 @@
-﻿# 本地大模型助手（LlamaManager）
+# 本地大模型助手（LlamaManager）
 
 Windows 本地大模型启动器，使用 .NET 8 WPF。
 图形界面、命令行和登录自启动共用同一套模型路由、配置和进程管理逻辑。
@@ -116,3 +116,4 @@ EXE 对应开关：`--start`、`--service`、`--stop`、`--status`、`--open`、
 详见 [架构和测试说明](docs/architecture.md)。
 
 全新电脑部署请按 [agent 部署指南](docs/AGENT-GUIDE.md)（含 Python 自动安装与排障表）。
+引擎升级与模型管理请参考 [引擎与资源更新维护指南](docs/ENGINE-UPDATE-GUIDE.md)。

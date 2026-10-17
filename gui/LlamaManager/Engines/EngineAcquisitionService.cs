@@ -133,6 +133,32 @@ public static class EngineAcquisitionService
         return plan.EngineDir;
     }
 
+    /// <summary>
+    /// Acquires the official cudart zip from llama.cpp releases and unpacks it into <paramref name="destinationDir"/>.
+    /// Used by Strata family engines when CUDA DLLs (cublas64_*.dll, cudart64_*.dll) are missing.
+    /// </summary>
+    public static async Task AcquireCudartToAsync(string destinationDir, ILogSink log, CancellationToken ct)
+    {
+        var repo = EngineCatalog.LlamaCppRepo;
+        var releases = await ReleasesFetcher(repo, ct).ConfigureAwait(false);
+        if (releases == null) return;
+        var cuda = DetectComputeCapability() > 0 && DetectComputeCapability() < 8.0 ? "12.4" : "13.4";
+        ReleaseAsset? cudart = null;
+        foreach (var node in releases)
+        {
+            if (node == null) continue;
+            var release = EngineCatalog.ParseRelease(node);
+            cudart = EngineCatalog.Find(release.Assets, $@"^cudart-llama-bin-win-cuda-{System.Text.RegularExpressions.Regex.Escape(cuda)}-x64\.zip$");
+            if (cudart != null) break;
+        }
+        if (cudart == null) return;
+        var downloadDir = Path.Combine(ConfigService.GetManagerRoot(), "downloads");
+        Directory.CreateDirectory(downloadDir);
+        var archive = await FetchAsync(cudart, downloadDir, log, ct).ConfigureAwait(false);
+        var extracted = EngineDownloadService.ExtractZip(archive, destinationDir);
+        log.Write($"已解压 CUDA 运行时 {extracted} 个文件到 {destinationDir}。");
+    }
+
     private static async Task<string> FetchAsync(ReleaseAsset asset, string downloadDir, ILogSink log, CancellationToken ct)
     {
         var target = Path.Combine(downloadDir, asset.Name);

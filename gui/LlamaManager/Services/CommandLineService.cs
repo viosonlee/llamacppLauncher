@@ -20,7 +20,7 @@ public static class CommandLineService
         var supported = new[] { "--service", "--start", "--stop", "--status", "--open", "--enable-autostart", "--disable-autostart", "--print-preset", "--bootstrap", "--doctor", "--help" };
         if (command == "--help")
         {
-            await output.WriteLineAsync("LlamaManager --start|--service|--stop|--status|--open|--print-preset|--bootstrap|--doctor|--enable-autostart|--disable-autostart [--model PATH] [--port N] [--backend ID]");
+            await output.WriteLineAsync("LlamaManager --start|--service|--stop|--status|--open|--print-preset|--bootstrap [--all]|--doctor [--offline]|--enable-autostart|--disable-autostart [--model PATH] [--port N] [--backend ID] [--auto-bootstrap]");
             return 0;
         }
         if (command == null || !supported.Contains(command)) throw new ArgumentException("未知命令；使用 --help 查看。");
@@ -28,6 +28,8 @@ public static class CommandLineService
         var overrideModel = false;
         int? overridePort = null;
         string? overrideBackend = null;
+        var autoBootstrap = false;
+        var bootstrapAll = false;
         for (int i = 1; i < args.Length; i++)
         {
             switch (args[i])
@@ -36,6 +38,9 @@ public static class CommandLineService
                 case "--port": overridePort = new LauncherArguments("--port " + TakeValue(args, ref i)).GetPort(); break;
                 case "--backend": overrideBackend = TakeValue(args, ref i); break;
                 case "--offline": break; // value-less; only meaningful for --doctor
+                case "--all": bootstrapAll = true; break; // value-less; for --bootstrap
+                case "--bootstrap":
+                case "--auto-bootstrap": autoBootstrap = true; break; // value-less; for --start / --service
                 default: throw new ArgumentException("未知命令选项：" + args[i]);
             }
         }
@@ -53,6 +58,15 @@ public static class CommandLineService
         var backendId = overrideBackend ?? config.ActiveBackendId;
         var backend = BackendRegistry.ServerById(backendId)
             ?? throw new ArgumentException($"未知引擎：{backendId}");
+        if (overrideModel)
+        {
+            if (!config.Engines.TryGetValue(backendId, out var engineCfg))
+            {
+                engineCfg = new EngineSettings();
+                config.Engines[backendId] = engineCfg;
+            }
+            engineCfg.ModelPath = config.ModelPath;
+        }
         // Each backend keeps its own session slot ("main" for llama.cpp, its id otherwise), so
         // status/stop/open must resolve through the same mapping StartAsync used - reading the
         // main slot unconditionally reports every other backend as stopped.
@@ -63,6 +77,10 @@ public static class CommandLineService
         {
             case "--service":
             case "--start":
+                if (autoBootstrap)
+                {
+                    await BootstrapService.RunAsync(backendId, new DelegateLogSink(LogService.Write), ct);
+                }
                 var session = await backend.StartAsync(new EngineStartRequest { Config = config },
                     new DelegateLogSink(LogService.Write), ct);
                 return session.ProcessId > 0 ? 0 : 2;
@@ -91,8 +109,14 @@ public static class CommandLineService
                 }
                 return 0;
             case "--bootstrap":
-                await BootstrapService.RunAsync(backendId, new DelegateLogSink(LogService.Write), ct);
-                return 0;
+                if (bootstrapAll)
+                {
+                    var allResults = await BootstrapService.RunAllAsync(new DelegateLogSink(LogService.Write), ct);
+                    var anyFailed = allResults.Values.Any(steps => steps.Any(s => !s.Ok));
+                    return anyFailed ? 1 : 0;
+                }
+                var bootstrapSteps = await BootstrapService.RunAsync(backendId, new DelegateLogSink(LogService.Write), ct);
+                return bootstrapSteps.Any(s => !s.Ok) ? 1 : 0;
             case "--doctor":
             {
                 var checkUpdates = !args.Contains("--offline", StringComparer.OrdinalIgnoreCase);

@@ -2,7 +2,9 @@
 param(
     [switch]$Service, [switch]$Start, [switch]$Stop, [switch]$Status,
     [switch]$Open, [switch]$EnableAutostart, [switch]$DisableAutostart,
-    [switch]$PrintPreset, [string]$ModelPath, [int]$Port
+    [switch]$PrintPreset, [switch]$Bootstrap, [switch]$Doctor,
+    [switch]$All, [switch]$Offline, [switch]$AutoBootstrap,
+    [string]$Backend, [string]$ModelPath, [int]$Port
 )
 
 $ErrorActionPreference = 'Stop'
@@ -20,13 +22,19 @@ $commands = @(@(
     @{ Enabled = $Open; Name = '--open' },
     @{ Enabled = $EnableAutostart; Name = '--enable-autostart' },
     @{ Enabled = $DisableAutostart; Name = '--disable-autostart' },
-    @{ Enabled = $PrintPreset; Name = '--print-preset' }
+    @{ Enabled = $PrintPreset; Name = '--print-preset' },
+    @{ Enabled = $Bootstrap; Name = '--bootstrap' },
+    @{ Enabled = $Doctor; Name = '--doctor' }
 ) | Where-Object { $_.Enabled })
 if ($commands.Count -gt 1) { throw '一次只能使用一个操作开关。' }
 if ($commands.Count -eq 1) { $launcherArguments += $commands[0].Name }
+if ($Backend) { $launcherArguments += @('--backend', $Backend) }
 if ($ModelPath) { $launcherArguments += @('--model', $ModelPath) }
 if ($PSBoundParameters.ContainsKey('Port')) { $launcherArguments += @('--port', "$Port") }
-if ($launcherArguments.Count -gt 0 -and $commands.Count -eq 0) { throw '指定模型或端口时，需要 -Start 或其他操作开关。' }
+if ($All) { $launcherArguments += '--all' }
+if ($Offline) { $launcherArguments += '--offline' }
+if ($AutoBootstrap) { $launcherArguments += '--auto-bootstrap' }
+if ($launcherArguments.Count -gt 0 -and $commands.Count -eq 0) { throw '指定模型、端口或引擎时，需要 -Start 或其他操作开关。' }
 
 if ($launcherArguments.Count -eq 0) {
     Start-Process -FilePath $launcherExecutable

@@ -5,12 +5,13 @@
 > 人类用户请先读 `README.md`。
 >
 > 相关需求编号：REQ-100（Python 自动安装）、REQ-101（体检为全局功能）、REQ-102（本文档纳入门禁）、
-> REQ-103（CLI 无值开关）。总清单见 `docs/REQUIREMENTS.md`。
+> REQ-103（CLI 无值开关）、REQ-104（一键配置并启动）。总清单见 `docs/REQUIREMENTS.md`。
 
 ## 0. 一句话流程
 
 ```
-解压 zip → 运行 --doctor 看缺什么 → 按提示 --bootstrap 补引擎 → --start 起服务 → 验证 /v1
+解压 zip → 运行 --doctor 看缺什么 → --bootstrap --all 补引擎 → --start 起服务 → 验证 /v1
+（GUI 中更简单：选择模型直接点击「启动服务」，未就绪时会自动提示一键配置并启动）
 ```
 
 ## 1. 前置条件（先核对，不满足就别往下走）
@@ -50,16 +51,15 @@
 # 1) 体检：先看缺什么。离线用 --offline（不联网查更新）。退出码 0=健康，1=有缺失/待更新
 .\LlamaManager.exe --doctor --offline
 
-# 2) 装引擎（按 doctor 提示的缺失项；可全部执行，重复执行是幂等的）
-.\LlamaManager.exe --bootstrap --backend llamacpp
-.\LlamaManager.exe --bootstrap --backend strata-upstream
-.\LlamaManager.exe --bootstrap --backend polystrata
+# 2) 装引擎（一条命令全自动配置所有引擎，或按需指定单个 backend；重复执行是幂等的）
+.\LlamaManager.exe --bootstrap --all
+# 或单独指定：.\LlamaManager.exe --bootstrap --backend strata-upstream
 
 # 3) 再次体检（这次联网，确认引擎版本）
 .\LlamaManager.exe --doctor
 
-# 4) 起服务（backend 必须是已就绪的引擎；模型用绝对路径）
-.\LlamaManager.exe --start --backend strata-upstream --model "D:\models\APEX-I-Mini.gguf" --port 8080
+# 4) 起服务（可用 --auto-bootstrap 保证环境自动就绪；模型用绝对路径）
+.\LlamaManager.exe --start --auto-bootstrap --backend strata-upstream --model "D:\models\APEX-I-Mini.gguf" --port 8080
 
 # 5) 运行期管理
 .\LlamaManager.exe --status      # 人读状态；非零退出码表示未运行
@@ -99,6 +99,8 @@ strata-upstream 与 polystrata 的 HTTP 服务由 Python 提供，`--bootstrap` 
 | `strata-upstream` | qwen35moe 家族（APEX 系列，含 MTP） | 内置多架构补丁引擎（sm_75/86/89/120 + PTX） |
 | `polystrata` | PolyStrata MoE | 专家格式由兼容性矩阵判定，见 `docs/engine-plugins.md` |
 
+> 说明：旧 `strata-cyber` 分支及离线 pack 路径（REQ-090）已全面归档只读，不进入注册表；统一使用上述自带 HTTP 服务的原生引擎。
+
 **模型文件要求**：必须是完整的 `.gguf`；被截断的文件（大小明显偏小）不要用。q36 hybrid 按上游设计
 把专家放在主机内存（约 12 GiB pinned），主机内存不足会启动失败。
 
@@ -117,6 +119,7 @@ strata-upstream 与 polystrata 的 HTTP 服务由 Python 提供，`--bootstrap` 
 ## 7. Agent 约束（务必遵守）
 
 - **不要停掉用户正在运行的真实模型服务**去做测试或重装。
+- **不要在已归档的 `cyber` 分支上开发**：`cyber` 分支已只读归档；所有 Strata/APEX 变更统一在 `apex-on-strata` 的 `upstream` 分支维护。
 - **不要提交**用户配置、日志、下载的引擎、模型、构建产物。
 - **不要向上游仓库提 PR**；本项目的引擎补丁发到自己的 fork release。
 - 需要跑回归测试时用**隔离的** `LLAMA_MANAGER_ROOT`，不要污染真实安装：
@@ -139,3 +142,4 @@ strata-upstream 与 polystrata 的 HTTP 服务由 Python 提供，`--bootstrap` 
 - `docs/CHANGELOG-DECISIONS.md` — 关键决策与变更
 - `docs/architecture.md` — 组件与数据流
 - `docs/engine-plugins.md` — 引擎 / 插件清单格式
+- `docs/ENGINE-UPDATE-GUIDE.md` — 引擎与模型更新维护指南

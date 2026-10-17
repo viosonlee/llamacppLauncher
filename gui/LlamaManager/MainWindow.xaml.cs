@@ -105,7 +105,8 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
 
     private void RefreshLog()
     {
-        var text = string.Join("\n", LogService.ReadRecent());
+        var backendId = SelectedEngineBackend()?.Descriptor.Id ?? _config.ActiveBackendId;
+        var text = string.Join("\n", LogService.ReadRecent(backendId));
         if (text == _lastLogText) return;
         _lastLogText = text;
         LogTextBox.Text = text;

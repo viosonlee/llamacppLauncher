@@ -390,6 +390,11 @@ internal static class Program
                 File.WriteAllText(file, "new\n"); Equal("new", reader.Read(file).Single());
                 var diagnostic = LogService.ParseGpuSummary(["offloaded 64/65 layers to GPU", "CUDA0 model buffer size = 12.34 MiB", "CPU_Mapped model buffer size = 5600.00 MiB"]);
                 Check(diagnostic.Contains("GPU 权重 12.34") && diagnostic.Contains("CPU 权重 5600"), "diagnostic hides CPU fallback");
+                var strataDiag = LogService.ParseStrataGpuSummary(["strata-poly: loaded in 7.7 s; 2162 of 10496 routed experts in VRAM (2.5 GiB), 16 CPU threads"]);
+                Check(strataDiag.Contains("2162/10496") && strataDiag.Contains("2.5 GiB"), "strata diagnostic parses expert counts");
+                var upstreamDiag = LogService.ParseStrataGpuSummary(["strata-q36: hybrid experts: 16 of 256 per layer in VRAM (0.75 GiB), all 11.97 GiB in pageable host memory"]);
+                Check(upstreamDiag.Contains("16/256") && upstreamDiag.Contains("0.75 GiB"), "upstream diagnostic parses expert counts per layer");
+                Check(LogService.GetPrimaryLogPath("polystrata").EndsWith("engine-polystrata.log"), "polystrata log path matches");
             }));
             await Test("speed monitor: supports object/array counters, ignores idle stale timings", () => Run(() =>
             {
@@ -414,6 +419,12 @@ internal static class Program
                 const string decode = "0.21.829.709 I slot print_timing: id 0 | task 6 | eval time = 10950.98 ms / 256 tokens (42.95 ms per token, 23.29 tokens per second)";
                 const string prompt = "0.21.829.706 I slot print_timing: id 0 | task 6 | prompt eval time = 319.06 ms / 39 tokens (8.18 ms per token, 122.23 tokens per second)";
                 Equal(null, SpeedMonitorService.ParseDecodeTiming(prompt));
+                const string strataDone = "[strata] done: 500 tokens in 9.8 s (50.9 tok/s) (stop, cancel=False)";
+                const string strataReq = "[strata] request prompt 24 cached 0 output 500 prompt_read 35 ms total 9855 ms prefill 685.7 tok/s decode 50.9 tok/s";
+                Equal(50.9, SpeedMonitorService.ParseDecodeTiming(strataDone)?.Rate);
+                Equal(500, SpeedMonitorService.ParseDecodeTiming(strataDone)?.Tokens);
+                Equal(50.9, SpeedMonitorService.ParseDecodeTiming(strataReq)?.Rate);
+                Equal(500, SpeedMonitorService.ParseDecodeTiming(strataReq)?.Tokens);
                 Check(monitor.Observe(session, "[{\"is_processing\":false}]", [prompt, decode], TimeSpan.Zero).Text.Contains("上次速度：23.29 tok/s"), "idle completion disappeared");
                 Check(monitor.Observe(session, null, [], TimeSpan.FromSeconds(2)).Text.Contains("23.29"), "API outage hid completed speed");
                 Check(monitor.Observe(session, "bad json", [], TimeSpan.FromSeconds(4)).Text.Contains("23.29"), "malformed snapshot hid completed speed");

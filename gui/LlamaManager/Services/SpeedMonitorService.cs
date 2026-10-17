@@ -28,6 +28,8 @@ public sealed class SpeedMonitorService
 {
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMilliseconds(800) };
     private static readonly Regex Timing = new(@"\beval time\s*=\s*[\d.]+\s*ms\s*/\s*(?<tokens>\d+)\s*tokens?\s*\([^)]*?(?<rate>[\d.]+)\s*tokens per second\)", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex StrataDoneTiming = new(@"\[strata\]\s+done:\s*(?<tokens>\d+)\s*tokens\b.*?\((?<rate>[\d.]+)\s*tok/s\)", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex StrataRequestTiming = new(@"\boutput\s+(?<tokens>\d+)\b.*?\bdecode\s+(?<rate>[\d.]+)\s*tok/s\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     // Missed snapshots (~2s poll cadence): tolerate a few before discarding sampling history.
     private const int MaxMissesBeforeReset = 3;
     private sealed record Sample(string Task, int Count, TimeSpan At, double? Rate);
@@ -50,16 +52,22 @@ public sealed class SpeedMonitorService
         _timingReader = new IncrementalLogReader();
     }
 
-    public async Task<SpeedStatus> QuerySpeedAsync(ServerSession session, CancellationToken ct = default)
+    public Task<SpeedStatus> QuerySpeedAsync(ServerSession session, CancellationToken ct = default) =>
+        QuerySpeedAsync(session, "llamacpp", ct);
+
+    public async Task<SpeedStatus> QuerySpeedAsync(ServerSession session, string backendId, CancellationToken ct = default)
     {
         Reset(session);
         string? json = null;
-        try { json = await Http.GetStringAsync($"http://127.0.0.1:{session.Port}/slots", ct); }
+        try { json = await Http.GetStringAsync($"http://127.0.0.1:{session.Port}/slots", ct).ConfigureAwait(false); }
         catch (HttpRequestException) { }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested) { }
 
         IReadOnlyList<string> timings = [];
-        var path = ConfigService.GetMainStderrPath();
+        var isLlama = string.IsNullOrWhiteSpace(backendId) || backendId == "llamacpp";
+        var path = isLlama
+            ? ConfigService.GetMainStderrPath()
+            : Path.Combine(ConfigService.GetManagerRoot(), "logs", $"engine-{backendId}.log");
         try
         {
             // A log from an earlier process must not be attached to the new session.
@@ -72,7 +80,30 @@ public sealed class SpeedMonitorService
         catch (IOException) { }
         catch (UnauthorizedAccessException) { }
         ct.ThrowIfCancellationRequested();
-        return Observe(session, json, timings, TimeSpan.FromSeconds((double)Stopwatch.GetTimestamp() / Stopwatch.Frequency));
+
+        var status = Observe(session, json, timings, TimeSpan.FromSeconds((double)Stopwatch.GetTimestamp() / Stopwatch.Frequency));
+
+        if (status.Kind == SpeedKind.Idle && !isLlama && _completed == null)
+        {
+            try
+            {
+                var statusJson = await Http.GetStringAsync($"http://127.0.0.1:{session.Port}/v1/status", ct).ConfigureAwait(false);
+                using var doc = JsonDocument.Parse(statusJson);
+                if (doc.RootElement.TryGetProperty("last_timings", out var lt) && lt.ValueKind == JsonValueKind.Object)
+                {
+                    var rate = Number(lt, "predicted_per_second");
+                    var tokens = Integer(lt, "predicted_n");
+                    if (rate > 0 && tokens > 0)
+                    {
+                        _completed = new Completed(rate.Value, tokens, false);
+                        return new SpeedStatus($"上次速度：{rate.Value:F2} tok/s · {tokens:N0} tokens", SpeedKind.Completed);
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is HttpRequestException or JsonException or OperationCanceledException) { }
+        }
+
+        return status;
     }
 
     // Keeping the clock and log input explicit makes request resets and sample rates testable.
@@ -177,11 +208,25 @@ public sealed class SpeedMonitorService
     public static (double Rate, int Tokens)? ParseDecodeTiming(string line)
     {
         var start = line.IndexOf("eval time", StringComparison.OrdinalIgnoreCase);
-        if (start < 0 || Regex.IsMatch(line[..start], @"\bprompt\s*$", RegexOptions.IgnoreCase)) return null;
-        var match = Timing.Match(line[start..]);
-        if (!match.Success || !double.TryParse(match.Groups["rate"].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var rate) ||
-            !double.IsFinite(rate) || rate <= 0 || !int.TryParse(match.Groups["tokens"].Value, out var tokens) || tokens <= 0) return null;
-        return (rate, tokens);
+        if (start >= 0 && !Regex.IsMatch(line[..start], @"\bprompt\s*$", RegexOptions.IgnoreCase))
+        {
+            var match = Timing.Match(line[start..]);
+            if (match.Success && double.TryParse(match.Groups["rate"].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var rate) &&
+                double.IsFinite(rate) && rate > 0 && int.TryParse(match.Groups["tokens"].Value, out var tokens) && tokens > 0)
+                return (rate, tokens);
+        }
+
+        var doneMatch = StrataDoneTiming.Match(line);
+        if (doneMatch.Success && double.TryParse(doneMatch.Groups["rate"].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var strataRate) &&
+            double.IsFinite(strataRate) && strataRate > 0 && int.TryParse(doneMatch.Groups["tokens"].Value, out var strataTokens) && strataTokens > 0)
+            return (strataRate, strataTokens);
+
+        var reqMatch = StrataRequestTiming.Match(line);
+        if (reqMatch.Success && double.TryParse(reqMatch.Groups["rate"].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var reqRate) &&
+            double.IsFinite(reqRate) && reqRate > 0 && int.TryParse(reqMatch.Groups["tokens"].Value, out var reqTokens) && reqTokens > 0)
+            return (reqRate, reqTokens);
+
+        return null;
     }
 
     private static int Integer(JsonElement element, string name, int fallback = 0) =>

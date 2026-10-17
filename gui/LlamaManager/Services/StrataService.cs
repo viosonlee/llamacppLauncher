@@ -358,13 +358,29 @@ public static class StrataService
         }
     }
 
-    internal static ProcessStartInfo CaptureStart(string exe) => new(exe)
+    internal static ProcessStartInfo CaptureStart(string exe)
     {
-        RedirectStandardOutput = true, RedirectStandardError = true,
-        StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8,
-        UseShellExecute = false, CreateNoWindow = true,
-        WorkingDirectory = Path.GetDirectoryName(exe)!
-    };
+        var psi = new ProcessStartInfo(exe)
+        {
+            RedirectStandardOutput = true, RedirectStandardError = true,
+            StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8,
+            UseShellExecute = false, CreateNoWindow = true,
+            WorkingDirectory = Path.GetDirectoryName(exe)!
+        };
+        var engineDir = Path.GetDirectoryName(exe);
+        var managerRoot = ConfigService.GetManagerRoot();
+        var llamaCppRoot = ConfigService.GetLlamaCppRoot();
+        var extraDirs = new[] { engineDir, managerRoot, llamaCppRoot }
+            .Where(d => !string.IsNullOrWhiteSpace(d) && Directory.Exists(d))
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+        var extraPath = string.Join(";", extraDirs);
+        if (!string.IsNullOrEmpty(extraPath))
+        {
+            var currentPath = Environment.GetEnvironmentVariable("PATH") ?? "";
+            psi.Environment["PATH"] = extraPath + ";" + currentPath;
+        }
+        return psi;
+    }
 
     internal sealed record ChildResult(int ExitCode, string Stdout, string Stderr);
 

@@ -32,7 +32,7 @@ public partial class MainWindow
             var autostartTask = AutostartService.GetStatusAsync();
             await Task.WhenAll(readyTask, embeddingReadyTask, cudaTask, autostartTask);
             var status = readyTask.Result && session != null
-                ? await _speedMonitor.QuerySpeedAsync(session, _lifetime.Token)
+                ? await _speedMonitor.QuerySpeedAsync(session, backendId, _lifetime.Token)
                 : new SpeedStatus("等待模型就绪…", SpeedKind.Idle);
             if (_lifetime.IsCancellationRequested || version != _statusVersion) return;
             // External CLI start/stop can change identity while HTTP checks are in flight.
@@ -62,9 +62,10 @@ public partial class MainWindow
             SpeedTestButton.ToolTip = "实测推理速度：首Token延迟(TTFT) 与解码速度(tok/s)";
             LiveSpeedText.Text = running ? status.Text : "";
             LiveSpeedText.Foreground = (Brush)FindResource(status.IsActive ? "AccentFillColorDefaultBrush" : "SystemFillColorSuccessBrush");
+            var gpuSummary = LogService.GetGpuSummary(session!, backendId);
             ProcessInfoText.Text = running
                 ? $"{Path.GetFileName(Path.GetDirectoryName(session!.EnginePath))} · PID {session.ProcessId}" +
-                  (isLlamacpp ? $" · {LogService.GetGpuSummary(session)}" : "") : "进程: 无";
+                  (!string.IsNullOrEmpty(gpuSummary) ? $" · {gpuSummary}" : "") : "进程: 无";
             var cuda = cudaTask.Result;
             CudaText.Text = cuda.Available ? "CUDA: 可用（所选引擎）" : "CUDA: 未检测到";
             CudaText.ToolTip = cuda.Text + "\n设备内存为检测时快照；点击刷新可重新检测。";
@@ -137,6 +138,40 @@ public partial class MainWindow
         StopButton.Content = "终止启动";
         try
         {
+            // One-click environment configuration and start:
+            // If the backend probe reports unavailable, offer to automatically bootstrap first!
+            var probe = await backend.ProbeAsync(_startCancellation.Token);
+            if (!probe.Available)
+            {
+                if (BootstrapService.CanDownload(backend.Descriptor.Id))
+                {
+                    var decision = MessageBox.Show(
+                        $"{backend.Descriptor.DisplayName} 尚未配置运行环境：\n{probe.Problem}\n\n是否立即一键自动下载并配置环境，并在完成后自动启动服务？",
+                        "一键配置环境并启动", MessageBoxButton.OKCancel, MessageBoxImage.Question);
+                    if (decision != MessageBoxResult.OK) return;
+
+                    LogService.Write($"=== 开始为 {backend.Descriptor.DisplayName} 一键配置环境 ===");
+                    ConfigurationTabs.SelectedIndex = ConfigurationTabs.Items.Count - 1; // 切换到日志页
+                    ActionStatusText.Text = "正在一键配置环境…";
+
+                    var steps = await BootstrapService.RunAsync(backend.Descriptor.Id,
+                        new DelegateLogSink(msg => { LogService.Write(msg); AppendEngineOutput(msg); }),
+                        _startCancellation.Token);
+
+                    if (steps.Any(s => !s.Ok))
+                    {
+                        var failed = string.Join("; ", steps.Where(s => !s.Ok).Select(s => $"{s.Name}: {s.Detail}"));
+                        throw new InvalidOperationException("环境配置未完全成功：" + failed);
+                    }
+                    LogService.Write($"=== {backend.Descriptor.DisplayName} 环境配置完成，正在自动启动服务 ===");
+                    await RefreshEngineAsync();
+                }
+                else
+                {
+                    throw new InvalidOperationException($"当前引擎不可用：{probe.Problem}");
+                }
+            }
+
             if (backend.Descriptor.Id == "llamacpp")
             {
                 SaveCurrentConfig();
@@ -326,7 +361,8 @@ public partial class MainWindow
     {
         try
         {
-            var path = ConfigService.GetMainStderrPath();
+            var backendId = SelectedEngineBackend()?.Descriptor.Id ?? _config.ActiveBackendId;
+            var path = LogService.GetPrimaryLogPath(backendId);
             if (File.Exists(path)) Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
         }
         catch (Exception ex) { ShowError("打开日志失败", ex); }

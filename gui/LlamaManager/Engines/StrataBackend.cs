@@ -51,23 +51,34 @@ public sealed class StrataBackend : IServerBackend
         _profile = profile;
         Descriptor = new BackendDescriptor(profile.Id, profile.DisplayName, profile.Description,
             BuiltIn: true, GpuHeavy: true);
+        var isPoly = profile.Id == PolyProfile.Id;
+        var list = new List<ParameterSpec>
+        {
+            new("packageRoot", "引擎包目录", "路径", ParamType.FolderPath, "", "包含 engine\\" + profile.EngineExeName + " 与 serve\\server.py 的根目录。留空自动匹配默认目录。"),
+            new("serveRoot", "服务源码根", "路径", ParamType.FolderPath, "", "包含 serve\\server.py 的 Python 服务目录；留空默认使用引擎包目录。"),
+            new("pythonPath", "Python 解释器", "路径", ParamType.FilePath, "", "Python 3.10+ 的 python.exe；留空自动使用一键配置好的专属虚拟环境。"),
+            new("servePort", "服务端口", "基本", ParamType.Integer, "8091", "Strata HTTP API 监听端口（默认 8091，供 Claude Code / Agent 客户端接入）。", 1, 65535),
+            new("host", "监听地址", "基本", ParamType.Text, "127.0.0.1", "监听 IP 地址。默认 127.0.0.1 仅本机安全访问；设为 0.0.0.0 允许局域网设备访问。"),
+            new("context", "上下文", "基本", ParamType.Integer, "4096", "单次最大上下文 Token 数（--max-context）。显存紧张设 2048~4096，显存充裕可设 8192 或更大。", 256, 1048576),
+        };
+        if (isPoly)
+        {
+            list.Add(new("vramReserveMib", "显存预留 MiB", "基本", ParamType.Integer, "256", "为操作系统界面和显卡驱动预留的安全显存量（--vram-reserve-mib，默认 256），PolyStrata 自动将剩余显存用于缓存 MoE 专家。", 0, 60000));
+        }
+        else
+        {
+            list.Add(new("mtpDrafts", "MTP 草稿数", "基本", ParamType.Integer, "2", "每步投机采样的草稿 Token 数（--mtp，默认 2）。对于带有 MTP 模块的模型可带来约 1.8~2.5x 的解码加速；设为 0 关闭投机加速。", 0, 7));
+            list.Add(new("expertSlots", "显存专家槽位", "基本", ParamType.Integer, "16", "每层常驻显存的专家槽位数（--expert-slots，默认 16）。在 6GB 显卡上推荐设为 16~24，显存充足时可调大以提升 GPU 命中率与生成速度；设为 0 为全部在 CPU 计算。", 0, 256));
+        }
+        list.Add(new("poolWorkers", "CPU 池线程", "高级", ParamType.Integer, "0", "CPU 密集任务工作线程数（--pool-workers）。默认 0 为由引擎根据 CPU 物理核心自动分配最佳线程。", 0, 256));
+        list.Add(new("reasoningBudget", "reasoning 预算", "高级", ParamType.Integer, "0", "思考模型单次推理最大 Token 预算（--reasoning-budget）。0 为不限制，填正数可限制思考深度以加速。", 0, 65536));
+        list.Add(new("anthropicThinking", "Anthropic 思考", "高级", ParamType.Choice, "model", "Anthropic 协议客户端未要求思考时的行为：model 遵循模型原生设定，on_request 仅在客户端请求时才思考。", Choices: ["model", "on_request"]));
+        Parameters = list;
     }
 
     public BackendDescriptor Descriptor { get; }
 
-    public IReadOnlyList<ParameterSpec> Parameters { get; } =
-    [
-        new("packageRoot", "引擎包目录", "路径", ParamType.FolderPath, "", "包含 engine\\strata.exe 与 serve\\server.py 的目录。"),
-        new("serveRoot", "服务源码根", "路径", ParamType.FolderPath, "", "包含 serve\\server.py 的目录；留空则用包目录。"),
-        new("pythonPath", "Python 解释器", "路径", ParamType.FilePath, "", "Python 3.10+ 的 python.exe；留空自动查找。"),
-        new("servePort", "服务端口", "基本", ParamType.Integer, "8091", "HTTP API 端口（OpenAI/Anthropic）。", 1, 65535),
-        new("host", "监听地址", "基本", ParamType.Text, "127.0.0.1", "默认仅本机回环。"),
-        new("context", "上下文", "基本", ParamType.Integer, "4096", "--max-context。", 256, 1048576),
-        new("vramReserveMib", "显存预留 MiB", "基本", ParamType.Integer, "700", "--vram-reserve-mib。", 0, 60000),
-        new("poolWorkers", "CPU 池线程", "高级", ParamType.Integer, "0", "--pool-workers（0 自动）。", 0, 256),
-        new("reasoningBudget", "reasoning 预算", "高级", ParamType.Integer, "0", "0 = 不限制。", 0, 65536),
-        new("anthropicThinking", "Anthropic 思考", "高级", ParamType.Choice, "model", "未显式要求思考时的行为。", Choices: ["model", "on_request"]),
-    ];
+    public IReadOnlyList<ParameterSpec> Parameters { get; }
 
     /// <summary>
     /// Reads a setting from the backend's own EngineSettings, falling back to the legacy
@@ -90,7 +101,7 @@ public sealed class StrataBackend : IServerBackend
     public async Task<BackendStatus> ProbeAsync(CancellationToken ct)
     {
         var config = ConfigService.ReadConfig();
-        var engine = ResolveEngine(config);
+        var engine = ResolveEngine(config, _profile);
         if (engine == null)
             return BackendStatus.Unavailable($"未找到 {_profile.EngineExeName}；请在面板中选择引擎包目录，或用「初始化环境」下载。");
         if (!File.Exists(engine))
@@ -102,10 +113,10 @@ public sealed class StrataBackend : IServerBackend
             if (!supportsQwen35)
                 return BackendStatus.Unavailable("该 strata.exe 没有 qwen35moe 原生路径（需要上游 0.1.44+ 构建）。");
         }
-        var server = ResolveServer(config);
+        var server = ResolveServer(config, _profile);
         if (server == null)
             return BackendStatus.Unavailable("未找到 serve\\server.py；请设置服务源码根目录。");
-        var python = await ResolvePythonAsync(config, ct).ConfigureAwait(false);
+        var python = await ResolvePythonAsync(config, _profile, ct).ConfigureAwait(false);
         if (python == null)
             return BackendStatus.Unavailable("未找到 Python 3.10+（服务需要）。");
         return new BackendStatus(true, engine, null, null);
@@ -135,15 +146,15 @@ public sealed class StrataBackend : IServerBackend
     }
 
     public LaunchPlan BuildLaunch(EngineStartRequest request) =>
-        BuildLaunch(request, TokenizerDir(request.Config, _profile.Id, ResolveModel(request.Config)));
+        BuildLaunch(request, TokenizerDir(request.Config, _profile.Id, ResolveModel(request.Config, _profile)));
 
     public LaunchPlan BuildLaunch(EngineStartRequest request, string tokenizer)
     {
         var config = request.Config;
-        var model = ResolveModel(config);
-        var engine = ResolveEngine(config) ?? throw new FileNotFoundException($"未找到 {_profile.EngineExeName}。");
-        var server = ResolveServer(config) ?? throw new FileNotFoundException("未找到 serve\\server.py。");
-        var python = ResolvePython(config) ?? throw new FileNotFoundException("未找到 Python 3.10+。");
+        var model = ResolveModel(config, _profile);
+        var engine = ResolveEngine(config, _profile) ?? throw new FileNotFoundException($"未找到 {_profile.EngineExeName}。");
+        var server = ResolveServer(config, _profile) ?? throw new FileNotFoundException("未找到 serve\\server.py。");
+        var python = ResolvePython(config, _profile) ?? throw new FileNotFoundException("未找到 Python 3.10+。");
         var port = ResolvePort(request);
         var host = Param(config, "host") ?? (string.IsNullOrWhiteSpace(config.Strata.Host) ? "127.0.0.1" : config.Strata.Host);
 
@@ -154,6 +165,19 @@ public sealed class StrataBackend : IServerBackend
         if (!string.Equals(host, "127.0.0.1", StringComparison.Ordinal)) { args.Add("--host"); args.Add(host); }
 
         var env = new Dictionary<string, string> { ["PYTHONUTF8"] = "1", ["PYTHONUNBUFFERED"] = "1" };
+        var engineDir = Path.GetDirectoryName(engine);
+        var managerRoot = ConfigService.GetManagerRoot();
+        var llamaCppRoot = ConfigService.GetLlamaCppRoot();
+        var extraDirs = new[] { engineDir, managerRoot, llamaCppRoot }
+            .Where(d => !string.IsNullOrWhiteSpace(d) && Directory.Exists(d))
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+        var extraPath = string.Join(";", extraDirs);
+        if (!string.IsNullOrEmpty(extraPath))
+        {
+            var currentPath = Environment.GetEnvironmentVariable("PATH") ?? "";
+            env["PATH"] = extraPath + ";" + currentPath;
+        }
+
         var files = new Dictionary<string, string> { [configPath] = JsonSerializer.Serialize(runconfig, new JsonSerializerOptions { WriteIndented = true }) };
         // `python -m serve.server` resolves the `serve` package from the working directory, so
         // this must be the source root (serve/'s parent), not the serve/ folder itself.
@@ -163,15 +187,20 @@ public sealed class StrataBackend : IServerBackend
 
     public async Task<EngineSession> StartAsync(EngineStartRequest request, ILogSink log, CancellationToken ct)
     {
-        var model = ResolveModel(request.Config);
+        var model = ResolveModel(request.Config, _profile);
         // The server needs the tokenizer directory (vocab.json etc.); prepare it first so the
         // runconfig can point at the directory the tool actually produced.
-        var server = ResolveServer(request.Config)!;
+        var server = ResolveServer(request.Config, _profile)
+            ?? throw new FileNotFoundException($"未找到 {_profile.DisplayName} 的服务源码 serve\\server.py。请先点击「配置环境」初始化。");
+        var engine = ResolveEngine(request.Config, _profile)
+            ?? throw new FileNotFoundException($"未找到 {_profile.EngineExeName}。请先点击「配置环境」初始化。");
+        var python = ResolvePython(request.Config, _profile)
+            ?? throw new FileNotFoundException("未找到 Python 3.10+。请先点击「配置环境」初始化。");
         var serveRoot = Path.GetDirectoryName(Path.GetDirectoryName(server))!;
         log.Write("准备分词表…");
         var tokenizer = await StrataPackService.EnsureTokenizerDirAsync(serveRoot, model,
             TokenizerDir(request.Config, _profile.Id, model),
-            Param(request.Config, "pythonPath") ?? request.Config.Strata.PythonPath, log.Write, ct).ConfigureAwait(false);
+            Param(request.Config, _profile.Id, "pythonPath") ?? request.Config.Strata.PythonPath, log.Write, ct).ConfigureAwait(false);
         log.Write("分词表：" + tokenizer);
         var plan = BuildLaunch(request, tokenizer);
         // Materialize generated files (the runconfig) before launching.
@@ -282,13 +311,24 @@ public sealed class StrataBackend : IServerBackend
     {
         var s = config.Strata;
         var context = ParamInt(config, "context", s.Context);
-        var workers = ParamInt(config, "poolWorkers", s.Workers);
-        var reserve = ParamInt(config, "vramReserveMib", 700);
-        var args = new List<string> { "--native", model, "--max-context", context.ToString() };
-        if (s.Prefill > 0) { args.Add("--prefill"); args.Add(s.Prefill.ToString()); }
-        if (s.MaxNew > 0) { args.Add("--max-new"); args.Add(s.MaxNew.ToString()); }
-        if (workers > 0) { args.Add("--pool-workers"); args.Add(workers.ToString()); }
-        if (reserve > 0) { args.Add("--vram-reserve-mib"); args.Add(reserve.ToString()); }
+        var isPoly = _profile.Id == PolyProfile.Id;
+        var args = new List<string> { isPoly ? "--model" : "--native", model, "--max-context", context.ToString() };
+        if (!isPoly)
+        {
+            var workers = ParamInt(config, "poolWorkers", s.Workers);
+            var mtp = ParamInt(config, "mtpDrafts", 2);
+            var slots = ParamInt(config, "expertSlots", 16);
+            if (s.Prefill > 0) { args.Add("--prefill"); args.Add(s.Prefill.ToString()); }
+            if (s.MaxNew > 0) { args.Add("--max-new"); args.Add(s.MaxNew.ToString()); }
+            if (workers > 0) { args.Add("--pool-workers"); args.Add(workers.ToString()); }
+            if (mtp > 0) { args.Add("--mtp"); args.Add(mtp.ToString()); }
+            if (slots > 0) { args.Add("--expert-slots"); args.Add(slots.ToString()); }
+        }
+        else
+        {
+            var reserve = ParamInt(config, "vramReserveMib", 256);
+            if (reserve > 0) { args.Add("--vram-reserve-mib"); args.Add(reserve.ToString()); }
+        }
         var cfg = new Dictionary<string, object>
         {
             ["exe"] = engine,
@@ -367,9 +407,12 @@ public sealed class StrataBackend : IServerBackend
         return Services.PythonInstaller.ProbeInstalledDirectories();
     }
 
-    private static async Task<string?> ResolvePythonAsync(ManagerConfig config, CancellationToken ct)
+    private static Task<string?> ResolvePythonAsync(ManagerConfig config, CancellationToken ct) =>
+        ResolvePythonAsync(config, UpstreamProfile, ct);
+
+    private static async Task<string?> ResolvePythonAsync(ManagerConfig config, StrataEngineProfile profile, CancellationToken ct)
     {
-        var direct = ResolvePython(config);
+        var direct = ResolvePython(config, profile);
         if (direct == null) return null;
         Process? process = null;
         try

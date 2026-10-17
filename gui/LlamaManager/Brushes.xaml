@@ -52,9 +52,9 @@
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="30"/>
                                 </Grid.ColumnDefinitions>
-                                <ToggleButton x:Name="DropDownToggle" Grid.ColumnSpan="2"
+                                <ToggleButton x:Name="DropDownToggle" Grid.Column="0" Grid.ColumnSpan="2"
                                               Style="{StaticResource ComboBoxToggleButtonStyle}"
                                               IsChecked="{Binding IsDropDownOpen, Mode=TwoWay,
                                                           RelativeSource={RelativeSource TemplatedParent}}"
@@ -65,9 +65,33 @@
                                                   Content="{TemplateBinding SelectionBoxItem}"
                                                   ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
                                                   IsHitTestVisible="False"/>
+                                <TextBox x:Name="PART_EditableTextBox" Grid.Column="0"
+                                         Margin="{TemplateBinding Padding}"
+                                         HorizontalAlignment="Stretch" VerticalAlignment="Center"
+                                         Background="Transparent" BorderThickness="0"
+                                         Foreground="{DynamicResource TextFillColorPrimaryBrush}"
+                                         CaretBrush="{DynamicResource TextFillColorPrimaryBrush}"
+                                         SelectionBrush="{DynamicResource AccentFillColorDefaultBrush}"
+                                         VerticalContentAlignment="Center"
+                                         FontSize="{TemplateBinding FontSize}"
+                                         FontFamily="{TemplateBinding FontFamily}"
+                                         IsReadOnly="{TemplateBinding IsReadOnly}"
+                                         Visibility="Collapsed"
+                                         SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}">
+                                    <TextBox.Template>
+                                        <ControlTemplate TargetType="TextBox">
+                                            <Border Background="Transparent" BorderThickness="0">
+                                                <ScrollViewer x:Name="PART_ContentHost"
+                                                              VerticalAlignment="Center"
+                                                              HorizontalScrollBarVisibility="Hidden"
+                                                              VerticalScrollBarVisibility="Hidden"/>
+                                            </Border>
+                                        </ControlTemplate>
+                                    </TextBox.Template>
+                                </TextBox>
                                 <ui:SymbolIcon Grid.Column="1" Symbol="ChevronDown24" FontSize="12"
                                                IsHitTestVisible="False"
-                                               Margin="0,0,10,0" VerticalAlignment="Center"/>
+                                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
                             </Grid>
                         </Border>
                         <Popup x:Name="PART_Popup" AllowsTransparency="True" Placement="Bottom"
@@ -83,7 +107,7 @@
                                 <Border.Effect>
                                     <DropShadowEffect BlurRadius="16" ShadowDepth="2" Opacity="0.18"/>
                                 </Border.Effect>
-                                <ScrollViewer>
+                                <ScrollViewer x:Name="DropDownScrollViewer" CanContentScroll="True">
                                     <ItemsPresenter x:Name="ItemsPresenter"
                                                     KeyboardNavigation.DirectionalNavigation="Contained"
                                                     SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}"/>
@@ -92,6 +116,13 @@
                         </Popup>
                     </Grid>
                     <ControlTemplate.Triggers>
+                        <Trigger Property="IsEditable" Value="True">
+                            <Setter TargetName="ContentSite" Property="Visibility" Value="Collapsed"/>
+                            <Setter TargetName="PART_EditableTextBox" Property="Visibility" Value="Visible"/>
+                            <Setter TargetName="DropDownToggle" Property="Grid.Column" Value="1"/>
+                            <Setter TargetName="DropDownToggle" Property="Grid.ColumnSpan" Value="1"/>
+                            <Setter Property="IsTabStop" Value="False"/>
+                        </Trigger>
                         <Trigger Property="IsMouseOver" Value="True">
                             <Setter TargetName="Root" Property="Background"
                                     Value="{DynamicResource ControlFillColorSecondaryBrush}"/>

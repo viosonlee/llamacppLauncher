@@ -103,6 +103,27 @@ internal static class UiRegression
                 Program.Equal("默认", Box("ReasoningBudgetBox").Text);
                 Program.Equal("", ((TextBox)window.FindName("DraftModelBox")).Text);
                 Program.Equal(0, Box("FlashAttentionBox").SelectedIndex);
+
+                // Editable combo tests: typing custom values, LostFocus commit, and selecting dropdown items
+                Box("OffloadLayersBox").Text = "35";
+                Box("OffloadLayersBox").RaiseEvent(new RoutedEventArgs(UIElement.LostFocusEvent));
+                window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+                Program.Equal("35", new LauncherArguments(args.Text).Get("-ngl"));
+                Box("OffloadLayersBox").SelectedIndex = 1; // "auto"
+                window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+                Program.Equal("auto", new LauncherArguments(args.Text).Get("-ngl"));
+                Program.Equal("auto", Box("OffloadLayersBox").Text);
+
+                Box("BatchSizeBox").Text = "4096";
+                Box("BatchSizeBox").RaiseEvent(new RoutedEventArgs(UIElement.LostFocusEvent));
+                window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+                Program.Equal("4096", new LauncherArguments(args.Text).Get("-b"));
+                Box("BatchSizeBox").SelectedIndex = 2; // "512"
+                window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+                Program.Equal("512", new LauncherArguments(args.Text).Get("-b"));
+                Program.Equal("512", Box("BatchSizeBox").Text);
+                args.Text = "";
+
                 // Render both changed panels without opening a desktop window.
                 typeof(MainWindow).GetField("_loaded", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(window, false);
                 var tabs = (TabControl)window.FindName("ConfigurationTabs");
@@ -188,6 +209,16 @@ internal static class UiRegression
                 Program.Check(comboPopup.IsOpen && comboPopup.Child is FrameworkElement, "combo dropdown did not open");
                 comboProbe.IsDropDownOpen = false;
                 comboHost.Close();
+
+                // Editable ComboBox must provide PART_EditableTextBox in its template.
+                var editableProbe = new ComboBox { Style = (Style)app.FindResource("FluentComboBox"), Width = 220, Height = 30, IsEditable = true };
+                editableProbe.Items.Add("alpha"); editableProbe.Items.Add("beta");
+                var editableHost = new Window { Width = 320, Height = 220, Opacity = 0, ShowInTaskbar = false, WindowStyle = WindowStyle.None, ShowActivated = false, Content = editableProbe };
+                editableHost.Show();
+                for (var i = 0; i < 10; i++) editableHost.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+                var editableTextBox = editableProbe.Template.FindName("PART_EditableTextBox", editableProbe) as TextBox;
+                Program.Check(editableTextBox != null && editableTextBox.Visibility == Visibility.Visible, "PART_EditableTextBox missing or not visible in editable ComboBox");
+                editableHost.Close();
                 // The top bar is the single control surface: one set of lifecycle buttons.
                 // Selecting a non-llama.cpp engine swaps the parameter panels and keeps the
                 // same buttons (llama.cpp-only controls hide).

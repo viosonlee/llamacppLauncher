@@ -105,3 +105,16 @@
   必填清单与交叉引用检查。
 - REQ-103 已实现：CLI 支持无值开关（如 `--doctor --offline` 的 `--offline`）；带值选项缺值时
   报错并指明选项名。
+- REQ-104 已实现：全新电脑一键配置并启动：
+  - GUI: 当所选引擎未就绪（缺少引擎二进制文件、服务源码或 Python 依赖）时，点击「启动服务」自动检测到缺失，向用户弹出友好提示并确认一键自动下载并配置环境，配置完成后无缝自动启动服务；同时在顶部控制条提供直观的「配置环境」按钮，并在未就绪时状态栏清晰提示一键配置；支持配置进度实时呈现（全局日志联动）。
+  - CLI: `--start` 支持在缺少环境时通过 `--auto-bootstrap`（或 `--bootstrap`）开关一键全自动配置环境并拉起服务；`--bootstrap --all` 支持一条命令配置所有内置引擎环境；`llama-manager.ps1` 和 `llama-manager.cmd` 完整支持 `-Bootstrap`、`-Doctor`、`-All`、`-Offline`、`-AutoBootstrap`、`-Backend` 等参数。
+  - 引擎自包含与 DLL 补全：在 Strata 家族（strata-upstream, polystrata）初始化时，自动补充/共享 CUDA 运行时依赖（`cublas64_*.dll`, `cudart64_*.dll`），且子进程环境变量 PATH 补全相关目录，彻底杜绝 Windows 下 `STATUS_DLL_NOT_FOUND` (0xC0000135) 错误。
+- REQ-105 已实现：多引擎日志与实时速度监控适配（polystrata 与 strata-upstream）：
+  - 日志系统（LogService）支持按当前所选后端动态读取其专属日志（`logs/engine-{backendId}.log`、`.stdout.log`、`.stderr.log`），“打开日志文件”按钮自动定位打开当前引擎的主日志文件。
+  - 测速监控（SpeedMonitorService）与状态轮询适配 Strata 服务端：在 `serve/server.py` 的 `/slots` 接口暴露当前实时解码 tokens 数（`n_decoded`），使得启动器在推理生成过程中能即时计算实时解码速度；当请求结束空闲时，自动解析 Strata 引擎日志（`[strata] done: ... (XX tok/s)`）或读取 `/v1/status` 的 `last_timings` 显示已完成请求的生成速度。
+  - 显存/专家分布诊断：从 `engine-polystrata.log` 及 `engine-strata-upstream.log` 解析 Strata 引擎专有的显存专家分布（`X/Y 专家在显存 (Z GiB)`、`X/Y 专家/层在显存 (Z GiB)`）并在顶部状态信息中直观呈现。
+- REQ-106 已实现：strata-upstream 投机加速与专家槽位性能修复（解决 27 TPS 瓶颈）：
+  - 修正参数传递：`strata.exe` 不支持 `--vram-reserve-mib`（日志提示 ignoring），且默认 `expert_slots` 为 0，在 6GB 显卡上导致所有 routed experts 回退到 CPU 线程池。现为 `strata-upstream` 配置专属的 `expertSlots`（默认 16，占用 0.75 GiB 显存，GPU 专家命中率提升至 40%~50%）。
+  - 激活 MTP 多 Token 投机加速：配置中显式传递 `--mtp 2`（`mtpDrafts`，默认 2），利用模型自带的 MTP 模块进行投机解码（接受率 70%~95%），实测解码速度从 27 tok/s 跃升至 50~72 tok/s。
+
+

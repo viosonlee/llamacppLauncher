@@ -84,9 +84,43 @@ internal static class StrataBackendRegression
         var runconfig = JsonNode.Parse(plan.GeneratedFiles[runconfigPath])!.AsObject();
         Equal("qwen35moe", runconfig["arch"]!.GetValue<string>());
         Check(runconfig["exe"]!.GetValue<string>().EndsWith("strata.exe"), "runconfig exe wrong");
+        var runArgs = runconfig["args"]!.AsArray().Select(n => n!.GetValue<string>()).ToList();
+        Check(runArgs.Contains("--mtp") && runArgs.Contains("2"), "strata-upstream must pass --mtp 2 by default");
+        Check(runArgs.Contains("--expert-slots") && runArgs.Contains("16"), "strata-upstream must pass --expert-slots 16 by default");
+        Check(!runArgs.Contains("--vram-reserve-mib"), "strata-upstream must not pass --vram-reserve-mib");
         // The engine page's settings must actually drive the runconfig (not the legacy Strata block).
         Equal(port, runconfig["port"]!.GetValue<int>());
         Check(args.Contains(port.ToString()), "port not passed to the server");
+
+        // Verify PolyStrata backend resolves its own strata-poly.exe and does not cross-wire to strata.exe.
+        var polyPackage = Path.Combine(root, "poly-pkg");
+        var polyEngineDir = Path.Combine(polyPackage, "engine-poly");
+        Directory.CreateDirectory(polyEngineDir);
+        File.WriteAllText(Path.Combine(polyEngineDir, "strata-poly.exe"), "# fake exe");
+        config.Engines["polystrata"] = new EngineSettings
+        {
+            ModelPath = model,
+            Port = port + 1,
+            Parameters = new Dictionary<string, string>
+            {
+                ["packageRoot"] = polyPackage,
+                ["serveRoot"] = source,
+                ["pythonPath"] = python,
+                ["servePort"] = (port + 1).ToString(),
+                ["context"] = "4096",
+            },
+        };
+        var polyBackend = BackendRegistry.ServerById("polystrata");
+        Check(polyBackend != null, "polystrata backend not registered");
+        var polyPlan = polyBackend!.BuildLaunch(new EngineStartRequest { Config = config });
+        var polyArgs = polyPlan.Arguments.ToList();
+        var polyRunconfigPath = polyArgs[polyArgs.IndexOf("--config") + 1];
+        var polyRunconfig = JsonNode.Parse(polyPlan.GeneratedFiles[polyRunconfigPath])!.AsObject();
+        Check(polyRunconfig["exe"]!.GetValue<string>().EndsWith("strata-poly.exe"),
+            "polystrata runconfig must point at strata-poly.exe, not strata.exe");
+        var polyRunArgs = polyRunconfig["args"]!.AsArray().Select(n => n!.GetValue<string>()).ToList();
+        Check(polyRunArgs.Contains("--vram-reserve-mib"), "polystrata must pass --vram-reserve-mib");
+        Check(!polyRunArgs.Contains("--expert-slots"), "polystrata must not pass --expert-slots");
     }
 
     /// <summary>Resolvers must report honest problems instead of throwing at random points.</summary>

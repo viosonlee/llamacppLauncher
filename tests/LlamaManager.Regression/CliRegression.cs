@@ -23,6 +23,7 @@ internal static class CliRegression
         var help = new StringWriter();
         Equal(0, await CommandLineService.RunAsync(["--help"], help));
         Check(help.ToString().Contains("--bootstrap") && help.ToString().Contains("--backend"), "help missing new options");
+        Check(help.ToString().Contains("--auto-bootstrap") && help.ToString().Contains("--all"), "help missing --auto-bootstrap or --all");
 
         // A value-less flag must not be mistaken for a missing value: "--doctor --offline" used
         // to fail with "命令选项缺少值" because the loop demanded a value after every token.
@@ -38,6 +39,14 @@ internal static class CliRegression
             throw new Exception("missing option value accepted");
         }
         catch (ArgumentException ex) { Check(ex.Message.Contains("缺少值"), "wrong error for a missing value: " + ex.Message); }
+
+        // Unknown options are rejected and named.
+        try
+        {
+            await CommandLineService.RunAsync(["--status", "--nonexistent-flag"], new StringWriter());
+            throw new Exception("invalid flag accepted");
+        }
+        catch (ArgumentException ex) { Check(ex.Message.Contains("未知命令选项"), "wrong error for invalid flag: " + ex.Message); }
 
         // Requirements: the engine's own pinned list wins.
         var serveRoot = Path.Combine(root, "reqs");

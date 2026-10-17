@@ -34,6 +34,27 @@ public static class BootstrapService
         finally { Gate.Release(); }
     }
 
+    /// <summary>Bootstraps all downloadable engines sequentially.</summary>
+    public static async Task<IReadOnlyDictionary<string, IReadOnlyList<StepResult>>> RunAllAsync(ILogSink log, CancellationToken ct = default)
+    {
+        var results = new Dictionary<string, IReadOnlyList<StepResult>>();
+        foreach (var id in new[] { "llamacpp", "strata-upstream", "polystrata" })
+        {
+            log.Write($"\n=== 开始配置引擎环境：{id} ===");
+            try
+            {
+                var steps = await RunAsync(id, log, ct).ConfigureAwait(false);
+                results[id] = steps;
+            }
+            catch (Exception ex)
+            {
+                log.Write($"[{id}] 配置失败: {ex.Message}");
+                results[id] = [new StepResult(id, false, ex.Message)];
+            }
+        }
+        return results;
+    }
+
     /// <summary>Whether the bootstrap can fetch this backend's engine automatically.</summary>
     public static bool CanDownload(string backendId) => EngineAcquisitionService.CanAcquire(backendId);
 
@@ -92,7 +113,11 @@ public static class BootstrapService
         steps.Add(engine != null
             ? new StepResult(profile.EngineExeName, true, engine)
             : new StepResult(profile.EngineExeName, false, "未找到；请选择引擎包目录或手动放置。"));
-        if (engine != null) log.Write(profile.EngineExeName + "：" + engine);
+        if (engine != null)
+        {
+            log.Write(profile.EngineExeName + "：" + engine);
+            await EnsureCudaDllsAsync(Path.GetDirectoryName(engine)!, log, ct).ConfigureAwait(false);
+        }
 
         steps.Add(server != null
             ? new StepResult("serve/server.py", true, server)
@@ -193,6 +218,48 @@ public static class BootstrapService
         {
             log.Write("执行失败：" + ex.Message);
             return -1;
+        }
+    }
+
+    private static async Task EnsureCudaDllsAsync(string engineDir, ILogSink log, CancellationToken ct)
+    {
+        var managerRoot = ConfigService.GetManagerRoot();
+        var llamaCppRoot = ConfigService.GetLlamaCppRoot();
+        var candidateDirs = new[] { managerRoot, llamaCppRoot }.Distinct(StringComparer.OrdinalIgnoreCase);
+
+        var hasCublas = Directory.Exists(engineDir) && Directory.GetFiles(engineDir, "cublas64_*.dll").Length > 0;
+        if (!hasCublas)
+        {
+            var copied = false;
+            foreach (var dir in candidateDirs)
+            {
+                if (string.IsNullOrWhiteSpace(dir) || !Directory.Exists(dir)) continue;
+                var sourceFiles = Directory.GetFiles(dir, "cublas*.dll").Concat(Directory.GetFiles(dir, "cudart*.dll"));
+                foreach (var dll in sourceFiles)
+                {
+                    var dest = Path.Combine(engineDir, Path.GetFileName(dll));
+                    if (!File.Exists(dest))
+                    {
+                        try { File.Copy(dll, dest, true); copied = true; }
+                        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+                    }
+                }
+            }
+            if (copied)
+            {
+                log.Write("已复制 CUDA 运行时库到引擎目录。");
+                return;
+            }
+
+            try
+            {
+                log.Write("正在获取 CUDA 运行时库（用于 GPU 计算加速）…");
+                await EngineAcquisitionService.AcquireCudartToAsync(engineDir, log, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                log.Write("获取 CUDA 运行时库提示（非阻塞）：" + ex.Message);
+            }
         }
     }
 }

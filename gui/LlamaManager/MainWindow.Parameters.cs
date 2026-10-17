@@ -1,6 +1,7 @@
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using LlamaManager.Services;
 
@@ -17,12 +18,20 @@ public partial class MainWindow
     private static void SelectValue(ComboBox box, string? value)
     {
         box.SelectedIndex = -1;
-        if (box.IsEditable) { box.Text = value ?? "默认"; return; }
         for (var i = 0; i < box.Items.Count; i++)
         {
             var text = box.Items[i] is ComboBoxItem item ? item.Content?.ToString() : box.Items[i].ToString();
             if ((value == null && text?.StartsWith("默认") == true) || text?.Split(' ')[0] == value)
-            { box.SelectedIndex = i; return; }
+            {
+                box.SelectedIndex = i;
+                if (box.IsEditable) box.Text = text?.Split(' ')[0] ?? (value ?? "默认");
+                return;
+            }
+        }
+        if (box.IsEditable)
+        {
+            box.Text = value ?? "默认";
+            return;
         }
         // Preserve values from newer engines even when this build has no predefined choice.
         if (value != null) { box.Items.Add(new ComboBoxItem { Content = value }); box.SelectedIndex = box.Items.Count - 1; }
@@ -55,6 +64,10 @@ public partial class MainWindow
     {
         if (e.AddedItems.Count == 0) return;
         var text = e.AddedItems[0] is ComboBoxItem item ? item.Content?.ToString() : e.AddedItems[0]?.ToString();
+        if (sender is ComboBox { IsEditable: true } box && text != null)
+        {
+            box.Text = text.StartsWith("默认") ? "默认" : text.Split(' ')[0];
+        }
         SyncArgsFromControls(sender, text);
     }
 
@@ -186,26 +199,160 @@ public partial class MainWindow
     private void DraftModel_LostFocus(object sender, RoutedEventArgs e) => SyncArgsFromControls(sender);
     private void MtpCheckbox_Changed(object sender, RoutedEventArgs e) => SyncArgsFromControls(sender);
 
+    private void EditableCombo_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter) return;
+        SyncArgsFromControls(sender);
+        Keyboard.ClearFocus();
+        e.Handled = true;
+    }
+
+    public static void ShowParameterHelp(string title, string? content)
+    {
+        var text = string.IsNullOrWhiteSpace(content) ? "暂无详细说明，具体参数请以对应引擎官方文档与 --help 为准。" : content;
+        MessageBox.Show(text, $"参数说明 - {title}", MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
     private void InfoButton_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not Button button || button.Tag is not string tag) return;
-        var text = tag switch
+        var (title, text) = tag switch
         {
-            "context_length" => "上下文长度 (-c)：影响 KV 缓存占用。新预设从不超过模型原生上限的 4096 开始；根据实际显存余量增大。",
-            "context_quant" or "context_quant_v" => "K/V 缓存精度可以分别设置。默认表示不传此参数，由引擎决定。量化缓存可节省显存，其支持程度、精度和速度取决于模型与后端。",
-            "offload_layers" => "GPU 卸载层数 (-ngl)：0 为 CPU，数字指定层数。all/auto 是否支持取决于引擎版本；支持 --fit 的引擎可自动调整。层数不代表所有张量都在 GPU，需查看加载日志中的 GPU 权重。",
-            "cpu_cores" => "CPU 解码线程数 (-t)。此控件不修改批处理线程数 -tb；可以在原始参数中单独设置 -tb。",
-            "reasoning" => "思考模式 (--reasoning)：默认不传参数，on/off 显式启用或关闭。具体行为取决于模型模板和引擎支持。",
-            "flash_attention" => "Flash Attention (-fa)：默认不传参数；off/on/auto 分别表示关闭、开启和由引擎选择。请根据当前后端支持情况设置。",
-            "batch_size" => "逻辑批大小 (-b)：降低通常可减小提示词处理阶段的内存峰值。新预设从 512 开始。",
-            "ubatch_size" => "物理批大小 (-ub)：应不超过 -b。新预设从 128 开始，可按显存余量与实测吞吐调整。",
-            "n_cpu_moe" => "MoE CPU 层数 (--n-cpu-moe)：强制部分专家权重驻留 CPU。0 表示不强制，实际分配仍受 -ngl 和显存影响。混合卸载的收益取决于模型、带宽和硬件，应实测。",
-            "verbose_log" => "详细日志 (-v)：排查问题时启用。可能记录请求内容并增加写盘量。",
-            "reasoning_budget" => "思考预算 (--reasoning-budget)：默认不传参数；-1 显式无限制；0 显式零预算；正数为上限。不同引擎或模板的支持情况可能不同。",
-            "spec_type" => "投机解码 (--spec-type)：默认不传参数（引擎默认不启用）。draft-mtp 使用多 Token 预测头；draft-simple/draft-eagle3 需要配套草稿模型；ngram-mod 为 n-gram 投机，无需草稿文件。支持与拒绝率取决于草稿质量，应实测。",
-            "draft_model" => "草稿模型 (-md)：投机解码使用的草稿/头模型文件，与上方投机解码选项配合使用，例如独立 MTP 头配 draft-mtp。文件不存在会在启动时报错。",
-            _ => "具体参数以所选引擎的 --help 为准。"
+            "context_length" => (
+                "上下文长度 (-c)",
+                "【功能说明】\n" +
+                "模型单次问答能记忆的最大 Token 数量（包括历史对话、提问与本次生成内容）。\n\n" +
+                "【显存影响】\n" +
+                "KV 缓存占用的主要来源。设置越大，模型能阅读的文章和记忆越长，但显存开销成正比增加。\n\n" +
+                "【推荐设置】\n" +
+                "• 6GB 显存显卡（如笔记本 RTX 3060）：建议 4096 ~ 8192\n" +
+                "• 8GB–12GB 显存：建议 8192 ~ 16384\n" +
+                "• 16GB+ 显存：可设置 16384 ~ 32768\n\n" +
+                "【注意事项】\n" +
+                "请勿随意超过模型训练原生支持的上限，超出可能导致输出混乱胡言乱语。"
+            ),
+            "context_quant" or "context_quant_v" => (
+                "K / V 缓存量化 (-ctk / -ctv)",
+                "【功能说明】\n" +
+                "对对话上下文保存在显存中的 Key / Value 缓存进行量化压缩。\n\n" +
+                "【选项解析】\n" +
+                "• 默认 (f16)：最高精度，占用显存最大。\n" +
+                "• q8_0 (8-bit)：强烈推荐！节省约 40% 缓存显存，精度损失肉眼几乎不可察觉。\n" +
+                "• q4_0 / q4_1 (4-bit)：节省约 70% 缓存显存，显存非常吃紧但想开大上下文时极佳。\n\n" +
+                "【使用建议】\n" +
+                "日常推荐保持“默认”；若想在有限显存下容纳更长上下文，建议将 K 和 V 量化同时设为 q8_0。"
+            ),
+            "offload_layers" => (
+                "GPU 卸载层数 (-ngl)",
+                "【功能说明】\n" +
+                "将模型神经网络中的多少层加载到显卡（GPU）显存中加速计算。\n\n" +
+                "【选项建议】\n" +
+                "• all（全部卸载）：最推荐！所有层均进入 GPU 运算，生成速度最快（通常为 CPU 的数十倍）。\n" +
+                "• auto（自动卸载）：由新版本引擎根据显存余量自动调整层数。\n" +
+                "• 数字（如 20、25）：模型太大显存塞不下时，填入层数，剩余层走 CPU 内存混合推理。\n" +
+                "• 0：纯 CPU 计算，速度最慢。\n\n" +
+                "【查看技巧】\n" +
+                "启动服务后可切换到右侧「日志」页，查看引擎输出中 GPU 权重加载百分比。"
+            ),
+            "cpu_cores" => (
+                "CPU 解码线程数 (-t)",
+                "【功能说明】\n" +
+                "当有部分计算落入 CPU 运行（或纯 CPU 推理）时，分配给 CPU 计算的并发线程数。\n\n" +
+                "【推荐设置】\n" +
+                "• 建议设置为 CPU 的物理大核数量（通常为 4、6 或 8）。\n" +
+                "• 勿超过物理核心数或开启全部超线程，线程过多反而会因 CPU 上下文调度争抢而变慢。"
+            ),
+            "reasoning" => (
+                "思考模式 (--reasoning)",
+                "【功能说明】\n" +
+                "控制具备思考能力的大模型（如 DeepSeek-R1、Qwen-QwQ 等）是否生成思维链（<think>...</think>）。\n\n" +
+                "【选项说明】\n" +
+                "• 默认：不传参数，完全遵循模型自带的提示词模板。\n" +
+                "• on：强制开启深度思考，输出完整推理逻辑后再给出答案。\n" +
+                "• off：关闭思考过程，直接作答（响应更快，适合简单问答）。\n" +
+                "• auto：由引擎或客户端请求自动识别判定。"
+            ),
+            "reasoning_budget" => (
+                "思考上限 (--reasoning-budget)",
+                "【功能说明】\n" +
+                "限制模型在思维链（<think>）思考环节最多消耗的 Token 数量。\n\n" +
+                "【选项解析】\n" +
+                "• 默认：不限制，由模型自身逻辑决定何时结束思考。\n" +
+                "• -1：显式无限制长考。\n" +
+                "• 0：零预算，强行跳过思考环节直接回答。\n" +
+                "• 正整数（如 1024、2048、4096）：限制思考的最大 token 上限，防止无限死循环推理。"
+            ),
+            "flash_attention" => (
+                "Flash Attention (-fa)",
+                "【功能说明】\n" +
+                "现代高效注意力优化算子。在大上下文文本处理时，大幅降低显存占用并成倍加速。\n\n" +
+                "【推荐设置】\n" +
+                "• 推荐选择 on 或 auto（NVIDIA RTX 20/30/40/50 系列主流独显均原生支持）。\n" +
+                "• 遇到不支持的特殊显卡或兼容性报错时可置为 off。"
+            ),
+            "batch_size" => (
+                "批处理大小 (-b)",
+                "【功能说明】\n" +
+                "逻辑批处理大小，决定输入长提示词（Prompt Processing）时的并行处理吞吐。\n\n" +
+                "【使用建议】\n" +
+                "• 默认 2048（处理长文本提示词时吞吐最高）。\n" +
+                "• 显存紧张时可降至 512 或 1024，能显著降低输入解析瞬间的显存峰值。"
+            ),
+            "ubatch_size" => (
+                "物理批大小 (-ub)",
+                "【功能说明】\n" +
+                "单次提交给 GPU 计算核心的微批次物理大小，数值必须小于或等于 -b。\n\n" +
+                "【使用建议】\n" +
+                "• 默认 512。\n" +
+                "• 显存不足或输入大段提示词时显卡卡顿时，可尝试降为 128 或 256。"
+            ),
+            "verbose_log" => (
+                "详细日志 (-v)",
+                "【功能说明】\n" +
+                "控制台及日志面板是否输出详细的底层推理通信、显存张量分配与 HTTP 请求体日志。\n\n" +
+                "【使用建议】\n" +
+                "日常建议保持“关闭 (默认)”；遇到服务崩溃、无法加载或需调试网络请求时再开启。"
+            ),
+            "spec_type" => (
+                "投机解码 (--spec-type)",
+                "【功能说明】\n" +
+                "利用小模型或前向预测头（MTP）预测后续词，主模型并行验证，通常可提速 1.5x ~ 2.5x！\n\n" +
+                "【选项解析】\n" +
+                "• draft-mtp：使用多 Token 预测头（模型内置 MTP 时直接选此项，无需外挂草稿文件）。\n" +
+                "• draft-simple / draft-eagle3：使用外部配套轻量草稿模型（需在下方“草稿模型”栏选择 GGUF 文件）。\n" +
+                "• ngram-mod：根据已生成文本的 n-gram 词频统计推测后续词，无需任何草稿模型。\n" +
+                "• 默认 (不传)：不启用投机解码。"
+            ),
+            "draft_model" => (
+                "草稿模型 (-md)",
+                "【功能说明】\n" +
+                "与投机解码（draft-simple / draft-eagle3 或独立 MTP 头）配套使用的小模型文件路径。\n\n" +
+                "【使用提示】\n" +
+                "草稿模型必须与主模型的词表（Tokenizer）兼容。若指定的文件不存在，启动时将直接报错。"
+            ),
+            "n_cpu_moe" => (
+                "MoE CPU 层数 (--n-cpu-moe)",
+                "【功能说明】\n" +
+                "仅适用于混合专家模型（MoE，如 DeepSeek、Qwen-MoE）。强制将指定层数的专家权重放到 CPU 内存计算。\n\n" +
+                "【使用建议】\n" +
+                "默认 0（不强制，全按 -ngl 卸载）。当显存刚好差 1~2GB 装不下完整 MoE 模型时，可调为 1~4 层。"
+            ),
+            "cpu_moe" => (
+                "CPU MoE (--cpu-moe)",
+                "【功能说明】\n" +
+                "将 MoE 混合专家模型的全部专家层转移到 CPU 内存运算，仅将主干网络保留在显卡中。\n\n" +
+                "【适用场景】\n" +
+                "适用于显卡显存较小（如 6G/8G）但想要越级运行超大 MoE 模型的场景。"
+            ),
+            "mtp" => (
+                "内置 MTP 投机解码",
+                "【功能说明】\n" +
+                "当前模型 GGUF 文件中已检测到内置多 Token 预测（MTP）头。\n\n" +
+                "【优势与建议】\n" +
+                "强烈推荐勾选！勾选后自动配置 --spec-type draft-mtp，无需配置任何外部草稿模型文件，即可获得 1.5x 以上的生成加速。"
+            ),
+            _ => ("参数说明", "具体参数定义与用法以所选引擎的官方文档与 --help 为准。")
         };
-        MessageBox.Show(text, "参数说明", MessageBoxButton.OK, MessageBoxImage.Information);
+        ShowParameterHelp(title, text);
     }
 }
