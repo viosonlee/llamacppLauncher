@@ -245,6 +245,9 @@
                             <TextBlock x:Name="EngineCompatText" Text="" FontSize="11" TextWrapping="Wrap"
                                        Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,0,0,10"/>
                             <DockPanel Margin="0,0,0,8">
+                                <ui:Button x:Name="EngineBenchmarkButton" DockPanel.Dock="Right" Content="实测对比…"
+                                           Click="EngineBenchmarkButton_Click" Margin="6,0,0,0" Padding="8,3" FontSize="11"
+                                           ToolTip="用同一模型、同一提示实测多组参数（如 --n-cpu-moe 的不同取值），结果写入日志页。llama.cpp 专用。"/>
                                 <ui:Button x:Name="EngineResetAllButton" DockPanel.Dock="Right" Content="全部恢复默认"
                                            Click="EngineResetAllButton_Click" Margin="6,0,0,0" Padding="8,3" FontSize="11"/>
                                 <ui:TextBox x:Name="EngineParamSearchBox" FontSize="11"

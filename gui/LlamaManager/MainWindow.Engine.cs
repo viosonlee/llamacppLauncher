@@ -483,6 +483,35 @@ public partial class MainWindow
         ApplyParameterFilter();
     }
 
+    private void EngineBenchmarkButton_Click(object sender, RoutedEventArgs e)
+    {
+        var backend = SelectedEngineBackend();
+        if (backend == null || _serverStarting || _serverStopping) return;
+        // The sweep starts a bare llama-server per variant; schema-only plugins have no such binary.
+        if (backend is not LlamaCppBackend)
+        {
+            MessageBox.Show("参数实测对比目前只支持 llama.cpp 引擎（每组参数启动一个独立的 llama-server）。",
+                "引擎不支持", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        var model = EngineModelFor(backend);
+        if (string.IsNullOrWhiteSpace(model) || !File.Exists(model))
+        {
+            MessageBox.Show("请先在「模型」页选择一个有效的 GGUF 模型。", "未选择模型", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        // A starting plan only for MoE models: that is the parameter with real leverage
+        // (the 6 GiB boundary and the fast setting differ), dense models rarely need a sweep.
+        string? suggest = null;
+        if (GgufService.TryRead(model) is { IsMoE: true } meta)
+        {
+            var common = $"-ngl 999 -c 4096 -t {Math.Clamp(Environment.ProcessorCount / 2, 1, 8)} -fa on --jinja";
+            suggest = $"# 每行一组：标签|参数。实测器统一加 -m/--port/--host。\n" +
+                      $"moe 26|{common} --n-cpu-moe 26\nmoe 30|{common} --n-cpu-moe 30\nmoe 34|{common} --n-cpu-moe 34";
+        }
+        new ParameterBenchmarkWindow(model, suggest) { Owner = this }.ShowDialog();
+    }
+
     /// <summary>The tooltip shown on a parameter label: help, range and default.</summary>
     private static string? BuildParameterTip(ParameterSpec spec)
     {

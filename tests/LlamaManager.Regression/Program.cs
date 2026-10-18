@@ -68,6 +68,18 @@ internal static class Program
             Console.WriteLine($"\n完成：{result.Path}（{EngineDownloadService.FormatBytes(result.Bytes)}）");
             return 0;
         }
+        if (args.FirstOrDefault() == "--benchmark")
+        {
+            // --benchmark <model.gguf> <runs> <plan-file>: each non-empty line is "label|args".
+            if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("LLAMA_MANAGER_ROOT")))
+                throw new ArgumentException("Set an isolated LLAMA_MANAGER_ROOT for a benchmark run.");
+            var modelPath = args[1];
+            var runs = int.Parse(args[2]);
+            var plan = ParameterBenchmarkService.ParsePlan(File.ReadAllText(args[3]));
+            var report = await ParameterBenchmarkService.RunAsync(modelPath, "", plan, runs, Console.WriteLine, CancellationToken.None);
+            Console.WriteLine(ParameterBenchmarkService.Describe(report));
+            return report.Errors.Count == 0 ? 0 : 1;
+        }
         if (args.FirstOrDefault() == "--check-strata")
         {
             if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("LLAMA_MANAGER_ROOT")))
@@ -693,6 +705,32 @@ internal static class Program
                     Equal(Path.Combine(ConfigService.GetRoot(), "models"), ModelDownloadService.TargetDirectory);
                 }
                 finally { config.ModelsDirectory = saved; ConfigService.SaveConfig(config); }
+            }));
+            await Test("benchmark: plan parsing, variant stats and report rendering", () => Run(() =>
+            {
+                var plan = ParameterBenchmarkService.ParsePlan(
+                    "# 注释行被忽略\nmoe 28|--n-cpu-moe 28 -c 4096\nmoe 30|--n-cpu-moe 30 -c 4096\n\n无标签变体 -c 2048");
+                Equal(3, plan.Count);
+                Equal("moe 28", plan[0].Label); Equal("--n-cpu-moe 28 -c 4096", plan[0].Args);
+                Equal("变体 3", plan[2].Label);
+                Check(new LauncherArguments(plan[2].Args).Has("-c"), "label-less variant lost its args");
+                Throws<ArgumentException>(() => ParameterBenchmarkService.ParsePlan("带端口 --port 9999"));
+                Check(ParameterBenchmarkService.ParsePlan("").Count == 0, "empty plan must parse to zero");
+
+                var good = new BenchmarkVariant("好", "-ngl 999", [30.0, 34.0, null], [0.5, 0.6, null]);
+                Equal(32.0, good.MeanDecodeTps); Equal(30.0, good.WorstDecodeTps); Equal(2, good.SuccessfulRuns);
+                var dead = new BenchmarkVariant("坏", "-ngl 999", [null, null], [null, null]);
+                Check(dead.MeanDecodeTps == null && dead.WorstDecodeTps == null, "a failed variant must report null rates");
+
+                var report = new BenchmarkReport(
+                    [good, new BenchmarkVariant("快", "-ngl 999 --n-cpu-moe 26", [40.0], [0.4])],
+                    ["坏: 未找到模型"], "开始时显存空闲 5000 / 6144 MiB");
+                Check(report.FastestLabel == "快", "fastest variant missed");
+                var text = ParameterBenchmarkService.Describe(report);
+                Check(text.Contains("32.00 tok/s") && text.Contains("最差 30.00") && text.Contains("★"),
+                    "rendering incomplete: " + text);
+                Check(text.Contains("失败：坏: 未找到模型"), "error line missing");
+                Check(text.Contains("空闲 5000"), "VRAM note missing from the report");
             }));
             await Test("lifecycle: server start truncates the shared stderr log", async () =>
             {
