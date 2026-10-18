@@ -5,6 +5,14 @@
 
 ## 2026-10-18
 
+- **MoE 预设从「砍层」改为「专家上 CPU」**（REQ-115）：旧 `PresetService.Plan` 把整个文件当作
+  显存需求线性砍 `-ngl`，13 GiB 的 A3B 在 6 GiB 卡上得到接近纯 CPU 的起点——而这个模型的正确
+  答案（实测）是 `-ngl 999 --n-cpu-moe 30`。新公式：显存减去计算预留与 KV 缓存后装专家，
+  专家按文件 91% 计，装不下的层数给 `--n-cpu-moe`；对校准机器给出 28（实测边界 26 / 最快 30）。
+  同时修复遥测的一个边界：`state="generating"` 且 `generated=0`（reading 刚切换、第一个 token
+  还没出）此前被当成 idle，现在按 generating 显示「0 tokens」。
+  回归 71 → **72 项**。
+
 - **修复“界面看不到速度”与“poly 下日志不显示不更新”**（REQ-114）：
   - **布局是第一根因**：顶部控制条把状态文本（MaxWidth 300）和速度文本（MaxWidth 200）塞进同一
     水平 StackPanel，WPF 会裁掉溢出而不是压缩——速度实际被渲染到窗口外，llama.cpp 也一样看不见。

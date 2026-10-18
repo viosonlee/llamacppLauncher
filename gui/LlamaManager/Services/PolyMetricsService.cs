@@ -16,8 +16,11 @@ public sealed record PolyLiveState(
     double? MeanTokensPerSecond,
     double? PrefillTokensPerSecond)
 {
-    /// <summary>Tokens are being written; the engine's own windowed rate is authoritative.</summary>
-    public bool IsGenerating => string.Equals(State, "generating", StringComparison.OrdinalIgnoreCase) && Generated > 0;
+    /// <summary>
+    /// Tokens are being written; the engine's own windowed rate is authoritative. The state alone
+    /// decides: <c>generated</c> is still 0 in the moment between the reading switch and the first token.
+    /// </summary>
+    public bool IsGenerating => string.Equals(State, "generating", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>The prompt is being read before the first token (<c>reading</c> / <c>prefill</c>).</summary>
     public bool IsReading => string.Equals(State, "reading", StringComparison.OrdinalIgnoreCase) ||

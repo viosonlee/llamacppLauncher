@@ -384,6 +384,33 @@ internal static class Program
                 Equal("on", args2.Get("--fit")); Equal("999", args2.Get("-ngl"));
                 Equal("0", new LauncherArguments(PresetService.Plan(meta, 6L << 30, new CudaInfo())).Get("-ngl"));
             }));
+            await Test("preset: MoE too big for the card offloads experts instead of truncating layers", () => Run(() =>
+            {
+                // 13 GiB MoE on a 6 GiB card: the old plan divided layers by whole-file size and
+                // produced a near-zero -ngl; the expert-aware plan offloads everything instead.
+                // Geometry mirrors the real 35B-A3B family the calibration came from (GQA, 4 KV heads).
+                var moe = new GgufMetadata { LayerCount = 48, ContextLength = 131072, AttentionHeads = 32, KvHeads = 4, EmbeddingLength = 4096, IsMoE = true, ExpertCount = 128, ExpertUsedCount = 8 };
+                var device = new CudaInfo { Available = true, FreeVramMb = 5200 };
+                var args = new LauncherArguments(PresetService.Plan(moe, 13L << 30, device));
+                Equal("999", args.Get("-ngl"));
+                Check(int.TryParse(args.Get("--n-cpu-moe"), out var off) && off is >= 1 and <= 48,
+                    $"expert offload layers out of range: {args.Get("--n-cpu-moe")}");
+                // Calibrated against the measured 6 GiB boundary (~26 runs, ~30 is fastest):
+                // the formula must land between them, near the fast setting.
+                Check(off is >= 26 and <= 32, $"offload estimate drifted: {off}");
+                // The ratio is calibrated: 13 GiB × 0.91 experts − (5.2 − 0.77 KV) GiB room,
+                // over 48 layers → ~28, inside the measured 26 (runs) … 30 (fastest) band.
+                Check(off is >= 26 and <= 32, $"offload estimate drifted: {off}");
+                // A MoE that fits the card must not carry --n-cpu-moe at all.
+                var fits = new LauncherArguments(PresetService.Plan(moe, 13L << 30, new CudaInfo { Available = true, FreeVramMb = 16000 }));
+                Check(!fits.Has("--n-cpu-moe"), "offload flag set although the model fits");
+                Check(int.Parse(fits.Get("-ngl")!) > 48, "a fitting MoE should offload everything");
+                // Dense models keep the KV-aware plan (no expert flag either way).
+                var dense = new GgufMetadata { LayerCount = 48, ContextLength = 4096, AttentionHeads = 32, KvHeads = 8, EmbeddingLength = 4096 };
+                var denseArgs = new LauncherArguments(PresetService.Plan(dense, 13L << 30, device));
+                Check(!denseArgs.Has("--n-cpu-moe"), "dense model got the expert flag");
+                Check(int.Parse(denseArgs.Get("-ngl")!) < 48, "dense oversized model should truncate layers");
+            }));
             await Test("probe: stdout/stderr drained concurrently and real timeout enforced", async () =>
             {
                 var output = await ProcessProbe.RunAsync(Environment.ProcessPath!, "--probe-output", TimeSpan.FromSeconds(5));
@@ -582,6 +609,12 @@ internal static class Program
                 // A service without a finished request stays quiet instead of reporting stale numbers.
                 var quiet = monitor.ObserveMetrics(PolyMetricsService.Parse("""{"live":{"state":"idle"}}""")!);
                 Check(quiet.Kind == SpeedKind.Idle && quiet.Text.Length == 0, "idle with no history must be empty: " + quiet.Text);
+
+                // The moment between "reading" and the first token still counts as generating.
+                var starting = monitor.ObserveMetrics(PolyMetricsService.Parse(
+                    """{"live":{"state":"generating","queued":0,"phase":"thinking","prompt_tokens":23,"generated":0,"max_tokens":-1,"elapsed_s":0.0,"tok_s":null}}""")!);
+                Check(starting.Kind == SpeedKind.Generating, "generated=0 must still be generating, got: " + starting.Kind);
+                Check(starting.Text.Contains("0 tokens") && !starting.Text.Contains("/0"), "unbounded max_tokens must not render /0: " + starting.Text);
             }));
             await Test("session validation: a stale record is not a running service", () => Run(() =>
             {
