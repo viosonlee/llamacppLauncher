@@ -35,12 +35,6 @@ public static class LlamaCppParameters
         ["verbose"] = "-v",
     };
 
-    /// <summary>Keys whose control holds a bare number even though it also offers presets.</summary>
-    private static readonly HashSet<string> NumericKeys = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "offloadLayers", "cpuCores", "reasoningBudget", "batchSize", "ubatchSize", "moeOffload",
-    };
-
     public static IReadOnlyList<ParameterSpec> Specs => LazySpecs.Value;
 
     private static IReadOnlyList<ParameterSpec> Build()
@@ -179,9 +173,6 @@ public static class LlamaCppParameters
                 Help: "【详细日志】\n• 作用：打开引擎的详细日志（-v），排查问题时有帮助，日常可关闭。"),
         ];
     }
-
-    /// <summary>True when this key's control carries a number that should be range-checked.</summary>
-    public static bool IsNumericKey(string key) => NumericKeys.Contains(key);
 
     /// <summary>Projects the raw argument string onto one value per spec key.</summary>
     public static Dictionary<string, string> ReadFromArgs(string? args)

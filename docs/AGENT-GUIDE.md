@@ -103,8 +103,9 @@ polystrata 的 HTTP 服务由 Python 提供，`--bootstrap` 检测不到 Python 
 > MTP 在 4K/40K 的分野、poly `threads` 最优值）。二创版本差异见
 > [qwen36-35b-a3b-ecosystem.md](qwen36-35b-a3b-ecosystem.md)。
 
-**模型文件要求**：必须是完整的 `.gguf`；被截断的文件（大小明显偏小）不要用。q36 hybrid 按上游设计
-把专家放在主机内存（约 12 GiB pinned），主机内存不足会启动失败。
+**模型文件要求**：必须是完整的 `.gguf`；被截断的文件（大小明显偏小）不要用。qwen35moe 的
+专家大多放在主机内存，**主机内存才是瓶颈**：模型文件 + 系统占用要留出余量，否则会换页掉速
+（实测 23.4 GB 内存上 13–16 GB 的模型可用，但要保证没有其它大程序同时占内存）。
 
 ## 6. 排障表（现象 → 处理）
 
@@ -113,9 +114,9 @@ polystrata 的 HTTP 服务由 Python 提供，`--bootstrap` 检测不到 Python 
 | 报 `PTX was compiled with an unsupported toolchain` | 用了 CUDA 13.4 构建跑 < 8.0 的 GPU | 改用 12.4 构建：`--bootstrap --backend llamacpp` 会自动按计算能力选择 |
 | 首次对话前报 `No module named 'serve'` | venv 依赖未装或工作目录不对 | 重跑 `--bootstrap --backend <id>`；CLI/服务已在源码根作为工作目录启动 |
 | 找不到分词表 `vocab.json` | 分词输出目录差异 | 已兼容 `--out/` 与 `--out/tokenizer/`；若仍失败，检查 `strata_tokenizer.py` 是否产出 vocab.json |
-| 引擎迟迟不就绪（>5s） | 首次冷启动 / Defender 扫描 | 探测超时已放宽到 15s；仍未就绪看 `<根>/logs/` |
+| 引擎迟迟不就绪 | 首次冷启动 / Defender 扫描 / 内存不足在换页 | poly 载入约 3–14 s，启动器最多等 180 s；仍未就绪看 `<根>/logs/engine-<id>.log` |
 | doctor 报 prism `missing` | 无公开下载源 | 手动放置到 `<llama.cpp 根>/engines/prism/llama-server.exe` |
-| doctor 报「有更新」 | 引擎有新发布 | 重跑对应 `--bootstrap` 覆盖更新 |
+| doctor 报「有更新」 | 引擎有新发布 | `--update`（或重跑对应 `--bootstrap`）就地升级 |
 | `--status` 说未运行但服务在跑 | 会话槽位不匹配 | 已修复：状态按所选后端槽位查询；确认 `--backend` 与服务一致 |
 
 ## 7. Agent 约束（务必遵守）
@@ -126,12 +127,13 @@ polystrata 的 HTTP 服务由 Python 提供，`--bootstrap` 检测不到 Python 
 - **不要向上游仓库提 PR**；本项目的引擎补丁发到自己的 fork release。
 - 需要跑回归测试时用**隔离的** `LLAMA_MANAGER_ROOT`，不要污染真实安装：
   `dotnet run --project tests/LlamaManager.Regression -c Release`。
-- 不要做大模型性能扫测（耗时且无必要）；功能验证以「能启停 + 能出 token」为准。
+- 功能验证以「能启停 + 能出 token」为准；性能结论直接引用 `docs/engine-benchmarks.md`，
+  不要在现场重复做大模型扫测（耗时且会干扰用户正在跑的服务）。
 - 改动力度最小化：GUI、CLI、自启必须共用同一套 C# 服务，**不得在 PowerShell 里重复生命周期逻辑**。
 
 ## 8. 验收清单（部署完成的证据）
 
-- [ ] `--doctor` 退出码为 0，且每项引擎显示 `[ok]`
+- [ ] `--doctor` 退出码为 0（`prism` 允许显示 `[manual]`，它没有公开下载源）
 - [ ] `--start --backend <id> --model <gguf>` 后 `--status` 报运行中
 - [ ] `curl http://127.0.0.1:8080/v1/models` 返回模型列表（HTTP 200）
 - [ ] 一次对话请求返回 token（非空 `choices[0].message.content`）

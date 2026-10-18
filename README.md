@@ -65,7 +65,8 @@ dotnet publish gui/LlamaManager/LlamaManager.csproj -c Release -r win-x64 --self
 
 回归测试使用独立配置、模拟服务器和临时端口，无需下载测试模型，不会控制现有模型服务。
 这是控制台测试程序，应使用上述 `dotnet run`，而非 `dotnet test`。
-测试覆盖参数、配置恢复、GGUF 解析、进程身份、取消与并发启动、嵌入服务、日志、测速和命令行。
+测试覆盖参数与 schema 回退、配置恢复、GGUF 解析、路径归一化、模型元信息、进程身份、
+取消与并发启动、嵌入服务、日志与 GPU 诊断、测速和命令行。
 成功后清理临时服务器目录，失败时保留现场；界面渲染图保存在 `logs/ui-regression-*.png`。
 发布包可额外执行：
 

@@ -10,7 +10,8 @@
     线程数扫描，全部用引擎自己回报的 `timings`，附复现命令。
   - **poly 在共同支持的模型上快 1.8–2.6 倍**：原版 Qwen3.6 APEX-I-Mini 70.2 vs 30.4、
     Ornith 64.5 vs 28.4、heretic 64.7 vs 24.5、LFM2.5 51.3 vs 28.6、Gemma 4 QAT 44.8 vs 19.1。
-    poly 显存稳定在 5.0 GB，llama.cpp 常在 5.5–6.0 GB，贴着 6144 的天花板。
+    poly 显存稳定在 4973–5159 MB；llama.cpp 在 4.4–6.0 GB 之间大幅波动（取决于
+    `--n-cpu-moe` 与是否开 MTP），贴着 6144 时速度会断崖下跌。
   - **MTP 的结论要按上下文分开**（这条推翻了我当天早些时候「MTP 几乎没用」的判断）：
     - 4K 上下文、`--n-cpu-moe 30`：**开 MTP 34.9 tok/s，关 31.0**，+13%。
     - 40K 上下文、同一模型：开 28.4、关 31.2，MTP 反而更慢；`--n-cpu-moe 30` + MTP
@@ -32,6 +33,12 @@
     「量化 + 模板」；中文能力没有任何本地实测支撑，别为「中文优化」标签买单。
   - **工具修正**：`tools/docs-gate.ps1` 第 5 项仍按 `llamacpp / strata-upstream / polystrata`
     校验 README，而注册表只剩两个引擎；改为 `llamacpp / polystrata`。
+  - **补测与清理**：新增 `tests/LlamaManager.Regression/CoreUtilitiesRegression.cs`，覆盖
+    参数 schema 的回退规则、路径归一化、模型显示/大小/分类/MoE 判定、llama.cpp 参数投影的
+    往返与「手写 flag 不丢」、Strata 日志解析与 PolyStrata 兼容性判定、分词表路径与端口优先级、
+    后端状态工厂 / 资源估算下限 / 崩溃日志。回归从 61 项增至 **68 项**。
+    顺带删掉 `LlamaCppParameters.IsNumericKey` 与 `NumericKeys`：面板改成按 `ParameterSpec.Min/Max`
+    校验后它们已无调用点，留着会变成第二个「数字键」真相来源。
 
 - **退役 `strata-upstream` 后端**（REQ-112，废弃 REQ-011/REQ-106）：
   - **背景**：三个引擎并存时，`strata-upstream`（`strata.exe`）与 `polystrata`（`strata-poly.exe`）

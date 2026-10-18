@@ -289,6 +289,20 @@ internal static class Program
                 Run(StrataCompatibilityRegression.RunFormats));
             await Test("parameters: VisibleWhen grammar hides, groups and never throws", () =>
                 Run(ParameterVisibilityRegression.Run));
+            await Test("schema: help, tooltip and range hints fall back in order", () =>
+                Run(CoreUtilitiesRegression.RunParameterSpec));
+            await Test("paths: normalization and equality collapse case and separators", () =>
+                Run(CoreUtilitiesRegression.RunPathIdentity));
+            await Test("models: display name, size units, category and MoE detection", () =>
+                Run(CoreUtilitiesRegression.RunModelInfo));
+            await Test("llama.cpp: argument projection round trip keeps hand-written flags", () =>
+                Run(CoreUtilitiesRegression.RunLlamaCppRoundTrip));
+            await Test("strata: GPU summary parsing and PolyStrata compatibility verdicts", () =>
+                Run(CoreUtilitiesRegression.RunStrataDiagnostics));
+            await Test("strata: tokenizer path shape and port precedence", () =>
+                Run(CoreUtilitiesRegression.RunStrataPaths));
+            await Test("backends: status factories, resource estimate floor and crash log", () =>
+                Run(CoreUtilitiesRegression.RunBackendTypesAndDiagnostics));
             await Test("strata: complete GGUF shards, duplicate detection and cancellation", () =>
                 Run(() => StrataCompatibilityRegression.RunShards(_root)));
             await Test("presets: reject a known signature mismatch on identical names", () => Run(() =>

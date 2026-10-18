@@ -171,5 +171,7 @@
   - 已记录：poly 对 llama.cpp 的 1.8–2.6 倍优势、MTP 在 4K（+13%）与 40K（更慢）的分野、
     poly `threads` 最优 8、Gemma 4 选 QAT、APEX 与 Q3 的取舍。
   - 二创生态调研落在 `docs/qwen36-35b-a3b-ecosystem.md`，标明哪些有实测、哪些只是宣传。
+  - 回归覆盖这些纯函数：schema 回退、路径归一化、模型元信息、llama.cpp 参数投影、
+    Strata 日志解析、分词表路径与端口优先级、后端状态工厂与资源估算（共 68 项）。
 
 
