@@ -1,4 +1,4 @@
-# Documentation gate: run before committing doc or behavior changes.
+﻿# Documentation gate: run before committing doc or behavior changes.
 #
 #   pwsh -File tools/docs-gate.ps1
 #

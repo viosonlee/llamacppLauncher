@@ -19,6 +19,9 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
     private bool _loaded, _parsingArgs, _refreshing, _serverStarting, _serverStopping, _embeddingStarting, _speedTesting, _selecting, _scanning;
     private int _updateCount, _statusVersion;
     private string? _lastLogText;
+    // One log line per finished request: the request stamp already seen for the current session.
+    private ServerSession? _loggedSpeedSession;
+    private double _loggedSpeedStamp;
 
     /// <summary>The built-in llama.cpp backend, resolved once from the registry.</summary>
     private static IServerBackend MainBackend => BackendRegistry.ServerById("llamacpp")!;
@@ -105,7 +108,15 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
     private void RefreshLog()
     {
         var backendId = SelectedEngineBackend()?.Descriptor.Id ?? _config.ActiveBackendId;
-        var text = string.Join("\n", LogService.ReadRecent(backendId));
+        string text;
+        try { text = string.Join("\n", LogService.ReadRecent(backendId)); }
+        catch (Exception ex)
+        {
+            // A half-rotated log file must not take the status poll down.
+            text = _lastLogText ?? "";
+            LogService.Write("读取日志失败：" + ex.Message);
+            return;
+        }
         if (text == _lastLogText) return;
         _lastLogText = text;
         LogTextBox.Text = text;

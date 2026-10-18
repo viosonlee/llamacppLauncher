@@ -167,8 +167,30 @@ internal static class UiRegression
                 var tabs = (TabControl)window.FindName("ConfigurationTabs");
                 var content = (FrameworkElement)window.Content;
                 ((TextBlock)window.FindName("SelectedModelText")).Text = "Sakura-Micro-Bonsai-2-GSQ-RCO.gguf";
-                ((TextBlock)window.FindName("LiveSpeedText")).Text = "上次速度：23.29 tok/s · 256 tokens";
+                ((TextBlock)window.FindName("LiveSpeedText")).Text = "生成中（思考中）：45.90 tok/s · 115/300 tokens · 4.8 s";
+                ((TextBlock)window.FindName("ActionStatusText")).Text = "ornith-1.5-35b-a3b-apex-mtp-i-mini.gguf · PID 8848";
                 ((TextBlock)window.FindName("ModelInfoText")).Text = "qwen3 · 64 层 · 原生上下文 32768\n含 TQ1_0 张量；部分引擎的 CUDA 后端不支持此类型，可能回退 CPU。请以加载日志中的 GPU 权重为准。";
+                // The log page renders file content; seed it the way a real session would.
+                LogService.Write("启动 PolyStrata (strata-poly) 服务：strata-poly.exe --serve --model ornith.gguf");
+                LogService.Write("[polystrata] 请求完成：300 tokens · 45.90 tok/s · 8.1 s · 草稿接受 157/180（87%）");
+                var logMethod = typeof(MainWindow).GetMethod("RefreshLog", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                window.Dispatcher.Invoke(() => logMethod.Invoke(window, null));
+                for (var i = 0; i < 10; i++) window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+                // The speed badge has its own grid column, so it must stay inside the window even
+                // when the model name is long: the old single-row top bar clipped it away entirely.
+                content.Measure(new Size(690, 775)); content.Arrange(new Rect(0, 0, 690, 775)); content.UpdateLayout();
+                var speedText = (TextBlock)window.FindName("LiveSpeedText");
+                var speedBadge = (FrameworkElement)window.FindName("LiveSpeedBadge")!;
+                var card = (FrameworkElement)window.FindName("TopBarCard")!;
+                var speedTopLeft = speedBadge.TransformToAncestor(content).Transform(new Point(0, 0));
+                var cardRight = card.TransformToAncestor(content).Transform(new Point(card.ActualWidth, 0)).X;
+                Program.Check(speedBadge.Visibility == Visibility.Visible && speedBadge.ActualWidth > 60,
+                    $"speed badge collapsed or too narrow ({speedBadge.ActualWidth:0}px)");
+                Program.Check(speedTopLeft.X >= card.TransformToAncestor(content).Transform(new Point(0, 0)).X &&
+                    speedTopLeft.X + speedBadge.ActualWidth <= cardRight + 1,
+                    $"speed badge rendered outside the card (x={speedTopLeft.X:0}, width={speedBadge.ActualWidth:0}, card right={cardRight:0})");
+                Program.Check(speedText.ActualWidth >= 40 && speedText.ActualWidth < speedBadge.ActualWidth + 2,
+                    $"speed text did not get its measured width ({speedText.ActualWidth:0}px)");
                 var logTab = tabs.Items.Count - 1;
                 var embeddingTab = tabs.Items.Count - 2;
                 Program.Check(tabs.Items.Count == 5, $"expected 5 nav pages (model/params/advanced/embedding/log), found {tabs.Items.Count}");
@@ -201,6 +223,10 @@ internal static class UiRegression
                     {
                         var viewer = (ScrollViewer)window.FindName("LogScrollViewer");
                         Program.Check(viewer.ActualHeight > 200, $"log tab has no room to show logs: {viewer.ActualHeight}");
+                        // A rendered log page must actually contain the lines it was given: an
+                        // empty box is exactly the "log shows nothing" defect users report.
+                        var logBox = (TextBox)window.FindName("LogTextBox")!;
+                        Program.Check(logBox.Text.Length > 0 && logBox.Text.Contains("请求完成"), "log page rendered empty");
                     }
                 }
                 // The grid guard must run after layout: before Measure/Arrange the

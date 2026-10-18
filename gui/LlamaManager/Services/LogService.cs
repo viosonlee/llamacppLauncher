@@ -23,7 +23,10 @@ public static class LogService
         {
             if (!Readers.TryGetValue(path, out var reader)) Readers[path] = reader = new IncrementalLogReader();
             try { return reader.Read(path).TakeLast(count).ToList(); }
-            catch (IOException) { return []; }
+            // A log that is being truncated, rotated or deleted while we read it must never take the
+            // whole status refresh (and with it the log page) down; the next poll retries.
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException
+                or ArgumentException or System.Security.SecurityException) { return []; }
         }
     }
 

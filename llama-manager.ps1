@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [switch]$Service, [switch]$Start, [switch]$Stop, [switch]$Status,
     [switch]$Open, [switch]$EnableAutostart, [switch]$DisableAutostart,

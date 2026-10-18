@@ -25,22 +25,22 @@
                      CanMaximize="True"/>
 
         <!-- Unified control bar: one engine picker and one set of lifecycle buttons for every engine. -->
-        <ui:Card Grid.Row="1" Padding="14,10" Margin="14,14,14,10"
+        <ui:Card Grid.Row="1" x:Name="TopBarCard" Padding="14,10" Margin="14,14,14,10"
                  HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
 
-                <!-- Row 0: engine + live status -->
+                <!-- Row 0: engine picker and its maintenance actions; device badges on the right. -->
                 <Grid Grid.Row="0">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
 
                     <TextBlock Grid.Column="0" Text="引擎:" FontSize="12" VerticalAlignment="Center"
@@ -60,32 +60,21 @@
                                    ToolTip="一键配置当前引擎所需的环境（下载引擎二进制文件、自动安装 Python 3.12 及依赖 venv），结果见「日志」页。"/>
                     </StackPanel>
 
-                    <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0,0,0">
-                        <Ellipse x:Name="StatusDot" Width="12" Height="12" Fill="{DynamicResource SystemFillColorCriticalBrush}" Margin="0,0,8,0"/>
-                        <TextBlock x:Name="StatusText" Text="已停止" FontSize="13" FontWeight="SemiBold"
-                                   VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                        <TextBlock x:Name="ActionStatusText" Text="选择模型后启动服务" FontSize="11" Margin="10,0,0,0"
-                                   VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                                   TextTrimming="CharacterEllipsis" MaxWidth="300"
-                                   ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
-                        <TextBlock x:Name="LiveSpeedText" Text="" FontSize="13" FontWeight="SemiBold"
-                                   Foreground="{DynamicResource SystemFillColorSuccessBrush}" Margin="14,0,0,0"
-                                   VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="200"
-                                   ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
-                    </StackPanel>
-
-                    <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0">
+                    <!-- Wraps instead of clipping: the window can be as narrow as 640px. -->
+                    <WrapPanel Grid.Column="3" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
                         <TextBlock x:Name="CudaText" Text="CUDA: 检测中..." FontSize="11"
-                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,0,10,0"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="8,0,10,0"
                                    TextTrimming="CharacterEllipsis" MaxWidth="150"
                                    ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
                         <TextBlock x:Name="PortText" Text=":8080" FontSize="11"
                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,0,10,0"/>
                         <TextBlock x:Name="ActionEndpointText" Text="未监听" FontSize="11"
-                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,0,10,0"/>
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,0,10,0"
+                                   TextTrimming="CharacterEllipsis" MaxWidth="150"
+                                   ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
                         <TextBlock x:Name="ApiStatusBadge" Text="API: 离线" FontSize="11" FontWeight="SemiBold"
                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
-                    </StackPanel>
+                    </WrapPanel>
                 </Grid>
 
                 <!-- Row 1: lifecycle buttons (shared by every engine) -->
@@ -113,6 +102,35 @@
                                Content="测速" Click="SpeedTestButton_Click" Margin="4,0,0,0" Padding="10,9"
                                FontSize="13" IsEnabled="False"
                                ToolTip="实测推理速度：首Token延迟(TTFT) 与解码速度(tok/s)"/>
+                </Grid>
+
+                <!-- Row 2: live state and speed. The speed keeps its own column, so a long model
+                     name trims instead of pushing the rate out of the window. -->
+                <Grid Grid.Row="2" Margin="0,9,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <Ellipse Grid.Column="0" x:Name="StatusDot" Width="12" Height="12"
+                             Fill="{DynamicResource SystemFillColorCriticalBrush}" Margin="0,0,8,0"
+                             VerticalAlignment="Center"/>
+                    <TextBlock Grid.Column="1" x:Name="StatusText" Text="已停止" FontSize="13" FontWeight="SemiBold"
+                               VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                    <TextBlock Grid.Column="2" x:Name="ActionStatusText" Text="选择模型后启动服务" FontSize="11"
+                               Margin="10,0,0,0" VerticalAlignment="Center"
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                               TextTrimming="CharacterEllipsis"
+                               ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
+                    <Border Grid.Column="3" x:Name="LiveSpeedBadge" Margin="12,0,0,0" Padding="8,3"
+                            CornerRadius="6" VerticalAlignment="Center"
+                            Background="{DynamicResource ControlFillColorSecondaryBrush}">
+                        <TextBlock x:Name="LiveSpeedText" Text="" FontSize="12.5" FontWeight="SemiBold"
+                                   Foreground="{DynamicResource SystemFillColorSuccessBrush}"
+                                   VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="260"
+                                   ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
+                    </Border>
                 </Grid>
             </Grid>
         </ui:Card>

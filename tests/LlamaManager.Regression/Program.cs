@@ -34,8 +34,22 @@ internal static class Program
             return await PublishedSmoke.RunAsync(args[1]);
         if (args.FirstOrDefault() == "--read-live-speed")
         {
-            var session = ConfigService.ReadConfig().RunningServer ?? throw new InvalidOperationException("没有记录的运行实例。");
-            Console.WriteLine((await new SpeedMonitorService().QuerySpeedAsync(session)).Text);
+            // Optional second argument: the backend id, so a PolyStrata service can be probed too.
+            var config = ConfigService.ReadConfig();
+            var backendId = args.Skip(1).FirstOrDefault() ?? "llamacpp";
+            var slot = backendId == "llamacpp" ? ManagerConfig.SlotMain : backendId;
+            var session = config.GetRunning(slot) ?? throw new InvalidOperationException($"没有记录的 {backendId} 运行实例。");
+            var status = await new SpeedMonitorService().QuerySpeedAsync(session, backendId);
+            Console.WriteLine(status.Text.Length == 0 ? "(无)" : status.Text);
+            if (status.Detail.Length > 0) Console.WriteLine("遥测: " + status.Detail);
+            return 0;
+        }
+        if (args.FirstOrDefault() == "--probe-logs")
+        {
+            // Prints exactly what the log page would render, with per-file line counts.
+            var backendId = args.Skip(1).FirstOrDefault() ?? ConfigService.ReadConfig().ActiveBackendId;
+            foreach (var line in LogService.ReadRecent(backendId))
+                Console.WriteLine(line.StartsWith("────") ? $"\n{line}" : line);
             return 0;
         }
         if (args.FirstOrDefault() == "--check-strata")
@@ -481,6 +495,108 @@ internal static class Program
                 Check(prompt.Kind == SpeedKind.Prompt && prompt.Text.Contains("400"), "prompt progress, got: " + prompt.Text);
                 var done = monitor.Observe(session, "[]", ["I slot print_timing: id 0 | task 8 | eval time = 1000.00 ms / 50 tokens ( 20.00 ms per token, 50.00 tokens per second)"], t0 + TimeSpan.FromSeconds(12));
                 Check(done.Kind == SpeedKind.Completed && done.Text.Contains("上次速度") && done.Text.Contains("50.00 tok/s"), "completed timing, got: " + done.Text);
+            }));
+            await Test("poly metrics: parses live state, finished requests and hardware", () => Run(() =>
+            {
+                const string generating =
+                    """
+                    {"live":{"state":"generating","queued":0,"phase":"thinking","prompt_tokens":23,"prompt_read":null,
+                      "prompt_total":null,"generated":115,"max_tokens":300,"elapsed_s":4.8,"tok_s":45.9,"tok_s_mean":36.4,
+                      "prefill_tok_s_mean":14.6,"tok_s_window_s":2.0},
+                     "requests":[{"time":1792321007.33,"duration_s":8.1,"finish":"length","prompt_tokens":23,"reused":0,
+                      "output_tokens":300,"prompt_total":23,"prompt_read":23,"engine_generated":300,"prompt_ms":1573.7,
+                      "decode_ms":6532.5,"decode_tok_s":45.9,"hit_rate":0.721,"drafts_offered":180,"drafts_accepted":157},
+                      {"time":1792320900.0,"duration_s":1.0,"finish":"stop","prompt_tokens":5,"output_tokens":9,
+                       "decode_tok_s":10.0,"prompt_ms":1.0,"drafts_offered":0,"drafts_accepted":0}],
+                     "engine":{"model":"ornith","max_context":131072,"expert_slots":2162,"expert_cache_mib":2521,
+                      "pool_workers":8,"vram_free_mib":254},
+                     "hardware":{"gpu_util":80,"gpu_mem_used":5368709120,"gpu_mem_total":6442450944,"gpu_temp":52,
+                      "gpu_power":85.6,"cpu":40.0,"ram_used":22548578304,"ram_total":25130119168}}
+                    """;
+                var metrics = PolyMetricsService.Parse(generating);
+                Check(metrics != null, "payload rejected");
+                Check(metrics!.Live.IsGenerating, "generating state missed");
+                Equal("thinking", metrics.Live.Phase);
+                Equal(115, metrics.Live.Generated);
+                Equal(45.9, metrics.Live.TokensPerSecond);
+                var latest = metrics.LastRequest;
+                Check(latest != null && latest.OutputTokens == 300 && Math.Abs(latest.DecodeTokensPerSecond - 45.9) < 1e-9,
+                    "the newest request must win, not the first array entry");
+                Equal(157, latest!.DraftsAccepted);
+                Check(Math.Abs(latest.DraftAcceptance!.Value - 157.0 / 180) < 1e-9, "draft acceptance wrong");
+                Check(metrics.Engine is { ExpertSlots: 2162, ExpertCacheMib: 2521, VramFreeMib: 254, Workers: 8 }, "engine block lost");
+                Check(metrics.Hardware is { GpuMemoryTotal: 6442450944, GpuUtilization: 80, GpuTemperature: 52 }, "hardware block lost");
+                var detail = PolyMetricsService.Describe(metrics);
+                Check(detail.Contains("2,162 专家") && detail.Contains("2,521 MiB") && detail.Contains("5.0/6.0 GiB"),
+                    "telemetry line incomplete: " + detail);
+
+                const string reading =
+                    """{"live":{"state":"reading","phase":"reading the prompt","prompt_tokens":3020,"generated":0,"elapsed_s":0.1,"tok_s":null}}""";
+                var readingState = PolyMetricsService.Parse(reading)!.Live;
+                Check(readingState.IsReading && !readingState.IsGenerating, "reading state missed");
+                Equal(3020, readingState.PromptTokens);
+
+                const string idle =
+                    """{"live":{"state":"idle","queued":0,"phase":null,"prompt_tokens":null,"generated":null,"tok_s":null}}""";
+                var idleState = PolyMetricsService.Parse(idle)!.Live;
+                Check(idleState.IsIdle, "idle state missed");
+                Equal("作答中", PolyMetricsService.DescribePhase("writing"));
+                Equal("思考中", PolyMetricsService.DescribePhase("thinking"));
+                Equal(null, PolyMetricsService.Parse("not json"));
+                Equal(null, PolyMetricsService.Parse("{}"));
+                Equal(null, PolyMetricsService.Parse(""));
+            }));
+            await Test("speed monitor: metrics drive generation, queue and completed speed", () => Run(() =>
+            {
+                var monitor = new SpeedMonitorService();
+                const string generating =
+                    """{"live":{"state":"generating","queued":0,"phase":"writing","prompt_tokens":23,"generated":115,"max_tokens":300,"elapsed_s":4.8,"tok_s":45.9}}""";
+                var active = monitor.ObserveMetrics(PolyMetricsService.Parse(generating)!);
+                Check(active.Kind == SpeedKind.Generating, "kind wrong: " + active.Kind);
+                Check(active.Text.Contains("45.9 tok/s") && active.Text.Contains("115/300") && active.Text.Contains("作答中"),
+                    "live line incomplete: " + active.Text);
+                Check(active.Text.Contains("4.8 s"), "elapsed missing: " + active.Text);
+                Check(active.IsActive, "active flag lost");
+
+                const string queued = """{"live":{"state":"idle","queued":1,"generated":0}}""";
+                var waiting = monitor.ObserveMetrics(PolyMetricsService.Parse(queued)!);
+                Check(waiting.Kind == SpeedKind.Prompt && waiting.Text.Contains("排队"), "queue state missed: " + waiting.Text);
+
+                const string done =
+                    """
+                    {"live":{"state":"idle","generated":null,"tok_s":null},
+                     "requests":[{"time":1792321007.33,"duration_s":8.1,"finish":"stop","prompt_tokens":23,
+                      "output_tokens":300,"decode_tok_s":45.9,"prompt_ms":1573.7,"drafts_offered":180,"drafts_accepted":157}],
+                     "engine":{"expert_slots":2162,"vram_free_mib":254}}
+                    """;
+                var completed = monitor.ObserveMetrics(PolyMetricsService.Parse(done)!);
+                Check(completed.Kind == SpeedKind.Completed, "completed kind wrong: " + completed.Kind);
+                Check(completed.Text.Contains("上次速度：45.90 tok/s") && completed.Text.Contains("300 tokens"),
+                    "completed line incomplete: " + completed.Text);
+                Check(completed.Sample is { } sample && sample.Stamp == 1792321007.33 && sample.Tokens == 300 &&
+                    Math.Abs(sample.Rate - 45.9) < 1e-9, "sample payload lost");
+                Check(completed.Sample!.DraftAcceptance is { } acceptance && Math.Abs(acceptance - 0.87) < 0.005,
+                    "draft acceptance lost");
+                Check(completed.Detail.Contains("2,162 专家"), "detail lost on completed status: " + completed.Detail);
+
+                // A service without a finished request stays quiet instead of reporting stale numbers.
+                var quiet = monitor.ObserveMetrics(PolyMetricsService.Parse("""{"live":{"state":"idle"}}""")!);
+                Check(quiet.Kind == SpeedKind.Idle && quiet.Text.Length == 0, "idle with no history must be empty: " + quiet.Text);
+            }));
+            await Test("session validation: a stale record is not a running service", () => Run(() =>
+            {
+                var current = Process.GetCurrentProcess();
+                var alive = new ServerSession
+                {
+                    ProcessId = current.Id,
+                    StartTimeUtcTicks = current.StartTime.ToUniversalTime().Ticks,
+                    EnginePath = current.MainModule?.FileName ?? "",
+                };
+                Check(ServerService.IsSessionAlive(alive), "the test host must be recognised");
+                Check(!ServerService.IsSessionAlive(alive with { ProcessId = current.Id + 4000 }), "an unknown PID passed");
+                Check(!ServerService.IsSessionAlive(alive with { StartTimeUtcTicks = 1 }), "a mismatched start time passed");
+                Check(!ServerService.IsSessionAlive(null), "null passed");
+                Check(!ServerService.IsSessionAlive(new ServerSession()), "a record without PID passed");
             }));
             await Test("lifecycle: server start truncates the shared stderr log", async () =>
             {

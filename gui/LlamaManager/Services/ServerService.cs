@@ -141,6 +141,17 @@ public static class ServerService
         return null;
     }
 
+    /// <summary>
+    /// Whether the recorded process still exists with the identity it was started with. A stale
+    /// record (crash, reboot, manual kill) must not present itself as a running service.
+    /// </summary>
+    public static bool IsSessionAlive(ServerSession? session)
+    {
+        if (session is not { ProcessId: > 0 }) return false;
+        using var process = ValidateProcess(session);
+        return process != null;
+    }
+
     private static Process? RecoverLegacy(ManagerConfig config, ManagerConfig latest, bool embedding)
     {
         var pid = embedding ? latest.EmbeddingLastPid : latest.LastPid;

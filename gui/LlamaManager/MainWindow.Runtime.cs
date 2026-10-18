@@ -18,6 +18,9 @@ public partial class MainWindow
         var selectedModel = _config.ModelPath;
         try
         {
+            // The log page must never wait on the network probes below: a slow or failing
+            // health check used to freeze it for as long as the failure lasted.
+            RefreshLog();
             var backend = SelectedEngineBackend();
             var backendId = backend?.Descriptor.Id ?? "llamacpp";
             var isLlamacpp = backendId == "llamacpp";
@@ -39,7 +42,10 @@ public partial class MainWindow
             var latest = ConfigService.ReadConfig();
             if (latest.GetRunning(SlotFor(backendId)) != _config.GetRunning(SlotFor(backendId))) return;
 
-            var running = session != null && (!isLlamacpp || process?.HasExited == false);
+            // A recorded session whose process is gone must not present itself as running; the
+            // API check still wins, so an externally relaunched service keeps being shown.
+            var alive = session == null || (isLlamacpp ? process?.HasExited == false : ServerService.IsSessionAlive(session));
+            var running = session != null && (alive || readyTask.Result);
             var ready = running && readyTask.Result;
             var busy = _serverStarting || _serverStopping;
             var brush = (Brush)FindResource(ready ? "SystemFillColorSuccessBrush" : running || busy ? "SystemFillColorCautionBrush" : "SystemFillColorCriticalBrush");
@@ -61,11 +67,31 @@ public partial class MainWindow
             SpeedTestButton.IsEnabled = (_speedTesting || ready && !busy);
             SpeedTestButton.ToolTip = "实测推理速度：首Token延迟(TTFT) 与解码速度(tok/s)";
             LiveSpeedText.Text = running ? status.Text : "";
+            LiveSpeedBadge.Visibility = running && status.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
             LiveSpeedText.Foreground = (Brush)FindResource(status.IsActive ? "AccentFillColorDefaultBrush" : "SystemFillColorSuccessBrush");
-            var gpuSummary = LogService.GetGpuSummary(session!, backendId);
+            // The service's own telemetry (expert cache, VRAM, GPU load) beats a one-off parse of its
+            // startup log, and is the only live source on PolyStrata.
+            var gpuSummary = status.Detail.Length > 0 ? status.Detail : LogService.GetGpuSummary(session!, backendId);
             ProcessInfoText.Text = running
                 ? $"{Path.GetFileName(Path.GetDirectoryName(session!.EnginePath))} · PID {session.ProcessId}" +
                   (!string.IsNullOrEmpty(gpuSummary) ? $" · {gpuSummary}" : "") : "进程: 无";
+
+            // PolyStrata writes no per-request log line, so the finished request the telemetry just
+            // reported is written into the manager log once, on the poll that first sees it.
+            if (status.Sample is { } sample && session != null)
+            {
+                if (_loggedSpeedSession != session) { _loggedSpeedSession = session; _loggedSpeedStamp = 0; }
+                if (_loggedSpeedStamp == 0) _loggedSpeedStamp = sample.Stamp;
+                else if (sample.Stamp != _loggedSpeedStamp)
+                {
+                    _loggedSpeedStamp = sample.Stamp;
+                    var drafts = sample.DraftAcceptance is { } acceptance
+                        ? $" · 草稿接受 {sample.DraftsAccepted}/{sample.DraftsOffered}（{acceptance:P0}）"
+                        : "";
+                    LogService.Write($"[{backendId}] 请求完成：{sample.Tokens:N0} tokens · {sample.Rate:F2} tok/s · {sample.Seconds:F1} s{drafts}");
+                    RefreshLog();
+                }
+            }
             var cuda = cudaTask.Result;
             CudaText.Text = cuda.Available ? "CUDA: 可用（所选引擎）" : "CUDA: 未检测到";
             CudaText.ToolTip = cuda.Text + "\n设备内存为检测时快照；点击刷新可重新检测。";
@@ -192,7 +218,7 @@ public partial class MainWindow
                 }
                 _config = ConfigService.ReadConfig();
                 await server.StartAsync(new EngineStartRequest { Config = _config },
-                    new DelegateLogSink(AppendEngineOutput), _startCancellation.Token);
+                    new DelegateLogSink(msg => { LogService.Write(msg); AppendEngineOutput(msg); }), _startCancellation.Token);
                 _config = ConfigService.ReadConfig();
             }
         }
@@ -221,7 +247,7 @@ public partial class MainWindow
         {
             var session = _config.GetRunning(SlotFor(backend.Descriptor.Id));
             var target = session != null ? LlamaCppBackend.ToEngineSession(session) : new EngineSession { BackendId = backend.Descriptor.Id };
-            await server.StopAsync(target, new DelegateLogSink(AppendEngineOutput));
+            await server.StopAsync(target, new DelegateLogSink(msg => { LogService.Write(msg); AppendEngineOutput(msg); }));
             _config = ConfigService.ReadConfig();
         }
         catch (Exception ex) { ShowError("停止失败", ex); }
@@ -359,7 +385,12 @@ public partial class MainWindow
         finally { AutostartButton.IsEnabled = true; await RefreshStatusAsync(); }
     }
 
-    private void ClearLogButton_Click(object sender, RoutedEventArgs e) => LogTextBox.Text = "";
+    private void ClearLogButton_Click(object sender, RoutedEventArgs e)
+    {
+        LogTextBox.Text = "";
+        // Otherwise the unchanged file content compares equal and the page stays blank.
+        _lastLogText = null;
+    }
 
     private void OpenLogFileButton_Click(object sender, RoutedEventArgs e)
     {

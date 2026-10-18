@@ -18,7 +18,13 @@ namespace LlamaManager.Services;
 /// </summary>
 public enum SpeedKind { Idle, Prompt, Generating, Completed }
 
-public sealed record SpeedStatus(string Text, SpeedKind Kind)
+/// <summary>One finished request, as the engine reported it; <paramref name="Stamp"/> identifies it.</summary>
+public sealed record SpeedSample(double Stamp, double Rate, int Tokens, double Seconds, int DraftsOffered, int DraftsAccepted)
+{
+    public double? DraftAcceptance => DraftsOffered > 0 ? (double)DraftsAccepted / DraftsOffered : null;
+}
+
+public sealed record SpeedStatus(string Text, SpeedKind Kind, SpeedSample? Sample = null, string Detail = "")
 {
     public static readonly SpeedStatus Empty = new("", SpeedKind.Idle);
     public bool IsActive => Kind is SpeedKind.Prompt or SpeedKind.Generating;
@@ -58,13 +64,18 @@ public sealed class SpeedMonitorService
     public async Task<SpeedStatus> QuerySpeedAsync(ServerSession session, string backendId, CancellationToken ct = default)
     {
         Reset(session);
+        var isLlama = string.IsNullOrWhiteSpace(backendId) || backendId == "llamacpp";
+        // PolyStrata publishes its own windowed rate on /metrics; /slots there carries no token
+        // counters, so sampling it would report "prompt processing" for a whole generation.
+        if (!isLlama && await PolyMetricsService.QueryAsync(session.Port, ct).ConfigureAwait(false) is { } metrics)
+            return ObserveMetrics(metrics);
+
         string? json = null;
         try { json = await Http.GetStringAsync($"http://127.0.0.1:{session.Port}/slots", ct).ConfigureAwait(false); }
         catch (HttpRequestException) { }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested) { }
 
         IReadOnlyList<string> timings = [];
-        var isLlama = string.IsNullOrWhiteSpace(backendId) || backendId == "llamacpp";
         var path = isLlama
             ? ConfigService.GetMainStderrPath()
             : Path.Combine(ConfigService.GetManagerRoot(), "logs", $"engine-{backendId}.log");
@@ -104,6 +115,44 @@ public sealed class SpeedMonitorService
         }
 
         return status;
+    }
+
+    /// <summary>
+    /// Reads the service's own telemetry. PolyStrata reports a windowed rate while it writes, the
+    /// prompt it is still reading, and a ring of finished requests with the drafts it accepted, so
+    /// no sampling, clock or log line is involved: the numbers survive a slow or missed UI poll.
+    /// </summary>
+    public SpeedStatus ObserveMetrics(PolyMetrics metrics)
+    {
+        var detail = PolyMetricsService.Describe(metrics);
+        var live = metrics.Live;
+        if (live.IsGenerating)
+        {
+            var rate = live.TokensPerSecond ?? live.MeanTokensPerSecond;
+            var progress = live.MaxTokens > 0
+                ? $"{live.Generated:N0}/{live.MaxTokens:N0} tokens"
+                : $"{live.Generated:N0} tokens";
+            var phase = PolyMetricsService.DescribePhase(live.Phase);
+            var text = rate is { } value
+                ? $"{(phase.Length > 0 ? $"生成中（{phase}）" : "生成中")}：{value:F1} tok/s · {progress}"
+                : $"{(phase.Length > 0 ? $"生成中（{phase}）" : "生成中")}：{progress}";
+            if (live.ElapsedSeconds > 0) text += $" · {live.ElapsedSeconds:F1} s";
+            return new SpeedStatus(text, SpeedKind.Generating, Detail: detail);
+        }
+        if (live.IsReading)
+            return new SpeedStatus($"读取提示词：{live.PromptTokens:N0} tokens…", SpeedKind.Prompt, Detail: detail);
+        if (live.IsQueued)
+            return new SpeedStatus($"排队中：{live.Queued} 个请求…", SpeedKind.Prompt, Detail: detail);
+        if (metrics.LastRequest is { OutputTokens: > 0 } request)
+        {
+            _completed = new Completed(request.DecodeTokensPerSecond, request.OutputTokens, false);
+            var sample = new SpeedSample(request.Time, request.DecodeTokensPerSecond, request.OutputTokens,
+                request.DurationSeconds, request.DraftsOffered, request.DraftsAccepted);
+            return new SpeedStatus(
+                $"上次速度：{request.DecodeTokensPerSecond:F2} tok/s · {request.OutputTokens:N0} tokens",
+                SpeedKind.Completed, sample, detail);
+        }
+        return new SpeedStatus("", SpeedKind.Idle, null, detail);
     }
 
     // Keeping the clock and log input explicit makes request resets and sample rates testable.

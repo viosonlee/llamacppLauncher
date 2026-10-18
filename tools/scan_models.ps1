@@ -1,4 +1,4 @@
-param([string]$Path)
+﻿param([string]$Path)
 $fs = [IO.File]::OpenRead($Path)
 $br = New-Object IO.BinaryReader($fs)
 $null = $br.ReadBytes(4)
