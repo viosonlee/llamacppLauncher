@@ -98,6 +98,10 @@ polystrata 的 HTTP 服务由 Python 提供，`--bootstrap` 检测不到 Python 
 | `polystrata` | PolyStrata MoE | 专家格式由兼容性矩阵判定，见 `docs/engine-plugins.md` |
 
 > 说明：旧 `strata-cyber` 分支及离线 pack 路径（REQ-090）已全面归档只读，不进入注册表；统一使用上述自带 HTTP 服务的原生引擎。
+>
+> 选型与参数依据：[engine-benchmarks.md](engine-benchmarks.md)（两引擎 × 7 个模型的实测矩阵、
+> MTP 在 4K/40K 的分野、poly `threads` 最优值）。二创版本差异见
+> [qwen36-35b-a3b-ecosystem.md](qwen36-35b-a3b-ecosystem.md)。
 
 **模型文件要求**：必须是完整的 `.gguf`；被截断的文件（大小明显偏小）不要用。q36 hybrid 按上游设计
 把专家放在主机内存（约 12 GiB pinned），主机内存不足会启动失败。

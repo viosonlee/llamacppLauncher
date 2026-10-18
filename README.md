@@ -16,6 +16,9 @@ Windows 本地大模型启动器，使用 .NET 8 WPF。
 - **插件后端**：`plugins/<id>/plugin.json`（`schema:1`）声明如何启动自带 HTTP 服务的第三方引擎、
   如何探测就绪、参数表。插件是独立进程，崩溃不影响启动器，新增引擎无需重编译。
 
+两个引擎在真实模型上的对比（解码速度、显存、MTP 开关、线程数）见
+[docs/engine-benchmarks.md](docs/engine-benchmarks.md)。
+
 
 「一键体检」（GUI 按钮 / CLI `--doctor`）检查所有引擎：缺失、可用、有更新（联网比对发布版本）、
 需手动（Prism 无公开下载源）。llama.cpp 下载按 GPU 计算能力选择 CUDA 大版本：

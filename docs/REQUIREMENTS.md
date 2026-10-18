@@ -165,5 +165,11 @@
   - 顺带修正：面板里 `poolWorkers` 从未被发出（只有上游分支写 `--pool-workers`），
     改名为 `threads` 并真正写 `--threads N`。
   - 回归：61 项全部通过；`docs-gate` 通过。
+- REQ-113 已实现（2026-10-18）：引擎与模型的选型、参数默认值必须有实测依据，并记录在
+  `docs/engine-benchmarks.md`（硬件、方法、矩阵、复现命令）。测量以引擎自己回报的
+  `timings` 为准，不用客户端估算；MTP、线程数这类变量必须按上下文分组报告，不能给单一结论。
+  - 已记录：poly 对 llama.cpp 的 1.8–2.6 倍优势、MTP 在 4K（+13%）与 40K（更慢）的分野、
+    poly `threads` 最优 8、Gemma 4 选 QAT、APEX 与 Q3 的取舍。
+  - 二创生态调研落在 `docs/qwen36-35b-a3b-ecosystem.md`，标明哪些有实测、哪些只是宣传。
 
 

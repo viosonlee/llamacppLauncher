@@ -1,4 +1,4 @@
-﻿# Documentation gate: run before committing doc or behavior changes.
+# Documentation gate: run before committing doc or behavior changes.
 #
 #   pwsh -File tools/docs-gate.ps1
 #
@@ -52,8 +52,9 @@ foreach ($doc in 'docs/CHANGELOG-DECISIONS.md', 'AGENTS.md', 'docs/engine-plugin
 }
 
 # 5. README engine ids match the registry ids in code.
+# The registry (gui/LlamaManager/Engines/BackendRegistry.cs) registers exactly these two.
 $readme = Get-Content (Join-Path $root 'README.md') -Raw -Encoding UTF8
-foreach ($id in 'llamacpp', 'strata-upstream', 'polystrata') {
+foreach ($id in 'llamacpp', 'polystrata') {
     if ($readme -notmatch [regex]::Escape($id)) { Fail "README 未描述引擎 $id" }
 }
 

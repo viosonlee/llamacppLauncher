@@ -5,6 +5,34 @@
 
 ## 2026-10-18
 
+- **引擎/模型实测基准，以及 MTP 与线程数的结论**（REQ-108、REQ-113）：
+  - **新增 `docs/engine-benchmarks.md`**：7 个真实模型 × 2 个引擎的横向对比、MTP 开关、
+    线程数扫描，全部用引擎自己回报的 `timings`，附复现命令。
+  - **poly 在共同支持的模型上快 1.8–2.6 倍**：原版 Qwen3.6 APEX-I-Mini 70.2 vs 30.4、
+    Ornith 64.5 vs 28.4、heretic 64.7 vs 24.5、LFM2.5 51.3 vs 28.6、Gemma 4 QAT 44.8 vs 19.1。
+    poly 显存稳定在 5.0 GB，llama.cpp 常在 5.5–6.0 GB，贴着 6144 的天花板。
+  - **MTP 的结论要按上下文分开**（这条推翻了我当天早些时候「MTP 几乎没用」的判断）：
+    - 4K 上下文、`--n-cpu-moe 30`：**开 MTP 34.9 tok/s，关 31.0**，+13%。
+    - 40K 上下文、同一模型：开 28.4、关 31.2，MTP 反而更慢；`--n-cpu-moe 30` + MTP
+      更是掉到 19.4（显存 5969 撞墙）。
+    - 机制：**MTP 固定多吃约 1.2 GB 显存**（5337 − 4161）。4K 时 KV 只占几十 MB，
+      付得起；40K 时 KV 与其它缓冲把余量吃掉，MTP 就把模型推过悬崖。
+    - 用户实测的「35 tok/s」是对的（4K + moe 30 + MTP = 34.9）；当天早些时候我把它
+      归因成「MTP 无用」是错的，真实原因是那次跑在 40K。
+    - 接受率 66–67%（llama.cpp）/ 85–93%（poly），说明这些 APEX-MTP 文件的 MTP 头是
+      训练过的，不是坏头。
+  - **poly 的 `threads` 实测最优为 8**（66.0 tok/s），12 为 63.6，自动（16 线程）约 55，
+    与 llama.cpp 的 `-t 8` 一致：超线程会与显存搬运争内存带宽。代码默认仍是 0（自动），
+    本机配置写 8。
+  - **Gemma 4 选 QAT 而不是后训练量化**：改用 Google 官方 `gemma-4-26B_q4_0-it.gguf`
+    （14.44 GB，QAT 训练时就让权重适应 4-bit），实测 poly 44.8 / llama.cpp 19.1 tok/s。
+    APEX 与 Q3 的关系同理：**同体积选 APEX，同位数基本打平**，不存在「APEX 一定强」。
+  - **新增二创生态调研 `docs/qwen36-35b-a3b-ecosystem.md`**：Ornith 不是 Qwen3.6 的微调
+    （同架构不同权重），真正改权重的只有蒸馏与去审查两类，APEX/GSQ/Tiel/Nail 本质是
+    「量化 + 模板」；中文能力没有任何本地实测支撑，别为「中文优化」标签买单。
+  - **工具修正**：`tools/docs-gate.ps1` 第 5 项仍按 `llamacpp / strata-upstream / polystrata`
+    校验 README，而注册表只剩两个引擎；改为 `llamacpp / polystrata`。
+
 - **退役 `strata-upstream` 后端**（REQ-112，废弃 REQ-011/REQ-106）：
   - **背景**：三个引擎并存时，`strata-upstream`（`strata.exe`）与 `polystrata`（`strata-poly.exe`）
     在 qwen35moe 上完全重叠。用户问「它还有没有存在的必要」，答案用三组事实定下来：
