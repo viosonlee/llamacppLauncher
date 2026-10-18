@@ -57,7 +57,7 @@ public static class LogService
         }
         else
         {
-            var displayName = id == "polystrata" ? "PolyStrata" : id == "strata-upstream" ? "Strata" : id;
+            var displayName = id == "polystrata" ? "PolyStrata" : id;
             files = new[]
             {
                 (ConfigService.GetLogPath(), "管理器"),
@@ -106,12 +106,6 @@ public static class LogService
             if (match.Success)
             {
                 experts = $"{match.Groups["vram"].Value}/{match.Groups["total"].Value} 专家在显存 ({match.Groups["gib"].Value} GiB)";
-                continue;
-            }
-            var upstreamMatch = Regex.Match(line, @"hybrid experts:\s*(?<vram>\d+)\s+of\s+(?<total>\d+)\s+per layer in VRAM\s*\((?<gib>[\d.]+)\s*GiB\)");
-            if (upstreamMatch.Success)
-            {
-                experts = $"{upstreamMatch.Groups["vram"].Value}/{upstreamMatch.Groups["total"].Value} 专家/层在显存 ({upstreamMatch.Groups["gib"].Value} GiB)";
                 continue;
             }
             var cacheMatch = Regex.Match(line, @"the expert cache\s+\d+\s*->\s*(?<vram>\d+)\s+experts\s*\((?<gib>[\d.]+)\s*GiB\)");

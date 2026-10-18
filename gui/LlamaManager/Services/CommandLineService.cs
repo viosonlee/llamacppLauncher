@@ -17,10 +17,10 @@ public static class CommandLineService
     public static async Task<int> RunAsync(string[] args, TextWriter output, CancellationToken ct = default)
     {
         var command = args.FirstOrDefault()?.ToLowerInvariant();
-        var supported = new[] { "--service", "--start", "--stop", "--status", "--open", "--enable-autostart", "--disable-autostart", "--print-preset", "--bootstrap", "--doctor", "--help" };
+        var supported = new[] { "--service", "--start", "--stop", "--status", "--open", "--enable-autostart", "--disable-autostart", "--print-preset", "--bootstrap", "--update", "--doctor", "--help" };
         if (command == "--help")
         {
-            await output.WriteLineAsync("LlamaManager --start|--service|--stop|--status|--open|--print-preset|--bootstrap [--all]|--doctor [--offline]|--enable-autostart|--disable-autostart [--model PATH] [--port N] [--backend ID] [--auto-bootstrap]");
+            await output.WriteLineAsync("LlamaManager --start|--service|--stop|--status|--open|--print-preset|--bootstrap [--all]|--update [--all]|--doctor [--offline]|--enable-autostart|--disable-autostart [--model PATH] [--port N] [--backend ID] [--auto-bootstrap]");
             return 0;
         }
         if (command == null || !supported.Contains(command)) throw new ArgumentException("未知命令；使用 --help 查看。");
@@ -117,6 +117,28 @@ public static class CommandLineService
                 }
                 var bootstrapSteps = await BootstrapService.RunAsync(backendId, new DelegateLogSink(LogService.Write), ct);
                 return bootstrapSteps.Any(s => !s.Ok) ? 1 : 0;
+            case "--update":
+            {
+                var ids = bootstrapAll ? new[] { "polystrata" } : new[] { backendId };
+                var failed = false;
+                foreach (var id in ids)
+                {
+                    try
+                    {
+                        var result = await EngineAcquisitionService.UpdateAsync(id, new DelegateLogSink(LogService.Write), ct);
+                        await output.WriteLineAsync(result.Updated
+                            ? $"{id}: 已更新 {result.InstalledVersion} → {result.LatestVersion}"
+                            : $"{id}: 已是最新（{result.LatestVersion ?? result.InstalledVersion}）");
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception ex)
+                    {
+                        failed = true;
+                        await output.WriteLineAsync($"{id}: 更新失败 — {ex.Message}");
+                    }
+                }
+                return failed ? 1 : 0;
+            }
             case "--doctor":
             {
                 var checkUpdates = !args.Contains("--offline", StringComparer.OrdinalIgnoreCase);

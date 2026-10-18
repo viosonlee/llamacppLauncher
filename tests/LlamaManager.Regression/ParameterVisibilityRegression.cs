@@ -11,7 +11,7 @@ internal static class ParameterVisibilityRegression
 {
     public static void Run()
     {
-        var empty = ParameterContext.For("upstream");
+        var empty = ParameterContext.For("poly");
 
         // Absent and literal conditions are always visible; this keeps schema:1 plugins working.
         Check(ParameterVisibility.Evaluate(null, empty), "null condition must be visible");
@@ -20,12 +20,12 @@ internal static class ParameterVisibilityRegression
         Check(ParameterVisibility.Evaluate("true", empty), "'true' must be visible");
         Check(!ParameterVisibility.Evaluate("false", empty), "'false' must be hidden");
 
-        // Profile identity drives the upstream/poly split.
-        Check(ParameterVisibility.Evaluate("profile==upstream", empty), "profile==upstream on upstream");
-        Check(!ParameterVisibility.Evaluate("profile==upstream", ParameterContext.For("poly")),
-            "profile==upstream must be false for poly");
-        Check(ParameterVisibility.Evaluate("profile==poly", ParameterContext.For("poly")), "profile==poly on poly");
-        Check(ParameterVisibility.Evaluate("profile != upstream", ParameterContext.For("poly")),
+        // Profile identity drives the per-engine split.
+        Check(ParameterVisibility.Evaluate("profile==poly", empty), "profile==poly on poly");
+        Check(!ParameterVisibility.Evaluate("profile==poly", ParameterContext.For("llamacpp")),
+            "profile==poly must be false for llama.cpp");
+        Check(ParameterVisibility.Evaluate("profile==llamacpp", ParameterContext.For("llamacpp")), "profile==llamacpp on llama.cpp");
+        Check(ParameterVisibility.Evaluate("profile != poly", ParameterContext.For("llamacpp")),
             "whitespace around the operator is optional");
         Check(ParameterVisibility.Evaluate("profile = poly", ParameterContext.For("poly")),
             "a single '=' is accepted as equality");
@@ -41,32 +41,32 @@ internal static class ParameterVisibilityRegression
             "model.mtp is false for a model without an MTP head");
 
         // Parameter values are compared numerically whenever both sides look like numbers.
-        var slots = Values(("expertSlots", "16"));
-        Check(ParameterVisibility.Evaluate("param.expertSlots>0", new ParameterContext("upstream", null, slots)),
-            "a positive expert slot count is visible");
-        Check(!ParameterVisibility.Evaluate("param.expertSlots>0", new ParameterContext("upstream", null, Values(("expertSlots", "0")))),
-            "zero expert slots hides the dependent field");
-        Check(!ParameterVisibility.Evaluate("param.expertSlots>0", new ParameterContext("upstream", null, Values())),
+        var slots = Values(("tailSkip", "6"));
+        Check(ParameterVisibility.Evaluate("param.tailSkip>0", new ParameterContext("poly", null, slots)),
+            "a positive tail-skip is visible");
+        Check(!ParameterVisibility.Evaluate("param.tailSkip>0", new ParameterContext("poly", null, Values(("tailSkip", "0")))),
+            "zero tail-skip hides the dependent field");
+        Check(!ParameterVisibility.Evaluate("param.tailSkip>0", new ParameterContext("poly", null, Values())),
             "an unset parameter behaves like zero");
-        Check(ParameterVisibility.Evaluate("param.context>=4096", new ParameterContext("upstream", null, Values(("context", "8192")))),
+        Check(ParameterVisibility.Evaluate("param.context>=4096", new ParameterContext("poly", null, Values(("context", "8192")))),
             "numeric comparison must not compare as strings");
-        Check(!ParameterVisibility.Evaluate("param.context>=4096", new ParameterContext("upstream", null, Values(("context", "512")))),
+        Check(!ParameterVisibility.Evaluate("param.context>=4096", new ParameterContext("poly", null, Values(("context", "512")))),
             "512 is below 4096");
 
         // Boolean structure.
-        Check(ParameterVisibility.Evaluate("profile==upstream && param.expertSlots>0",
-            new ParameterContext("upstream", null, slots)), "&& combines two true terms");
-        Check(!ParameterVisibility.Evaluate("profile==poly && param.expertSlots>0",
-            new ParameterContext("upstream", null, slots)), "&& is false when one term is false");
-        Check(ParameterVisibility.Evaluate("profile==poly || param.expertSlots>0",
-            new ParameterContext("upstream", null, slots)), "|| is true when one term is true");
-        Check(ParameterVisibility.Evaluate("!(profile==poly)", empty), "! negates");
-        Check(ParameterVisibility.Evaluate("(profile==poly || profile==upstream) && true", empty),
+        Check(ParameterVisibility.Evaluate("profile==poly && param.tailSkip>0",
+            new ParameterContext("poly", null, slots)), "&& combines two true terms");
+        Check(!ParameterVisibility.Evaluate("profile==llamacpp && param.tailSkip>0",
+            new ParameterContext("poly", null, slots)), "&& is false when one term is false");
+        Check(ParameterVisibility.Evaluate("profile==poly || param.tailSkip>0",
+            new ParameterContext("poly", null, slots)), "|| is true when one term is true");
+        Check(ParameterVisibility.Evaluate("!(profile==poly)", ParameterContext.For("llamacpp")), "! negates");
+        Check(ParameterVisibility.Evaluate("(profile==poly || profile==llamacpp) && true", empty),
             "parentheses group terms");
 
         // A broken spec must hide the field, never throw.
         Check(!ParameterVisibility.Evaluate("profile==", empty), "a trailing operator must not throw");
-        Check(!ParameterVisibility.Evaluate("(profile==upstream", empty), "an unbalanced parenthesis must not throw");
+        Check(!ParameterVisibility.Evaluate("(profile==poly", empty), "an unbalanced parenthesis must not throw");
         Check(!ParameterVisibility.Evaluate("unknown.variable", empty), "an unknown variable must not throw");
         Check(!ParameterVisibility.Evaluate("!!", empty), "a bare negation must not throw");
     }

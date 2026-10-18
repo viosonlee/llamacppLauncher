@@ -311,13 +311,16 @@ internal static class UiRegression
                 Program.Check(window.FindName("EngineParamSearchBox") is Wpf.Ui.Controls.TextBox,
                     "parameter search box missing");
                 Program.Check(window.FindName("EngineResetAllButton") != null, "restore-all button missing");
-                var strataBackend = LlamaManager.Engines.BackendRegistry.ServerById("strata-upstream")!;
+                var strataBackend = LlamaManager.Engines.BackendRegistry.ServerById("polystrata")!;
                 Program.Check(strataBackend.Parameters.Count >= 8,
                     $"strata panel declares only {strataBackend.Parameters.Count} parameters");
                 Program.Check(strataBackend.Parameters.Any(p => p.Advanced), "no advanced parameters to fold");
                 Program.Check(strataBackend.Parameters.All(p => !string.IsNullOrWhiteSpace(p.EffectiveHelp)),
                     "a parameter has no help text for its '?' button");
-                Program.Check(strataBackend.Parameters.Any(p => p.VisibleWhen != null),
+                // Model-dependent fields live on llama.cpp's panel (MoE offload, MTP, draft model);
+                // that is where the VisibleWhen vocabulary has to stay wired to real specs.
+                var llamaBackend = LlamaManager.Engines.BackendRegistry.ServerById("llamacpp")!;
+                Program.Check(llamaBackend.Parameters.Any(p => p.VisibleWhen != null),
                     "no parameter uses VisibleWhen, so model-dependent fields would always show");
                 // Filtering must hide rows without destroying them.
                 var search = (Wpf.Ui.Controls.TextBox)window.FindName("EngineParamSearchBox")!;

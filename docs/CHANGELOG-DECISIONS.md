@@ -3,6 +3,59 @@
 按时间倒序记录影响需求或架构的变更。每条引用需求编号（见 docs/REQUIREMENTS.md）。
 普通修复不记；**改变行为、需求或取舍的**才记。
 
+## 2026-10-18
+
+- **退役 `strata-upstream` 后端**（REQ-112，废弃 REQ-011/REQ-106）：
+  - **背景**：三个引擎并存时，`strata-upstream`（`strata.exe`）与 `polystrata`（`strata-poly.exe`）
+    在 qwen35moe 上完全重叠。用户问「它还有没有存在的必要」，答案用三组事实定下来：
+    - **能力**：`strata.exe --families` 只有 `qwen4exp qwen35moe`；`strata-poly` 支持
+      qwen35moe / glm5-next / gemma4 / deepseek4 / lfm2moe。上游唯一独有的是 `qwen4exp`
+      （Qwen3.8-Flash-Next），而它最小的 Coder IQ1_M 主分片 29.6 GB、官方写明「fits a PC with
+      32 GB of RAM」，本机 23.4 GB 内存 + 6 GB 显存根本装不下（且 Coder 版砍掉一半专家，
+      中文能力退化）。
+    - **速度**：同一 Ornith-1.5-35B-A3B，上游 35.1 tok/s、预热 27.4–88.4 s；poly 46.0 tok/s
+      （tail 0）/ 49.8（tail 6）、载入 3.1 s。
+    - **显存控制**：上游对 `--tail-skip` 只打印 `ignoring`，也没有 `--kv`/`--vram-reserve-mib`；
+      poly 三者齐备，专家缓存还按空闲显存动态伸缩（日志 `2162 -> 2069 experts`）。
+  - **决策**：删除后端，而不是留着「以后可能用」。理由：真到有 32 GB 以上内存那天，该装的是
+    PolyStrata 的完整主引擎（同一份 qwen4exp 代码，版本更新、带 `--kv int8`/`--spec`/
+    `--resident-experts`），而不是这个 0.1.44.1 的定制分支。
+  - **移除**：`StrataEngineProfile.UpstreamProfile` 与 `VerifiesFamilies` 探测、注册表条目、
+    `EngineCatalog.StrataPlan`/`StrataRepo`/`StrataSourceRepo`/`StrataSourceBranch`/`BranchArchive`、
+    采集与 bootstrap/doctor/CLI 的 upstream 分支、面板字段 `expertSlots`/`mtpDrafts`/`prefill`/
+    `maxNew`、`--expert-slots`/`--mtp`/`--prefill`/`--max-new`/`--pool-workers` 的 runconfig 分支、
+    `LogService` 的 `hybrid experts:` 正则，以及对应的 4 项回归断言。
+  - **保留**：`StrataService`/`StrataPackService`/`StrataCompatibility`（分词表准备与
+    `ProcessPluginBackend` 复用）、`StrataConfig` 旧配置块（polystrata 的回退来源）。
+  - **顺带修正**：面板上的 `poolWorkers` 从来没被写进命令行（只有上游分支写 `--pool-workers`，
+    poly 分支没写），等于一个假控件。改为 `threads`，真正写 `--threads N`（poly 的等价选项是
+    「显存外专家在 CPU 上计算用的线程数」）。
+  - **现场**：删掉 `engines/strata-upstream`（806.2 MB）、`venvs/strata-upstream`（180.4 MB）、
+    `data/strata-upstream`（19.2 MB），共 1005.8 MB；配置里的 `Engines.strata-upstream` 段一并清除，
+    备份在 `%TEMP%\config-before-upstream-removal-*.json`。
+  - **验证**：`dotnet build` 0 警告 0 错误；回归 61 项全过（原 62 项减去已失去前提的
+    「挂起引擎探测」一项）；`tools/docs-gate.ps1` 通过。
+
+- **引擎更新能力、polystrata 的 kv 选项，以及上下文/端口的实测结论**（REQ-110、REQ-111）：
+  - **体检报「有更新」却无法执行**：`BootstrapService` 只在引擎或 `serve/server.py` 缺失时调用
+    `AcquireAsync`，已安装的引擎永远走不到下载分支，所以体检里的「运行初始化环境更新」是一句空话。
+    新增 `EngineAcquisitionService.UpdateAsync`：读 `BUILD.json` 得到本机版本，用
+    `DoctorService.IsOutdated` 与最新可用发布比较，落后才重新下载；`--bootstrap` 在引擎已存在时
+    也走这条路径，并新增 CLI `--update`。实测把 polystrata 从 0.1.44.1 更新到 v0.1.45-poly.1。
+  - **polystrata 的 `--kv` 无法从界面设置**：`BuildRunConfig` 从未写这个参数。面板新增 `kv`
+    （默认 fp16 / q8_0），空值不写命令行。注意它只对 qwen35moe 家族有效，其它模型启动会被拒绝。
+    实测 53,127 token 提示词：fp16 解码 40.4 tok/s、q8_0 37.6 tok/s —— 这个长度没有收益，
+    省下的 KV 显存不足以让专家缓存多留一层；收益只在 KV 真正挤压缓存时出现。
+  - **上下文可以放大**：polystrata 的 KV 按需增长（`--kv-whole` 默认关），所以 `--max-context`
+    配大本身不占显存。实测 13,819 / 28,879 / 93,340 token 的提示词：填充 1129 / 970 / 756 tok/s，
+    解码 50.5 / 51.3 / 32.2 tok/s，显存始终约 5.0 GB。40K 很轻松，100K 可用但解码降到约 32。
+  - **三个引擎统一端口**：`servePort` 与 llama.cpp 的 `Port` 都设为 8080。实测三个引擎都支持
+    `/v1/chat/completions`、`/v1/messages`（Anthropic）与 `/v1/responses`，agent 工具配一次即可；
+    只有 `/v1/status` 是 strata 家族独有。
+  - **修正 `tailSkip` 的说明**：原面板文案写成「末尾若干层改用另一条执行路径」，与引擎实际语义
+    不符。正确语义是「显存外、且在一个窗口内每个 token 都排在第 N+1 位之后的专家被跳过」，
+    跳过的是命中率最低的专家，更快但答案会略有变化；项目自带安装脚本给 Qwen3.6 家族设 6。
+
 ## 2026-10-17
 
 - **llama.cpp 参数面板迁到 schema，删除手写控件块**（REQ-109）：

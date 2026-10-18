@@ -173,7 +173,7 @@ public static class ParameterVisibility
         {
             var key = name[6..];
             // A parameter the panel has not filled in yet behaves like an unset number, so
-            // "param.expertSlots>0" stays false instead of comparing against an empty string.
+            // "param.tailSkip>0" stays false instead of comparing against an empty string.
             value = context.Values.TryGetValue(key, out var current) ? current ?? "" : "0";
             return true;
         }

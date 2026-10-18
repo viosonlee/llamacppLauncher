@@ -53,7 +53,6 @@ internal static class DoctorRegression
         Check(report.Findings.Any(f => f.Engine == "llamacpp"), "llamacpp finding missing");
         var python = report.Findings.Single(f => f.Engine == "python");
         Check(python.Status is "ok" or "missing", "python finding missing from report");
-        Check(report.Findings.Any(f => f.Engine == "strata-upstream"), "strata finding missing");
         Check(report.Findings.Any(f => f.Engine == "polystrata"), "polystrata finding missing");
 
         // A healthy llama.cpp with a fake engine binary flips the finding to ok.
@@ -63,44 +62,42 @@ internal static class DoctorRegression
         Check(!healthy.Findings.Any(f => f.Status == "outdated"), "offline check reported updates");
 
         // Update checking through the seam: BUILD.json version newer than the (faked) remote.
-        // A healthy strata engine with a BUILD.json: seed a full runtime copy (the apphost needs
-        // its DLLs beside it), a serve tree and a fake python, then check update detection.
-        var engineDir = Path.Combine(root, "engines", "strata-upstream", "engine");
-        Fixtures.CopyRuntime(engineDir);
-        File.Copy(Environment.ProcessPath!, Path.Combine(engineDir, "strata.exe"), true);
+        // A healthy strata engine with a BUILD.json: seed the engine folder, a serve tree and a
+        // fake python, then check update detection.
+        var package = Path.Combine(root, "engines", "polystrata");
+        var engineDir = Path.Combine(package, "engine-poly");
+        Directory.CreateDirectory(engineDir);
+        File.WriteAllText(Path.Combine(engineDir, "strata-poly.exe"), "# fixture\n");
         File.WriteAllText(Path.Combine(engineDir, "BUILD.json"),
-            """{ "version": "0.1.44.1-apex.2", "archs": [75] }""");
-        var source = Path.Combine(root, "engines", "strata-upstream", "serve");
+            """{ "version": "0.1.44.1-poly.2", "archs": [75] }""");
+        var source = Path.Combine(package, "serve");
         Directory.CreateDirectory(source);
         File.WriteAllText(Path.Combine(source, "server.py"), "# fixture\n");
         var config = new LlamaManager.Models.ManagerConfig();
-        config.Engines["strata-upstream"] = new LlamaManager.Models.EngineSettings
+        config.Engines["polystrata"] = new LlamaManager.Models.EngineSettings
         {
-            Parameters = new Dictionary<string, string> { ["packageRoot"] = Path.Combine(root, "engines", "strata-upstream") },
+            Parameters = new Dictionary<string, string> { ["packageRoot"] = package },
         };
-        ConfigService.SaveEngineSettings(config, "strata-upstream", config.Engines["strata-upstream"]);
+        ConfigService.SaveEngineSettings(config, "polystrata", config.Engines["polystrata"]);
         var fakePython = Path.Combine(root, "fake-python.cmd");
         File.WriteAllText(fakePython, "@echo off\r\necho fake python 3.12\r\n");
-        config.Engines["strata-upstream"].Parameters["pythonPath"] = fakePython;
-        ConfigService.SaveEngineSettings(config, "strata-upstream", config.Engines["strata-upstream"]);
-        // Warm the fresh engine copy: its first launch pays antivirus scanning + cold JIT, which
-        // can exceed the probe's 5 s timeout (the same flake fixed in StrataBackendRegression).
-        StrataBackend.EngineSupportsQwen35(Path.Combine(engineDir, "strata.exe"));
+        config.Engines["polystrata"].Parameters["pythonPath"] = fakePython;
+        ConfigService.SaveEngineSettings(config, "polystrata", config.Engines["polystrata"]);
 
-        var oldRemote = new ReleaseInfo("v0.1.44.1-apex.1", []);
+        var oldRemote = new ReleaseInfo("v0.1.44.1-poly.1", []);
         DoctorService.LatestRelease = (_, _) => Task.FromResult<ReleaseInfo?>(oldRemote);
         var current = await DoctorService.RunAsync(checkUpdates: true, CancellationToken.None);
-        Check(!current.Findings.Where(f => f.Engine == "strata-upstream").Any(f => f.Status == "outdated"),
+        Check(!current.Findings.Where(f => f.Engine == "polystrata").Any(f => f.Status == "outdated"),
             "local newer than remote reported outdated");
 
-        var newRemote = new ReleaseInfo("v0.1.44.1-apex.9", []);
+        var newRemote = new ReleaseInfo("v0.1.44.1-poly.9", []);
         DoctorService.LatestRelease = (_, _) => Task.FromResult<ReleaseInfo?>(newRemote);
         var stale = await DoctorService.RunAsync(checkUpdates: true, CancellationToken.None);
-        var finding = stale.Findings.FirstOrDefault(f => f.Engine == "strata-upstream" && f.Status == "outdated");
+        var finding = stale.Findings.FirstOrDefault(f => f.Engine == "polystrata" && f.Status == "outdated");
         if (finding == null)
-            throw new Exception("no outdated finding; strata-upstream states: " +
-                string.Join(" | ", stale.Findings.Where(f => f.Engine == "strata-upstream").Select(f => $"{f.Status}: {f.Detail}")));
-        Check(finding.Detail.Contains("0.1.44.1-apex.2") && finding.Detail.Contains("0.1.44.1-apex.9"),
+            throw new Exception("no outdated finding; polystrata states: " +
+                string.Join(" | ", stale.Findings.Where(f => f.Engine == "polystrata").Select(f => $"{f.Status}: {f.Detail}")));
+        Check(finding.Detail.Contains("0.1.44.1-poly.2") && finding.Detail.Contains("0.1.44.1-poly.9"),
             "outdated detail does not name both versions");
 
         // A network failure degrades to a local-only report instead of crashing.

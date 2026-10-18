@@ -40,9 +40,8 @@
 | llama.cpp 根 | 含 `llama-server.exe` 的目录（自安装根向上最多 4 层查找） |
 | llama.cpp 引擎 | `<llama.cpp 根>/llama-server.exe` |
 | Prism 引擎 | `<llama.cpp 根>/engines/prism/llama-server.exe`（**无公开下载源，需手动放置**） |
-| strata-upstream 引擎 | `<根>/engines/strata-upstream/engine/strata.exe` + `serve/` |
 | polystrata 引擎 | `<根>/engines/polystrata/engine-poly/strata-poly.exe` + `serve/` |
-| Python venv | `<根>/venvs/strata-upstream/`、`<根>/venvs/polystrata/` |
+| Python venv | `<根>/venvs/polystrata/` |
 | 配置与日志 | `<根>/config.json`、`<根>/logs/` |
 
 ## 3. 部署步骤（CLI，逐条执行并核对退出码）
@@ -53,13 +52,13 @@
 
 # 2) 装引擎（一条命令全自动配置所有引擎，或按需指定单个 backend；重复执行是幂等的）
 .\LlamaManager.exe --bootstrap --all
-# 或单独指定：.\LlamaManager.exe --bootstrap --backend strata-upstream
+# 或单独指定：.\LlamaManager.exe --bootstrap --backend polystrata
 
 # 3) 再次体检（这次联网，确认引擎版本）
 .\LlamaManager.exe --doctor
 
 # 4) 起服务（可用 --auto-bootstrap 保证环境自动就绪；模型用绝对路径）
-.\LlamaManager.exe --start --auto-bootstrap --backend strata-upstream --model "D:\models\APEX-I-Mini.gguf" --port 8080
+.\LlamaManager.exe --start --auto-bootstrap --backend polystrata --model "D:\models\APEX-I-Mini.gguf" --port 8080
 
 # 5) 运行期管理
 .\LlamaManager.exe --status      # 人读状态；非零退出码表示未运行
@@ -79,7 +78,7 @@
 
 ## 4. Python 自动安装（REQ-100）
 
-strata-upstream 与 polystrata 的 HTTP 服务由 Python 提供，`--bootstrap` 检测不到 Python 3.10+ 时会
+polystrata 的 HTTP 服务由 Python 提供，`--bootstrap` 检测不到 Python 3.10+ 时会
 **自动安装**，无需人工：
 
 1. **winget 优先**：`winget install --id Python.Python.3.12 --exact --scope user --silent
@@ -96,7 +95,6 @@ strata-upstream 与 polystrata 的 HTTP 服务由 Python 提供，`--bootstrap` 
 | 引擎 | 适用模型 | 说明 |
 |---|---|---|
 | `llamacpp` | 通用 GGUF（含 Prism 三元量化） | Prism 模型需先手动放置 Prism 引擎，否则回退到普通 llama.cpp |
-| `strata-upstream` | qwen35moe 家族（APEX 系列，含 MTP） | 内置多架构补丁引擎（sm_75/86/89/120 + PTX） |
 | `polystrata` | PolyStrata MoE | 专家格式由兼容性矩阵判定，见 `docs/engine-plugins.md` |
 
 > 说明：旧 `strata-cyber` 分支及离线 pack 路径（REQ-090）已全面归档只读，不进入注册表；统一使用上述自带 HTTP 服务的原生引擎。
@@ -119,7 +117,7 @@ strata-upstream 与 polystrata 的 HTTP 服务由 Python 提供，`--bootstrap` 
 ## 7. Agent 约束（务必遵守）
 
 - **不要停掉用户正在运行的真实模型服务**去做测试或重装。
-- **不要在已归档的 `cyber` 分支上开发**：`cyber` 分支已只读归档；所有 Strata/APEX 变更统一在 `apex-on-strata` 的 `upstream` 分支维护。
+- **不要在已归档的 `cyber` 分支上开发**：`cyber` 分支已只读归档；`apex-on-strata` 的 `upstream` 分支随 `strata-upstream` 引擎一并归档（2026-10-18），Strata 家族现在只维护 `polystrata`。
 - **不要提交**用户配置、日志、下载的引擎、模型、构建产物。
 - **不要向上游仓库提 PR**；本项目的引擎补丁发到自己的 fork release。
 - 需要跑回归测试时用**隔离的** `LLAMA_MANAGER_ROOT`，不要污染真实安装：

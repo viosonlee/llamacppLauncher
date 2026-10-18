@@ -27,7 +27,7 @@ public static class BootstrapService
             return backendId switch
             {
                 "llamacpp" => await BootstrapLlamaCppAsync(log, ct).ConfigureAwait(false),
-                "strata-upstream" or "polystrata" => await BootstrapStrataAsync(backendId, log, ct).ConfigureAwait(false),
+                "polystrata" => await BootstrapStrataAsync(backendId, log, ct).ConfigureAwait(false),
                 _ => await BootstrapPluginAsync(backendId, log, ct).ConfigureAwait(false),
             };
         }
@@ -38,7 +38,7 @@ public static class BootstrapService
     public static async Task<IReadOnlyDictionary<string, IReadOnlyList<StepResult>>> RunAllAsync(ILogSink log, CancellationToken ct = default)
     {
         var results = new Dictionary<string, IReadOnlyList<StepResult>>();
-        foreach (var id in new[] { "llamacpp", "strata-upstream", "polystrata" })
+        foreach (var id in new[] { "llamacpp", "polystrata" })
         {
             log.Write($"\n=== 开始配置引擎环境：{id} ===");
             try
@@ -85,14 +85,14 @@ public static class BootstrapService
     }
 
     /// <summary>
-    /// Strata family (strata-upstream / polystrata): find the engine + source tree, download them
+    /// Strata family (polystrata): find the engine + source tree, download them
     /// when missing, then create a venv and install the pinned packages the HTTP service needs.
     /// The dependency list is read from the engine's own requirements.txt.
     /// </summary>
     private static async Task<IReadOnlyList<StepResult>> BootstrapStrataAsync(string backendId, ILogSink log, CancellationToken ct)
     {
         var steps = new List<StepResult>();
-        var profile = backendId == "polystrata" ? StrataBackend.PolyProfile : StrataBackend.UpstreamProfile;
+        var profile = StrataBackend.PolyProfile;
         var config = ConfigService.ReadConfig();
 
         var engine = StrataBackend.ResolveEngine(config, profile);
@@ -109,6 +109,24 @@ public static class BootstrapService
             }
             catch (OperationCanceledException) { throw; }
             catch (Exception ex) { log.Write("下载失败：" + ex.Message); }
+        }
+        else
+        {
+            // Installed, but possibly behind the published release: the doctor reports that as
+            // "outdated", so bootstrap has to act on it instead of silently doing nothing.
+            try
+            {
+                var update = await EngineAcquisitionService.UpdateAsync(backendId, log, ct).ConfigureAwait(false);
+                if (update.Updated)
+                {
+                    config = ConfigService.ReadConfig();
+                    engine = StrataBackend.ResolveEngine(config, profile);
+                    server = StrataBackend.ResolveServer(config, profile);
+                    log.Write($"{profile.DisplayName}：已更新到 {update.LatestVersion}。");
+                }
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex) { log.Write("检查更新失败：" + ex.Message); }
         }
         steps.Add(engine != null
             ? new StepResult(profile.EngineExeName, true, engine)

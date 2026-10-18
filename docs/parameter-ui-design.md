@@ -3,6 +3,11 @@
 状态：设计草案（未实施）　目标版本：vNext　关联：REQ-032、REQ-106
 代码基线：`gui/LlamaManager/MainWindow.Engine.cs`、`Engines/ParameterSpec.cs`、`Engines/StrataBackend.cs`
 
+> **历史文档说明（2026-10-18）**：本文记录 2026-10-17 的设计基线，其中 `strata-upstream`
+> 一列/一节已随该后端退役而失效（见 `docs/CHANGELOG-DECISIONS.md` 2026-10-18「退役
+> strata-upstream 后端」与 REQ-112）。方案本身已按 P1–P3 实施完毕；现行字段清单以
+> `Engines/StrataBackend.cs`、`Engines/LlamaCppParameters.cs` 与 `docs/engine-plugins.md` §6 为准。
+
 ---
 
 ## 1. 背景与问题

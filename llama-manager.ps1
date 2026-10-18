@@ -1,8 +1,8 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [switch]$Service, [switch]$Start, [switch]$Stop, [switch]$Status,
     [switch]$Open, [switch]$EnableAutostart, [switch]$DisableAutostart,
-    [switch]$PrintPreset, [switch]$Bootstrap, [switch]$Doctor,
+    [switch]$PrintPreset, [switch]$Bootstrap, [switch]$Doctor, [switch]$Update,
     [switch]$All, [switch]$Offline, [switch]$AutoBootstrap,
     [string]$Backend, [string]$ModelPath, [int]$Port
 )
@@ -24,7 +24,8 @@ $commands = @(@(
     @{ Enabled = $DisableAutostart; Name = '--disable-autostart' },
     @{ Enabled = $PrintPreset; Name = '--print-preset' },
     @{ Enabled = $Bootstrap; Name = '--bootstrap' },
-    @{ Enabled = $Doctor; Name = '--doctor' }
+    @{ Enabled = $Doctor; Name = '--doctor' },
+    @{ Enabled = $Update; Name = '--update' }
 ) | Where-Object { $_.Enabled })
 if ($commands.Count -gt 1) { throw '一次只能使用一个操作开关。' }
 if ($commands.Count -eq 1) { $launcherArguments += $commands[0].Name }

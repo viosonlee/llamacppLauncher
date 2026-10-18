@@ -33,15 +33,6 @@ public sealed record EngineInstallPlan(
 public static class EngineCatalog
 {
     public const string LlamaCppRepo = "ggml-org/llama.cpp";
-    /// <summary>
-    /// Strata 的引擎发布源。官方 Niko1221/Strata 的引擎拒绝 Q3_K 专家，而 APEX 量化模型
-    /// （gate/up = Q3_K + IQ2_S）需要 APEX 补丁构建，因此下载指向打了补丁的 fork。
-    /// fork 的 release 与官方同名资产（strata-windows-x64.zip），tag 归档提供 serve/ 源码。
-    /// </summary>
-    public const string StrataRepo = "viosonlee/apex-on-strata";
-    /// <summary>Strata 源码（serve/server.py + requirements.txt）来自 fork 的 upstream 分支。</summary>
-    public const string StrataSourceRepo = "viosonlee/apex-on-strata";
-    public const string StrataSourceBranch = "upstream";
     public const string PolyStrataRepo = "VecSzn/PolyStrata";
 
     /// <summary>Engine directories live under the manager root, one folder per backend id.</summary>
@@ -76,10 +67,6 @@ public static class EngineCatalog
     public static ReleaseAsset SourceArchive(string repo, string tag) =>
         new($"{tag}.zip", $"https://github.com/{repo}/archive/refs/tags/{tag}.zip", null);
 
-    /// <summary>The source archive of a branch (used when the patched source is not a release tag).</summary>
-    public static ReleaseAsset BranchArchive(string repo, string branch) =>
-        new($"{branch}.zip", $"https://github.com/{repo}/archive/refs/heads/{branch}.zip", null);
-
     /// <summary>First asset whose name matches, or null.</summary>
     public static ReleaseAsset? Find(IReadOnlyList<ReleaseAsset> assets, string pattern) =>
         assets.FirstOrDefault(a => Regex.IsMatch(a.Name, pattern, RegexOptions.IgnoreCase));
@@ -101,21 +88,6 @@ public static class EngineCatalog
         if (cudart != null) archives.Add(cudart);
         // llama-server.exe sits at the manager root so ConfigService finds it as the llama.cpp root.
         return new EngineInstallPlan("llamacpp", archives, managerRoot, null, null);
-    }
-
-    /// <summary>
-    /// Strata: the patched engine zip (strata.exe, strata_kq.dll) extracts to <c>engine/</c>, and
-    /// the <c>upstream</c> branch archive of the fork supplies <c>serve/server.py</c> at the package
-    /// root. (The engine comes from a fork release, but the release tag need not match a source
-    /// state worth pinning, so the branch archive is the stable source reference.)
-    /// </summary>
-    public static EngineInstallPlan? StrataPlan(ReleaseInfo release, string managerRoot)
-    {
-        var engine = Find(release.Assets, @"^strata-windows-x64\.zip$");
-        if (engine == null) return null;
-        var root = EngineRoot(managerRoot, "strata-upstream");
-        return new EngineInstallPlan("strata-upstream", [engine],
-            Path.Combine(root, "engine"), BranchArchive(StrataSourceRepo, StrataSourceBranch), root);
     }
 
     /// <summary>

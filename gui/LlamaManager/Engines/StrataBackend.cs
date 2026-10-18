@@ -18,8 +18,7 @@ public sealed record StrataEngineProfile(
     string Description,
     string EngineSubdir,
     string EngineExeName,
-    string Arch,
-    bool VerifiesFamilies);
+    string Arch);
 
 /// <summary>
 /// A Strata-family engine. It does not run a one-shot prompt pipeline; it starts the engine's
@@ -32,17 +31,11 @@ public sealed record StrataEngineProfile(
 /// </summary>
 public sealed class StrataBackend : IServerBackend
 {
-    public static readonly StrataEngineProfile UpstreamProfile = new(
-        "strata-upstream",
-        "Strata (upstream q36)",
-        "Strata 原生 qwen35moe 路径（原地读 GGUF，内置 MTP）；通过自带 HTTP 服务接入 agent。",
-        "engine", "strata.exe", "qwen35moe", VerifiesFamilies: true);
-
     public static readonly StrataEngineProfile PolyProfile = new(
         "polystrata",
         "PolyStrata (strata-poly)",
         "基于 Strata 内核的 MoE 引擎（lookup/重复猜测 + 内置 MTP 草稿）；通过自带 HTTP 服务接入 agent。",
-        "engine-poly", "strata-poly.exe", "qwen35moe", VerifiesFamilies: false);
+        "engine-poly", "strata-poly.exe", "qwen35moe");
 
     private readonly StrataEngineProfile _profile;
 
@@ -51,12 +44,11 @@ public sealed class StrataBackend : IServerBackend
         _profile = profile;
         Descriptor = new BackendDescriptor(profile.Id, profile.DisplayName, profile.Description,
             BuiltIn: true, GpuHeavy: true);
-        var isPoly = profile.Id == PolyProfile.Id;
         var list = new List<ParameterSpec>
         {
             new("packageRoot", "引擎包目录", "路径", ParamType.FolderPath, "",
                 "包含 engine\\" + profile.EngineExeName + " 与 serve\\server.py 的根目录。留空自动匹配默认目录。",
-                Help: "【引擎包目录】\n• 作用：Strata 引擎二进制与配套服务脚本所在的根目录。\n• 建议：留空，系统会自动匹配 engines/strata-upstream 或 engines/polystrata。\n• 包含：engine\\" + profile.EngineExeName + " 与 serve\\server.py。"),
+                Help: "【引擎包目录】\n• 作用：Strata 引擎二进制与配套服务脚本所在的根目录。\n• 建议：留空，系统会自动匹配 engines/polystrata。\n• 包含：engine\\" + profile.EngineExeName + " 与 serve\\server.py。"),
             new("serveRoot", "服务源码根", "路径", ParamType.FolderPath, "",
                 "包含 serve\\server.py 的 Python 服务目录；留空默认使用引擎包目录。",
                 Help: "【服务源码根】\n• 作用：提供 OpenAI / Anthropic 兼容 HTTP API 的 Python 服务源码根目录。\n• 建议：留空即可，默认使用“引擎包目录”。"),
@@ -75,39 +67,26 @@ public sealed class StrataBackend : IServerBackend
                 Help: "【上下文】\n• 作用：引擎单次能处理的上下文 Token 上限（--max-context）。\n• 显存：上下文越大，KV 缓存占用越多。\n• 参考：6GB 显存建议 2048–4096；8–12GB 建议 4096–8192；16GB+ 可到 16384。",
                 Unit: "tokens", RangeHint: "256–1,048,576，推荐 4096 / 8192"),
         };
-        if (isPoly)
-        {
-            list.Add(new("vramReserveMib", "显存预留", "基本", ParamType.Integer, "256",
-                "为桌面与显卡驱动预留的安全显存量（--vram-reserve-mib，默认 256）。", 0, 60000,
-                Help: "【显存预留】\n• 作用：引擎分配显存时强行预留指定 MiB（--vram-reserve-mib），剩余显存用于缓存 MoE 专家。\n• 为什么需要：防止显存被 100% 占满导致桌面黑屏或驱动重置。\n• 参考：单显卡或笔记本独显推荐 256–500 MiB；双显卡可设 256 MiB 腾出更多显存。",
-                Unit: "MiB", RangeHint: "0–60,000，推荐 256"));
-            list.Add(new("tailSkip", "尾部跳过层", "基本", ParamType.Integer, "0",
-                "末尾若干层交回 GPU/CPU 路由处理（--tail-skip）。0 表示不启用。", 0, 64,
-                Help: "【尾部跳过层】\n• 作用：让末尾 N 层改用另一条执行路径（--tail-skip）。\n• 实测：PolyStrata 会读取本参数并在日志中确认；0 关闭。\n• 建议：先用 0，确认速度瓶颈后再逐层尝试。",
-                RangeHint: "0–64，推荐 0"));
-        }
-        else
-        {
-            list.Add(new("prefill", "预填充批大小", "基本", ParamType.Integer, "2048",
-                "预填充阶段每批处理的 Token 数（--prefill）。", 1, 32768,
-                Help: "【预填充批大小】\n• 作用：处理输入提示时每批的 Token 数（--prefill）。\n• 影响：越大首字延迟的平稳性越好，但峰值显存更高。\n• 建议：保持 2048；显存紧张可降到 512–1024。",
-                Unit: "tokens", RangeHint: "1–32,768，推荐 2048"));
-            list.Add(new("maxNew", "单次生成上限", "基本", ParamType.Integer, "256",
-                "单次请求最多生成的 Token 数（--max-new）。", 1, 131072,
-                Help: "【单次生成上限】\n• 作用：单次请求允许生成的最大 Token 数（--max-new）。\n• 建议：256 适合对话；写作类可调到 1024 以上。",
-                Unit: "tokens", RangeHint: "1–131,072，推荐 256"));
-            list.Add(new("mtpDrafts", "MTP 草稿数", "基本", ParamType.Integer, "2",
-                "每步投机采样的草稿 Token 数（--mtp，默认 2）。设为 0 关闭投机加速。", 0, 7,
-                Help: "【MTP 草稿数】\n• 作用：每步投机采样同时预测的草稿 Token 数（--mtp）。\n• 原理：带 MTP 头的模型一次可预测多个未来 Token，命中即一次输出多个，实测约 1.8–2.5x 解码加速。\n• 建议：2（默认）兼顾接受率与吞吐；0 关闭投机采样。",
-                VisibleWhen: "model.mtp", RangeHint: "0–7，推荐 2"));
-            list.Add(new("expertSlots", "显存专家槽位", "基本", ParamType.Integer, "16",
-                "每层常驻显存的专家槽位数（--expert-slots，默认 16）。", 0, 256,
-                Help: "【显存专家槽位】\n• 作用：每个 MoE 层常驻显存的专家槽位数（--expert-slots）。\n• 原理：高频专家预载进显存，未命中的专家走 CPU 线程池，提升 GPU 命中率。\n• 参考：6GB 显存约 16（约 0.75 GiB）；8–12GB 可从 32 试起；16GB+ 继续增大并看日志。\n• 0：交给引擎自动计算。上下文 > 8192 且未显式设置时同样按 0 处理，避免 40K 上下文在 6GB 卡上换页掉速。",
-                VisibleWhen: "model.moe", RangeHint: "0–256，推荐 16（4K 上下文）/ 0（>8K）"));
-        }
-        list.Add(new("poolWorkers", "CPU 池线程", "高级", ParamType.Integer, "0",
-            "CPU 密集任务工作线程数（--pool-workers）。0 表示由引擎自动分配。", 0, 256,
-            Help: "【CPU 池线程】\n• 作用：CPU 侧辅助计算（分词调度、候选搜索等）的线程池大小（--pool-workers）。\n• 建议：默认 0，由引擎按物理核心自动分配。",
+        list.Add(new("vramReserveMib", "显存预留", "基本", ParamType.Integer, "256",
+            "为桌面与显卡驱动预留的安全显存量（--vram-reserve-mib，默认 256）。", 0, 60000,
+            Help: "【显存预留】\n• 作用：引擎分配显存时强行预留指定 MiB（--vram-reserve-mib），剩余显存用于缓存 MoE 专家。\n• 为什么需要：防止显存被 100% 占满导致桌面黑屏或驱动重置。\n• 参考：单显卡或笔记本独显推荐 256–500 MiB；双显卡可设 256 MiB 腾出更多显存。",
+            Unit: "MiB", RangeHint: "0–60,000，推荐 256"));
+        list.Add(new("tailSkip", "尾部跳过", "基本", ParamType.Integer, "0",
+            "显存外、且每个 token 都排在第 N+1 位之后的专家被跳过（--tail-skip）。0 表示不跳过。", 0, 64,
+            Help: "【尾部跳过】\n• 作用：显存外、且在一个窗口内每个 token 都排在第 N+1 位或更后的专家被直接跳过（--tail-skip）。\n• 为什么能快：被跳过的是本来也进不了显存、命中率最低的那批专家，省掉了它们的搬运和计算。\n• 代价：答案会略有变化（官方原文：the answers move a little）。\n• 默认 0（不跳过）；项目自带的安装脚本给 Qwen3.6 家族设 6。\n• 建议：6 是质量与速度的平衡点；1 更快，但偏离更大。",
+            RangeHint: "0–64，推荐 6（质量优先）或 1（速度优先）"));
+        list.Add(new("kv", "KV 缓存格式", "基本", ParamType.Choice, "",
+            "注意力缓存的存储格式（--kv）。q8_0 把 KV 显存减半，长上下文时能把省下的显存留给专家缓存。",
+            Help: "【KV 缓存格式】\n• 作用：K/V 注意力缓存的格式（--kv）。\n• 默认（fp16）：精度最高，引擎不传该参数。\n• q8_0：显存约为一半，答案略有差异；省下的显存会给专家缓存，长上下文时解码更快。\n• 限制：只有 qwen35moe 家族（Qwen3.6 / Ornith / Tiel）支持，其它模型启动时会直接拒绝。",
+            Choices:
+            [
+                new ParamChoice("", "默认（fp16）", "引擎默认，精度最高。", Recommended: true),
+                new ParamChoice("fp16", "fp16", "显式指定全精度。"),
+                new ParamChoice("q8_0", "q8_0（KV 减半）", "只有 qwen35moe 家族支持；长上下文更省显存。"),
+            ]));
+        list.Add(new("threads", "CPU 线程数", "高级", ParamType.Integer, "0",
+            "显存外的专家在 CPU 上计算时使用的线程数（--threads）。0 表示由引擎自动分配。", 0, 256,
+            Help: "【CPU 线程数】\n• 作用：显存外的专家在 CPU 上计算时使用的线程数（--threads）。\n• 默认 0：由引擎按可用核心自动分配（本机为 16 线程）。\n• 建议：默认先跑一次，再试 8 / 12 对比；线程过多会与显卡搬运争抢内存带宽，反而变慢。",
             Advanced: true, RangeHint: "0–256，推荐 0（自动）"));
         list.Add(new("reasoningBudget", "reasoning 预算", "高级", ParamType.Integer, "0",
             "思考模型单次推理最大 Token 预算。0 为不限制。", 0, 65536,
@@ -150,10 +129,6 @@ public sealed class StrataBackend : IServerBackend
     // The panel shows what the engine will actually receive. Fields that predate the schema
     // panel still resolve from the legacy StrataConfig block, so read them from there when the
     // user has not overridden them yet. Empty means "fall back to the declared default".
-    internal string? LegacyPrefill(ManagerConfig config) => config.Strata.Prefill > 0 ? config.Strata.Prefill.ToString() : null;
-
-    internal string? LegacyMaxNew(ManagerConfig config) => config.Strata.MaxNew > 0 ? config.Strata.MaxNew.ToString() : null;
-
     internal string? LegacyWorkers(ManagerConfig config) => config.Strata.Workers > 0 ? config.Strata.Workers.ToString() : null;
 
     internal string? LegacyReasoningBudget(ManagerConfig config) =>
@@ -170,13 +145,6 @@ public sealed class StrataBackend : IServerBackend
             return BackendStatus.Unavailable($"未找到 {_profile.EngineExeName}；请在面板中选择引擎包目录，或用「初始化环境」下载。");
         if (!File.Exists(engine))
             return BackendStatus.Unavailable($"未找到 {_profile.EngineExeName}：" + engine);
-        // Both checks spawn a child process; never run them on the UI thread.
-        if (_profile.VerifiesFamilies)
-        {
-            var supportsQwen35 = await Task.Run(() => EngineSupportsQwen35(engine), ct).ConfigureAwait(false);
-            if (!supportsQwen35)
-                return BackendStatus.Unavailable("该 strata.exe 没有 qwen35moe 原生路径（需要上游 0.1.44+ 构建）。");
-        }
         var server = ResolveServer(config, _profile);
         if (server == null)
             return BackendStatus.Unavailable("未找到 serve\\server.py；请设置服务源码根目录。");
@@ -191,16 +159,9 @@ public sealed class StrataBackend : IServerBackend
         if (string.IsNullOrWhiteSpace(modelPath) || !File.Exists(modelPath))
             return new CompatibilityReport(false, ["请先选择已下载完成的 GGUF 模型。"], [], "未选择模型。", null);
         var md = await Task.Run(() => GgufService.ReadShards(modelPath, ct), ct).ConfigureAwait(false);
-        if (_profile.Id == PolyProfile.Id)
-        {
-            var poly = PolyStrataCompatibility.Analyze(md);
-            return new CompatibilityReport(poly.Runnable, poly.Blockers, poly.Notes, poly.Summary,
-                Estimate(md, modelPath));
-        }
-        var report = StrataCompatibility.Analyze(md);
-        var estimate = Estimate(md, modelPath);
-        return new CompatibilityReport(report.IsPackable, report.Blockers, report.Notes,
-            StrataCompatibility.Summary(report), estimate);
+        var poly = PolyStrataCompatibility.Analyze(md);
+        return new CompatibilityReport(poly.Runnable, poly.Blockers, poly.Notes, poly.Summary,
+            Estimate(md, modelPath));
     }
 
     public Task<EngineStatus> StatusAsync(EngineSession? session, CancellationToken ct)
@@ -375,35 +336,17 @@ public sealed class StrataBackend : IServerBackend
     {
         var s = config.Strata;
         var context = ParamInt(config, "context", s.Context);
-        var isPoly = _profile.Id == PolyProfile.Id;
-        var args = new List<string> { isPoly ? "--model" : "--native", model, "--max-context", context.ToString() };
-        if (!isPoly)
-        {
-            var workers = ParamInt(config, "poolWorkers", s.Workers);
-            var mtp = ParamInt(config, "mtpDrafts", 2);
-            // 16 slots are a safe speed-up at 4K on a 6GB card. At 40K the KV cache already
-            // consumes that card's free VRAM; forcing 16 slots spills them through WDDM and
-            // collapses decode. Larger contexts therefore use the engine's auto sizing unless
-            // the user explicitly chooses a slot count.
-            var slots = ParamInt(config, "expertSlots", context <= 8192 ? 16 : 0);
-            // Both flags are read through ParamInt so the panel's value wins; the legacy
-            // StrataConfig block stays the fallback for installs that predate these fields.
-            var prefill = ParamInt(config, "prefill", s.Prefill);
-            var maxNew = ParamInt(config, "maxNew", s.MaxNew);
-            if (prefill > 0) { args.Add("--prefill"); args.Add(prefill.ToString()); }
-            if (maxNew > 0) { args.Add("--max-new"); args.Add(maxNew.ToString()); }
-            if (workers > 0) { args.Add("--pool-workers"); args.Add(workers.ToString()); }
-            if (mtp > 0) { args.Add("--mtp"); args.Add(mtp.ToString()); }
-            if (slots > 0) { args.Add("--expert-slots"); args.Add(slots.ToString()); }
-        }
-        else
-        {
-            var reserve = ParamInt(config, "vramReserveMib", 256);
-            var tailSkip = ParamInt(config, "tailSkip", 0);
-            if (reserve > 0) { args.Add("--vram-reserve-mib"); args.Add(reserve.ToString()); }
-            // PolyStrata reads this flag (upstream strata.exe logs "ignoring --tail-skip").
-            if (tailSkip > 0) { args.Add("--tail-skip"); args.Add(tailSkip.ToString()); }
-        }
+        var args = new List<string> { "--model", model, "--max-context", context.ToString() };
+        var reserve = ParamInt(config, "vramReserveMib", 256);
+        var tailSkip = ParamInt(config, "tailSkip", 0);
+        var threads = ParamInt(config, "threads", s.Workers);
+        if (reserve > 0) { args.Add("--vram-reserve-mib"); args.Add(reserve.ToString()); }
+        if (tailSkip > 0) { args.Add("--tail-skip"); args.Add(tailSkip.ToString()); }
+        if (threads > 0) { args.Add("--threads"); args.Add(threads.ToString()); }
+        // KV format: only qwen35moe accepts q8_0; the engine refuses it for other families,
+        // so the panel documents the limit and an empty value keeps the engine default.
+        var kv = Param(config, "kv");
+        if (kv is "fp16" or "q8_0") { args.Add("--kv"); args.Add(kv); }
         var cfg = new Dictionary<string, object>
         {
             ["exe"] = engine,
@@ -427,7 +370,7 @@ public sealed class StrataBackend : IServerBackend
         Path.Combine(DataDir(backendId, model), "strata-runconfig.json");
 
     /// <summary>The tokenizer directory the server reads (vocab.json etc.); prepared from the GGUF.</summary>
-    public static string TokenizerDir(ManagerConfig config, string model) => TokenizerDir(config, "strata-upstream", model);
+    public static string TokenizerDir(ManagerConfig config, string model) => TokenizerDir(config, "polystrata", model);
 
     public static string TokenizerDir(ManagerConfig config, string backendId, string model) =>
         Path.Combine(DataDir(backendId, model), "tokenizer");
@@ -439,8 +382,8 @@ public sealed class StrataBackend : IServerBackend
         return Path.Combine(ConfigService.GetManagerRoot(), "data", backendId, hash);
     }
 
-    /// <summary>Resolves the engine exe for the upstream profile (legacy static entry point).</summary>
-    public static string? ResolveEngine(ManagerConfig config) => ResolveEngine(config, UpstreamProfile);
+    /// <summary>Resolves the engine exe for the PolyStrata profile (legacy static entry point).</summary>
+    public static string? ResolveEngine(ManagerConfig config) => ResolveEngine(config, PolyProfile);
 
     public static string? ResolveEngine(ManagerConfig config, StrataEngineProfile profile)
     {
@@ -450,8 +393,8 @@ public sealed class StrataBackend : IServerBackend
         return File.Exists(engine) ? engine : null;
     }
 
-    /// <summary>Resolves serve/server.py for the upstream profile (legacy static entry point).</summary>
-    public static string? ResolveServer(ManagerConfig config) => ResolveServer(config, UpstreamProfile);
+    /// <summary>Resolves serve/server.py for the PolyStrata profile (legacy static entry point).</summary>
+    public static string? ResolveServer(ManagerConfig config) => ResolveServer(config, PolyProfile);
 
     public static string? ResolveServer(ManagerConfig config, StrataEngineProfile profile)
     {
@@ -466,7 +409,7 @@ public sealed class StrataBackend : IServerBackend
         return null;
     }
 
-    internal static string? ResolvePython(ManagerConfig config) => ResolvePython(config, UpstreamProfile);
+    internal static string? ResolvePython(ManagerConfig config) => ResolvePython(config, PolyProfile);
 
     internal static string? ResolvePython(ManagerConfig config, StrataEngineProfile profile)
     {
@@ -483,7 +426,7 @@ public sealed class StrataBackend : IServerBackend
     }
 
     private static Task<string?> ResolvePythonAsync(ManagerConfig config, CancellationToken ct) =>
-        ResolvePythonAsync(config, UpstreamProfile, ct);
+        ResolvePythonAsync(config, PolyProfile, ct);
 
     private static async Task<string?> ResolvePythonAsync(ManagerConfig config, StrataEngineProfile profile, CancellationToken ct)
     {
@@ -527,7 +470,7 @@ public sealed class StrataBackend : IServerBackend
         return null;
     }
 
-    internal static string ResolveModel(ManagerConfig config) => ResolveModel(config, UpstreamProfile);
+    internal static string ResolveModel(ManagerConfig config) => ResolveModel(config, PolyProfile);
 
     internal static string ResolveModel(ManagerConfig config, StrataEngineProfile profile)
     {
@@ -547,8 +490,6 @@ public sealed class StrataBackend : IServerBackend
             return value;
         return null;
     }
-
-    public static bool EngineSupportsQwen35(string strataExe) => StrataService.EngineSupportsQwen35(strataExe);
 
     private static ResourceEstimate? Estimate(GgufMetadata md, string modelPath)
     {

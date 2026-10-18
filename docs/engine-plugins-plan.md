@@ -2,6 +2,9 @@
 
 对应设计：[engine-plugins.md](engine-plugins.md)（v2）。完成条件：代码、自动测试、构建与文档齐备；不主动提交上游 PR。
 
+> **历史清单**：本文记录 2026-10 的分阶段实施过程。其中 `strata-upstream` 相关条目已随该后端退役
+> （2026-10-18，REQ-112）而失效，保留仅为追溯；现行后端清单见 `docs/engine-plugins.md` §6。
+
 约定：
 - 每阶段结束 `dotnet build LlamaManager.sln -c Release` 0 警告 0 错误，并跑一次回归（修复后只跑一次，不重复刷）。
 - 回归使用隔离 `LLAMA_MANAGER_ROOT` 与本地假服务器，不下载 GPU/模型，不停止用户真实服务。

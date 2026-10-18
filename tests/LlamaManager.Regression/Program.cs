@@ -256,8 +256,6 @@ internal static class Program
                 StrataBackendRegression.RunLaunchAsync(_root, _model));
             await Test("strata backend: resolvers report honest problems", () =>
                 Run(() => StrataBackendRegression.RunResolvers(_root)));
-            await Test("strata backend: a hung engine probe stays bounded and does not deadlock", () =>
-                StrataBackendRegression.RunProbeHangAsync(_root));
             await Test("plugins: manifest parse, validation and argument templating", () =>
                 Run(() => PluginRegression.RunManifest(_root)));
             await Test("plugins: discovery rejects built-in id collisions", () =>
@@ -394,8 +392,8 @@ internal static class Program
                 Check(diagnostic.Contains("GPU 权重 12.34") && diagnostic.Contains("CPU 权重 5600"), "diagnostic hides CPU fallback");
                 var strataDiag = LogService.ParseStrataGpuSummary(["strata-poly: loaded in 7.7 s; 2162 of 10496 routed experts in VRAM (2.5 GiB), 16 CPU threads"]);
                 Check(strataDiag.Contains("2162/10496") && strataDiag.Contains("2.5 GiB"), "strata diagnostic parses expert counts");
-                var upstreamDiag = LogService.ParseStrataGpuSummary(["strata-q36: hybrid experts: 16 of 256 per layer in VRAM (0.75 GiB), all 11.97 GiB in pageable host memory"]);
-                Check(upstreamDiag.Contains("16/256") && upstreamDiag.Contains("0.75 GiB"), "upstream diagnostic parses expert counts per layer");
+                var shrunk = LogService.ParseStrataGpuSummary(["strata-poly: the expert cache 2162 -> 2069 experts (2.25 GiB) for the VRAM free now, 288 MiB left"]);
+                Check(shrunk.Contains("2069") && shrunk.Contains("2.25 GiB"), "strata diagnostic parses a shrunk expert cache");
                 Check(LogService.GetPrimaryLogPath("polystrata").EndsWith("engine-polystrata.log"), "polystrata log path matches");
             }));
             await Test("speed monitor: supports object/array counters, ignores idle stale timings", () => Run(() =>

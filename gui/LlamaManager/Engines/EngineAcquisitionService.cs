@@ -37,7 +37,6 @@ public static class EngineAcquisitionService
     public static string? RepoFor(string backendId) => backendId switch
     {
         "llamacpp" => EngineCatalog.LlamaCppRepo,
-        "strata-upstream" => EngineCatalog.StrataRepo,
         "polystrata" => EngineCatalog.PolyStrataRepo,
         _ => null,
     };
@@ -46,7 +45,6 @@ public static class EngineAcquisitionService
     public static EngineInstallPlan? PlanFor(string backendId, ReleaseInfo release, string managerRoot) => backendId switch
     {
         "llamacpp" => EngineCatalog.LlamaCppPlan(release, managerRoot, DetectComputeCapability()),
-        "strata-upstream" => EngineCatalog.StrataPlan(release, managerRoot),
         "polystrata" => EngineCatalog.PolyStrataPlan(release, managerRoot),
         _ => null,
     };
@@ -131,6 +129,66 @@ public static class EngineAcquisitionService
 
         RecordPaths(backendId, plan, log);
         return plan.EngineDir;
+    }
+
+    /// <summary>The outcome of an update check: whether it installed, and which versions were seen.</summary>
+    public sealed record EngineUpdateResult(
+        bool Updated, string? InstalledVersion, string? LatestVersion, string? EngineDir);
+
+    /// <summary>
+    /// Updates an already-installed engine to the published release when it is behind.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="AcquireAsync"/> downloads unconditionally, but the bootstrap only called it when the
+    /// engine was missing, so an installed-but-outdated engine never moved and the doctor's
+    /// "运行初始化环境更新" advice did nothing. This compares the installed version with the newest
+    /// release that has a usable asset for this machine and reinstalls only when it is behind.
+    /// Engines whose version cannot be read (llama.cpp nightlies) are left to the caller.
+    /// </remarks>
+    public static async Task<EngineUpdateResult> UpdateAsync(string backendId, ILogSink log, CancellationToken ct)
+    {
+        var repo = RepoFor(backendId)
+            ?? throw new InvalidOperationException($"{backendId} 不支持自动下载。");
+        var installed = await InstalledVersionAsync(backendId, ct).ConfigureAwait(false);
+        if (installed == null)
+        {
+            // Nothing readable to compare against: install, which is also the repair path.
+            var fresh = await AcquireAsync(backendId, log, ct).ConfigureAwait(false);
+            return new EngineUpdateResult(true, null, null, fresh);
+        }
+
+        var releases = await ReleasesFetcher(repo, ct).ConfigureAwait(false)
+            ?? throw new InvalidOperationException($"无法获取 {repo} 的发布信息（网络或仓库不可用）。");
+        string? latest = null;
+        foreach (var node in releases)
+        {
+            if (node == null) continue;
+            var release = EngineCatalog.ParseRelease(node);
+            if (PlanFor(backendId, release, ConfigService.GetManagerRoot()) == null) continue;
+            latest = release.Tag;
+            break;
+        }
+        if (latest == null)
+            throw new InvalidOperationException($"{repo} 的近期发布没有适用于本机的下载文件。");
+
+        if (!DoctorService.IsOutdated(installed, latest))
+        {
+            log.Write($"{backendId}：已是最新（本机 {installed}，远端 {latest}）。");
+            return new EngineUpdateResult(false, installed, latest, null);
+        }
+
+        log.Write($"{backendId}：发现新版本 {latest}（本机 {installed}），开始更新…");
+        var engineDir = await AcquireAsync(backendId, log, ct).ConfigureAwait(false);
+        return new EngineUpdateResult(true, installed, latest, engineDir);
+    }
+
+    /// <summary>The version of an installed engine, or null when this backend has no readable one.</summary>
+    private static async Task<string?> InstalledVersionAsync(string backendId, CancellationToken ct)
+    {
+        if (backendId != "polystrata") return null;
+        var profile = StrataBackend.PolyProfile;
+        var engine = StrataBackend.ResolveEngine(ConfigService.ReadConfig(), profile);
+        return engine == null ? null : await DoctorService.ReadStrataVersionAsync(engine, ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -223,10 +281,6 @@ public static class EngineAcquisitionService
         var settings = config.Engines.GetValueOrDefault(backendId) ?? new EngineSettings();
         switch (backendId)
         {
-            case "strata-upstream":
-                settings.Parameters["packageRoot"] = plan.SourceDir ?? plan.EngineDir;
-                settings.Parameters["serveRoot"] = plan.SourceDir ?? plan.EngineDir;
-                break;
             case "polystrata":
                 settings.Parameters["packageRoot"] = plan.SourceDir ?? plan.EngineDir;
                 settings.Parameters["serveRoot"] = plan.SourceDir ?? plan.EngineDir;

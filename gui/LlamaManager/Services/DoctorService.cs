@@ -31,7 +31,6 @@ public static class DoctorService
             var backendId = repo switch
             {
                 EngineCatalog.LlamaCppRepo => "llamacpp",
-                EngineCatalog.StrataRepo => "strata-upstream",
                 EngineCatalog.PolyStrataRepo => "polystrata",
                 _ => "",
             };
@@ -64,7 +63,7 @@ public static class DoctorService
         findings.Add(PrismFinding());
 
         // ---- Strata family ----
-        foreach (var profile in new[] { StrataBackend.UpstreamProfile, StrataBackend.PolyProfile })
+        foreach (var profile in new[] { StrataBackend.PolyProfile })
         {
             var config = ConfigService.ReadConfig();
             var engine = StrataBackend.ResolveEngine(config, profile);
@@ -83,7 +82,7 @@ public static class DoctorService
             }
             findings.Add(new Finding(profile.Id, "ok", engine));
 
-            var version = await StrataVersionAsync(engine, ct).ConfigureAwait(false);
+            var version = await ReadStrataVersionAsync(engine, ct).ConfigureAwait(false);
             if (checkUpdates && version != null)
             {
                 try
@@ -129,8 +128,8 @@ public static class DoctorService
     private static Finding PythonFinding()
     {
         var config = ConfigService.ReadConfig();
-        var python = StrataBackend.ResolvePython(config, StrataBackend.UpstreamProfile);
-        var venvs = new[] { "strata-upstream", "polystrata" }
+        var python = StrataBackend.ResolvePython(config, StrataBackend.PolyProfile);
+        var venvs = new[] { "polystrata" }
             .Count(id => File.Exists(Path.Combine(ConfigService.GetManagerRoot(), "venvs", id, "Scripts", "python.exe")));
         return DescribePython(python, venvs);
     }
@@ -142,7 +141,7 @@ public static class DoctorService
             return new Finding("python", "missing",
                 "未找到 Python 3.10+；Strata 家族的 HTTP 服务需要它。",
                 "点「初始化环境」即会自动安装（winget 优先，回退 python.org）；也可手动安装 Windows x64 Python 3.10+。");
-        return new Finding("python", "ok", $"{python}（{venvs}/2 个引擎 venv 已就绪）");
+        return new Finding("python", "ok", $"{python}（{venvs}/1 个引擎 venv 已就绪）");
     }
 
     /// <summary>Prism builds report "prism-b10743-adfffbe" style versions on stderr; the launcher's llama.cpp does not.</summary>
@@ -161,7 +160,7 @@ public static class DoctorService
     }
 
     /// <summary>Strata-family engines report their version through BUILD.json (engine zip) or --version.</summary>
-    private static async Task<string?> StrataVersionAsync(string engineExe, CancellationToken ct)
+    public static async Task<string?> ReadStrataVersionAsync(string engineExe, CancellationToken ct)
     {
         var build = Path.Combine(Path.GetDirectoryName(engineExe)!, "BUILD.json");
         if (File.Exists(build))

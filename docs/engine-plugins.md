@@ -207,19 +207,21 @@ public sealed record EngineSession
 - 启动/停止/端口恢复/会话身份：内部调用现有 `ServerService` 逻辑，不复制。
 - 就绪：`GET /health`。
 
-### 6.2 StrataBackend（`strata-upstream`）
+### 6.2 StrataBackend（`polystrata`）
 
-- **不再自己跑一次性推理**，而是启动 Strata 自带 HTTP 服务：
+- **不再自己跑一次性推理**，而是启动 PolyStrata 自带 HTTP 服务：
   `python -m serve.server --engine strata --config <runconfig.json> --port <port>`。
 - 定位：
-  - 包根目录（含 `engine/strata.exe`）。
-  - `serve/server.py` 所在目录（Strata 源码根）。
-  - Python 解释器（`StrataConfig.PythonPath`）。
-- 生成 runconfig（`LaunchPlan.GeneratedFiles`），指向我们打过补丁的 `strata.exe`（`upstream` 分支），并写 `--native <model>`、`--family qwen36-strata` 等。
-- 探测：`strata.exe --families` 含 `qwen35moe`（复用 `EngineSupportsQwen35`）。
+  - 包根目录（含 `engine-poly/strata-poly.exe`）。
+  - `serve/server.py` 所在目录（PolyStrata 源码根）。
+  - Python 解释器（留空时用 `venvs/polystrata` 专属虚拟环境）。
+- 生成 runconfig（`LaunchPlan.GeneratedFiles`）：`--model <gguf>`、`--max-context`、`--vram-reserve-mib`、`--tail-skip`、`--kv`、`--threads`。只写引擎真正接受的 flag——`strata-poly` 对未知参数直接 `unknown option` 退出，不像上游那样只打印 `ignoring`。
+- 探测：引擎 exe、`serve/server.py`、Python 3.10+ 三项齐备。
 - 就绪：`GET /health`。
-- 兼容性：复用 `StrataCompatibility.Analyze`（引擎侧已放开 Q3_K/Q4_K；矩阵来源标注引擎构建定义）。
-- 参数：端口、上下文、max-new、vram-reserve、pool-workers、`reasoning_budget_tokens`、`anthropic_thinking` 等（部分映射到 runconfig）。
+- 兼容性：`PolyStrataCompatibility.Analyze`（专家格式白名单 + MTP 草稿块提示）。
+- 参数：端口、上下文、显存预留、尾部跳过、KV 格式、CPU 线程、`reasoning_budget_tokens`、`anthropic_thinking`。
+
+> **已退役：`strata-upstream`（`strata.exe`）。** 它唯一独有的 `qwen4exp` 家族（Qwen3.8-Flash-Next）最小 29.6 GB 文件、官方要求 32 GB 内存，本机 23.4 GB 跑不动；在共同支持的 qwen35moe 上比 `polystrata` 慢约 30%，且没有 `--tail-skip`/`--kv`/`--vram-reserve-mib`。注册、下载计划、面板字段与 CLI 分支均已移除。`StrataService`/`StrataPackService`/`StrataCompatibility` 保留：分词表准备和 `ProcessPluginBackend` 仍在复用它们。详见 `docs/CHANGELOG-DECISIONS.md` 2026-10-18 条。
 
 > 说明：`strata-cyber`（pack 路径）已归档，不进入注册表。
 
@@ -342,7 +344,7 @@ public class EngineSettings
 迁移规则：
 
 1. `RunningServer`/`RunningEmbedding` → `llamacpp` 的 `EngineSettings` + `ActiveSession`。
-2. `StrataConfig` → `strata-upstream` 的 `EngineSettings`（模型、包根、Python、端口、上下文、max-new 等）。
+2. `StrataConfig` → `polystrata` 的 `EngineSettings`（模型、包根、Python、端口、上下文等；旧块仅作回退）。
 3. 保存时写新结构并**删除旧字段**；沿用 `ConfigStore` 原子替换与损坏恢复。
 
 ## 11. 生命周期、并发与仲裁
@@ -397,13 +399,12 @@ public class EngineSettings
 启动器提供「初始化引擎环境」入口（GUI 按钮 + CLI `--bootstrap --backend <id>`），按后端执行：
 
 - **llamacpp**：定位 `llama-server.exe`；缺失则从 `ggml-org/llama.cpp` 发布下载 Windows CUDA 包 + cudart（`llama-<build>-bin-win-cuda-13.4-x64.zip`；CUDA 13.4 优先，12.4 回退）。注意 llama.cpp 的 Windows 二进制位于**预发布（nightly）**，因此取「发布列表中第一个含可用 Windows CUDA 资产的版本」。
-- **strata-upstream**：
-  1. 定位 `engine/strata.exe` 与 `serve/server.py`；缺失则从 `Niko1221/Strata` 下载 `strata-windows-x64.zip`（引擎）与该 tag 的源码归档（`serve/` + `requirements.txt`），校验 SHA-256 后解压。
-  2. 探测 Python ≥ 3.10（`py -3` / `python` / 配置项）；缺失则提示安装或引导下载。
-  3. 创建本地 venv（`<ManagerRoot>/venvs/<backendId>`）。
+- **polystrata**：
+  1. 定位 `engine-poly/strata-poly.exe` 与 `serve/server.py`；缺失则从 `VecSzn/PolyStrata` 下载 `strata-poly-windows-x64-<hash>.zip`（引擎）与该 tag 的源码归档（`serve/` + `requirements.txt`），校验 SHA-256 后解压。
+  2. 探测 Python ≥ 3.10（`py -3` / `python` / 配置项）；缺失则自动安装。
+  3. 创建本地 venv（`<ManagerRoot>/venvs/polystrata`）。
   4. `pip install` 依赖：优先读取引擎源码根的 `requirements.txt`（版本已固定）；源码缺失时回退内置列表。
-  5. 校验 `--families` 含 `qwen35moe`。
-- **polystrata**：与 strata-upstream 同流程，下载 `VecSzn/PolyStrata` 的 `strata-poly-windows-x64-<hash>.zip`（引擎）与源码归档；同样需要 Python 服务。
+  5. 已安装时顺带检查更新：`BUILD.json` 版本落后于最新发布就原地升级（`EngineAcquisitionService.UpdateAsync`，`--update` 是它的命令行入口）。
 
 依赖清单来源（已确认）：优先读取引擎源码根的 `requirements.txt`（版本已固定）；仅在源码缺失时回退到启动器内置的兼容版本表（带版本标记）。启动器**不复制** `requirements.txt` 内容。
 

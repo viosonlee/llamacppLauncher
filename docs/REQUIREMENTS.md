@@ -16,8 +16,9 @@
 
 - REQ-010 已实现：llamacpp 内置后端——任意 GGUF，OpenAI 兼容；Prism 模型（三元量化，
   `prism.hadamard.*`）自动路由到 Prism 定制引擎。
-- REQ-011 已实现：strata-upstream 内置后端——Strata 原生 qwen35moe 路径，
-  经 `serve/server.py` 提供 HTTP 服务；引擎须支持 `--families qwen35moe`。
+- REQ-011 已废弃（2026-10-18）：~~strata-upstream 内置后端~~。它唯一独有的 `qwen4exp`
+  （Qwen3.8-Flash-Next）最小 29.6 GB 文件、官方要求 32 GB 内存，本机 23.4 GB 跑不动；在共同
+  支持的 qwen35moe 上比 polystrata 慢约 30%。由 REQ-112 取代。
 - REQ-012 已实现：polystrata 内置后端——PolyStrata (strata-poly) MoE 引擎，
   同经 `serve/server.py`；兼容性矩阵独立于 Strata（支持更多专家格式）。
 - REQ-013 已实现：插件机制——`plugins/<id>/plugin.json`（schema:1）声明自带 HTTP
@@ -25,8 +26,6 @@
 - REQ-014 已实现：引擎获取——「初始化环境」按后端自动下载并安装：
   - llamacpp：官方 nightly Windows CUDA 包 + cudart；**按 GPU 计算能力选 CUDA 大版本**
     （< 8.0 → CUDA 12.4，否则 13.4；13.4 nightly 不含 Turing/Volta SASS）。
-  - strata-upstream：APEX 补丁构建（viosonlee/apex-on-strata release）+ upstream 分支源码
-    归档（serve/）。
   - polystrata：VecSzn/PolyStrata release 引擎 + 源码归档。
   - 下载须校验 SHA-256（GitHub digest），解压防 zip-slip。
 - REQ-015 已实现：Strata 家族自动建 Python venv 并按引擎 `requirements.txt` 安装依赖；
@@ -60,13 +59,12 @@
   - 提供分组与全局「恢复默认」、按标签/Key/分组过滤；只有用户改动过的值才落盘；
   - 插件清单 `schema:1` 兼容扩展：`help` / `unit` / `rangeHint` / `editable` / `advanced` /
     `visibleWhen`，`choices` 既可写字符串数组也可写对象数组。
-- REQ-108 已实现：Strata 家族参数按引擎实测能力收敛（真实模型 + `--serve` 验证）：  - upstream `strata.exe` 只暴露其真正接受的参数：`context`、`prefill`、`maxNew`、`mtpDrafts`
-    （`VisibleWhen=model.mtp`）、`expertSlots`（`VisibleWhen=model.moe`）、`poolWorkers`、
-    `reasoningBudget`、`anthropicThinking`；
-  - polystrata 只暴露 `context`、`vramReserveMib`、`tailSkip` 等其真正读取的参数；
-  - `parallel` / `slots` / `batch` / `warm-start` / `fit-max-tokens` / `tail-skip` 在 `strata.exe`
-    上会被日志标记为 ignoring，`--expert-slots` 在 `strata-poly.exe` 上是硬错误，均不作为面板字段，
-    也不会被写进命令行。
+- REQ-108 已实现：Strata 家族参数按引擎实测能力收敛（真实模型 + `--serve` 验证）：
+  - ~~upstream `strata.exe` 只暴露其真正接受的参数~~：该引擎已退役（REQ-112），
+    `prefill`/`maxNew`/`mtpDrafts`/`expertSlots` 等字段随之删除；
+  - polystrata 只暴露 `context`、`vramReserveMib`、`tailSkip`、`kv`、`threads` 等其真正读取的参数；
+  - `parallel` / `slots` / `batch` / `warm-start` / `fit-max-tokens` 一律不作为面板字段，
+    也不会被写进命令行；`--expert-slots` 在 `strata-poly.exe` 上是硬错误。
 - REQ-033 已实现：嵌入（Embedding）服务独立成「嵌入」页——模型选择、端口、启停；
   供资料量化 / RAG 使用，与主服务相互独立。
 - REQ-109 已实现：llama.cpp 参数面板迁到 schema，消除双维护：
@@ -78,6 +76,17 @@
   - `MainWindow.xaml` 中 385 行手写控件块与其同步/帮助 switch 已删除，MoE/MTP 分区改为
     `VisibleWhen="model.moe"` / `"model.mtp"`，随模型元数据自动显隐。
 - REQ-034 已实现：模型列表按引擎感知——切换引擎时选择其自有的模型路径。
+- REQ-110 已实现：引擎更新（不只是首次安装）：
+  - `EngineAcquisitionService.UpdateAsync` 读取已安装版本（Strata 家族读 `BUILD.json`），
+    与最新可用发布比较（复用 `DoctorService.IsOutdated` 的多版本方案比较），落后才重新下载；
+  - 「初始化环境」在引擎已存在时也会检查更新，兑现体检里「运行初始化环境更新」的提示
+    （此前 bootstrap 只在引擎缺失时下载，该提示实际不生效）；
+  - CLI 新增 `--update [--backend ID] [--all]`，可无人值守更新并输出「已更新 x → y」。
+- REQ-111 已实现：polystrata 增加 `kv` 参数（`--kv fp16|q8_0`）：
+  - 面板提供「默认（fp16）/ fp16 / q8_0」三选项，空值不写命令行（保持引擎默认）；
+  - 帮助文案注明 q8_0 仅 qwen35moe 家族（Qwen3.6 / Ornith / Tiel）支持，其它模型启动会被拒绝；
+  - 实测（53,127 token 提示词）：fp16 解码 40.4 tok/s、q8_0 37.6 tok/s，该长度下没有收益，
+    收益只在 KV 真正挤压专家缓存的长上下文出现。
 
 ## 5. 体检与维护
 
@@ -119,7 +128,7 @@
 
 ## 10. 全新电脑部署
 
-- REQ-100 已实现：strata-upstream / polystrata 初始化时若缺 Python 3.10+，自动安装：
+- REQ-100 已实现：polystrata 初始化时若缺 Python 3.10+，自动安装：
   winget 优先（`Python.Python.3.12`、用户级、静默、免管理员），回退 python.org
   3.12.10 amd64 安装包（`/quiet InstallAllUsers=0 PrependPath=1`）；装完建 venv 并按引擎
   `requirements.txt` 装依赖。两条路都失败时明确提示手动安装，不静默。安装逻辑具备可替换的
@@ -133,16 +142,28 @@
 - REQ-104 已实现：全新电脑一键配置并启动：
   - GUI: 当所选引擎未就绪（缺少引擎二进制文件、服务源码或 Python 依赖）时，点击「启动服务」自动检测到缺失，向用户弹出友好提示并确认一键自动下载并配置环境，配置完成后无缝自动启动服务；同时在顶部控制条提供直观的「配置环境」按钮，并在未就绪时状态栏清晰提示一键配置；支持配置进度实时呈现（全局日志联动）。
   - CLI: `--start` 支持在缺少环境时通过 `--auto-bootstrap`（或 `--bootstrap`）开关一键全自动配置环境并拉起服务；`--bootstrap --all` 支持一条命令配置所有内置引擎环境；`llama-manager.ps1` 和 `llama-manager.cmd` 完整支持 `-Bootstrap`、`-Doctor`、`-All`、`-Offline`、`-AutoBootstrap`、`-Backend` 等参数。
-  - 引擎自包含与 DLL 补全：在 Strata 家族（strata-upstream, polystrata）初始化时，自动补充/共享 CUDA 运行时依赖（`cublas64_*.dll`, `cudart64_*.dll`），且子进程环境变量 PATH 补全相关目录，彻底杜绝 Windows 下 `STATUS_DLL_NOT_FOUND` (0xC0000135) 错误。
-- REQ-105 已实现：多引擎日志与实时速度监控适配（polystrata 与 strata-upstream）：
+  - 引擎自包含与 DLL 补全：在 polystrata 初始化时，自动补充/共享 CUDA 运行时依赖（`cublas64_*.dll`, `cudart64_*.dll`），且子进程环境变量 PATH 补全相关目录，彻底杜绝 Windows 下 `STATUS_DLL_NOT_FOUND` (0xC0000135) 错误。
+- REQ-105 已实现：多引擎日志与实时速度监控适配（polystrata）：
   - 日志系统（LogService）支持按当前所选后端动态读取其专属日志（`logs/engine-{backendId}.log`、`.stdout.log`、`.stderr.log`），“打开日志文件”按钮自动定位打开当前引擎的主日志文件。
   - 测速监控（SpeedMonitorService）与状态轮询适配 Strata 服务端：在 `serve/server.py` 的 `/slots` 接口暴露当前实时解码 tokens 数（`n_decoded`），使得启动器在推理生成过程中能即时计算实时解码速度；当请求结束空闲时，自动解析 Strata 引擎日志（`[strata] done: ... (XX tok/s)`）或读取 `/v1/status` 的 `last_timings` 显示已完成请求的生成速度。
-  - 显存/专家分布诊断：从 `engine-polystrata.log` 及 `engine-strata-upstream.log` 解析 Strata 引擎专有的显存专家分布（`X/Y 专家在显存 (Z GiB)`、`X/Y 专家/层在显存 (Z GiB)`）并在顶部状态信息中直观呈现。
-- REQ-106 已实现：strata-upstream 投机加速与专家槽位性能修复（解决 27 TPS 瓶颈）：
-  - 修正参数传递：`strata.exe` 不支持 `--vram-reserve-mib`（日志提示 ignoring），且默认 `expert_slots` 为 0，在 6GB 显卡上可能让 routed experts 全部回退到 CPU 线程池。现为 `strata-upstream` 配置专属的 `expertSlots`（默认 16，占用约 0.75 GiB 显存）。
-  - 激活 MTP 多 Token 投机加速：配置中显式传递 `--mtp 2`（`mtpDrafts`，默认 2），利用模型自带的 MTP 模块进行投机解码。
-  - 测速优先采用服务端 `timings.predicted_per_second`，避免 SSE 合并多个 Token 时低估 MTP 吞吐。
-  - 专家槽位按上下文自适应：不超过 8192 时默认 16 槽，大于 8192 时默认交给引擎计算；显式填写的槽位数仍优先。
-  - 同一 RTX 3060 Laptop (6GB) 的 256 Token 实测为 28.0 -> 39.5 tok/s；24 槽为 41.3 tok/s，但仅余约 8 MiB 显存，默认采用更安全的 16 槽。
+  - 显存/专家分布诊断：从 `engine-polystrata.log` 解析 PolyStrata 的显存专家分布（`X/Y 专家在显存 (Z GiB)`、`the expert cache A -> B experts (Z GiB)`）并在顶部状态信息中直观呈现。
+- REQ-106 已废弃（2026-10-18）：~~strata-upstream 投机加速与专家槽位性能修复~~。该引擎已退役，
+  `expertSlots`/`mtpDrafts` 参数、`--expert-slots`/`--mtp`/`--prefill`/`--max-new` 的 runconfig
+  分支一并移除；同类能力改由 polystrata 的内置 MTP 草稿与 `--tail-skip`/`--kv`/`--threads` 承担。
+- REQ-112 已实现（2026-10-18）：退役 `strata-upstream` 后端。判定依据：
+  - 能力重叠：`strata-poly` 支持 qwen35moe / glm5-next / gemma4 / deepseek4 / lfm2moe，
+    覆盖 `strata.exe` 的 qwen35moe；后者唯一独有的 `qwen4exp`（Qwen3.8-Flash-Next）最小
+    Coder IQ1_M 主分片 29.6 GB、官方写明需 32 GB 内存，本机 23.4 GB 无法运行。
+  - 实测：同一 Ornith-1.5-35B-A3B 模型，`strata.exe` 35.1 tok/s、预热 27–88 s；
+    `strata-poly` 46.0 tok/s（tail 0）/ 49.8 tok/s（tail 6）、载入 3.1 s。
+  - 显存控制：`strata.exe` 无 `--tail-skip`/`--kv`/`--vram-reserve-mib`（日志对前者打印
+    `ignoring`），`strata-poly` 三者齐备且专家缓存按空闲显存动态伸缩。
+  - 移除范围：`StrataEngineProfile.UpstreamProfile`、注册表条目、`EngineCatalog.StrataPlan`
+    /`StrataRepo`/`StrataSourceBranch`、采集与 bootstrap/doctor/CLI 分支、面板字段与帮助。
+  - 保留范围：`StrataService`/`StrataPackService`/`StrataCompatibility`（分词表准备与
+    `ProcessPluginBackend` 仍在用）、`StrataConfig` 旧配置块（作为 polystrata 的回退）。
+  - 顺带修正：面板里 `poolWorkers` 从未被发出（只有上游分支写 `--pool-workers`），
+    改名为 `threads` 并真正写 `--threads N`。
+  - 回归：61 项全部通过；`docs-gate` 通过。
 
 

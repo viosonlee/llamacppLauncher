@@ -6,7 +6,8 @@
 
 - `IEngineBackend` 提供 `ProbeAsync`（可用性/版本）、`InspectAsync`（GGUF 兼容性 + 资源估算）与 `StatusAsync`。
 - `IServerBackend` 增加 `BuildLaunch`/`StartAsync`/`StopAsync`/`ReadyAsync`/`ResolvePort`/`HealthUrl`/`OpenWebUi`。
-- 内置后端：`llamacpp`（委托既有 `ServerService`，行为不变）、`strata-upstream`（启动引擎自带的 `serve/server.py` HTTP 服务）。
+- 内置后端：`llamacpp`（委托既有 `ServerService`，行为不变）、`polystrata`（启动引擎自带的 `serve/server.py` HTTP 服务）。
+- 已退役：`strata-upstream`（`strata.exe`）。它唯一独有的 `qwen4exp` 家族（Qwen3.8-Flash-Next）最小也要 29.6 GB 文件 / 32 GB 内存，本机 23.4 GB 跑不动；在共同支持的 qwen35moe 上它比 `polystrata` 慢约 30%，且没有 `--tail-skip`/`--kv`/`--vram-reserve-mib`。相关注册、下载与面板字段已移除（见 `docs/CHANGELOG-DECISIONS.md` 2026-10-18 条）。
 - 插件后端：`ProcessPluginBackend` 由 `plugins/<id>/plugin.json` 清单驱动（`schema:1`），只拉起声明的进程、等待 `/health` 或端口；不加载插件代码，因此崩溃被隔离在子进程。内置 `polystrata` 清单。
 - `BackendRegistry` 是唯一后端清单；`PluginLoader` 在启动时扫描 `AppContext.BaseDirectory/plugins`、`<ManagerRoot>/plugins`、`<LlamaCppRoot>/engines`。
 - `EngineArbiter` 集中 GPU 重负载互斥：启动某后端前若另一后端持有 GPU，走统一确认；不再在各处重复冲突检查。

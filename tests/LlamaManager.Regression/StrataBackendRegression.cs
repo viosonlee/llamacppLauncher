@@ -8,29 +8,14 @@ using static Program;
 
 internal static class StrataBackendRegression
 {
-    /// <summary>Panel values a user could plausibly type; each must reach the runconfig.</summary>
-    private static void settings_ApplyPanelValues(ManagerConfig config)
-    {
-        var settings = config.Engines["strata-upstream"];
-        settings.Parameters["prefill"] = "1024";
-        settings.Parameters["maxNew"] = "512";
-        settings.Parameters["poolWorkers"] = "8";
-    }
-
-    private static void settings_ClearPanelValues(ManagerConfig config)
-    {
-        var settings = config.Engines["strata-upstream"];
-        settings.Parameters.Remove("prefill");
-        settings.Parameters.Remove("maxNew");
-        settings.Parameters.Remove("poolWorkers");
-    }
     /// <summary>
-    /// Phase 3: the Strata backend starts the engine's own HTTP service
+    /// The PolyStrata backend starts the engine's own HTTP service
     /// (<c>python -m serve.server --engine strata --config &lt;json&gt; --port N</c>) and maps the
     /// launched process into a canonical session. A fake serve/server.py stands in for Python.
     /// </summary>
     public static async Task RunLaunchAsync(string root, string model)
-    {        // A qwen35moe fixture so the Strata analyzer sees a runnable model.
+    {
+        // A qwen35moe fixture so the PolyStrata analyzer sees a runnable model.
         model = Path.Combine(root, "apex model.gguf");
         File.WriteAllBytes(model, Fixtures.StrataGguf());
         // A fake Strata source tree: serve/server.py + tools/strata_tokenizer.py + a fake engine.
@@ -44,22 +29,18 @@ internal static class StrataBackendRegression
         var python = Path.Combine(root, "fake-python.cmd");
         File.WriteAllText(python, "@echo off\r\necho fake python 3.12\r\n");
 
-        // A fake engine directory with strata.exe (the regression exe advertises qwen35moe via --families).
-        var package = Path.Combine(root, "strata-pkg");
-        var engineDir = Path.Combine(package, "engine");
-        Fixtures.CopyRuntime(engineDir);
-        File.Copy(Environment.ProcessPath!, Path.Combine(engineDir, "strata.exe"), true);
-        // Warm the fresh copy once: a first launch pays for antivirus scanning and cold JIT,
-        // which can exceed the probe's 5 s timeout on a busy machine and flake the run.
-        // The warm-up result is ignored; the probe below re-checks with a hot process.
-        StrataBackend.EngineSupportsQwen35(Path.Combine(engineDir, "strata.exe"));
+        // The engine ships strata-poly.exe in engine-poly/; the package root holds serve/.
+        var package = Path.Combine(root, "poly-pkg");
+        var engineDir = Path.Combine(package, "engine-poly");
+        Directory.CreateDirectory(engineDir);
+        File.WriteAllText(Path.Combine(engineDir, "strata-poly.exe"), "# fake exe");
 
         // The tokenizer prep tool must exist; pre-seed the tokenizer dir so no Python is needed.
         File.WriteAllText(Path.Combine(source, "tools", "strata_tokenizer.py"), "# fixture\n");
 
         var port = Fixtures.FreePort();
         var config = new ManagerConfig();
-        config.Engines["strata-upstream"] = new EngineSettings
+        config.Engines["polystrata"] = new EngineSettings
         {
             ModelPath = model,
             Port = port,
@@ -73,19 +54,19 @@ internal static class StrataBackendRegression
             },
         };
         ConfigService.SaveConfig(config);
-        ConfigService.SaveEngineSettings(config, "strata-upstream", config.Engines["strata-upstream"]);
+        ConfigService.SaveEngineSettings(config, "polystrata", config.Engines["polystrata"]);
 
-        var backend = BackendRegistry.ServerById("strata-upstream");
-        Check(backend != null, "strata-upstream backend not registered");
+        var backend = BackendRegistry.ServerById("polystrata");
+        Check(backend != null, "polystrata backend not registered");
         Check(backend!.Descriptor.GpuHeavy, "strata backend must be GPU-heavy");
 
-        // Probe: the fake engine advertises qwen35moe, server.py exists, python exists.
+        // Probe: the engine exe, server.py and python all exist.
         var probe = await backend.ProbeAsync(CancellationToken.None);
         Check(probe.Available, "strata backend not available: " + probe.Problem);
 
-        // Compatibility: the APEX fixture (Q3_K/Q6_K/IQ2_S) must pass on the patched engine.
+        // Compatibility: the APEX fixture (Q3_K/Q6_K/IQ2_S) must pass PolyStrata's expert check.
         var report = await backend.InspectAsync(model, CancellationToken.None);
-        Check(report.Runnable, "APEX fixture rejected by strata backend: " + string.Join("; ", report.Blockers));
+        Check(report.Runnable, "APEX fixture rejected by polystrata backend: " + string.Join("; ", report.Blockers));
 
         // BuildLaunch: the command line must invoke serve.server with the runconfig and port.
         var plan = backend.BuildLaunch(new EngineStartRequest { Config = config });
@@ -98,51 +79,43 @@ internal static class StrataBackendRegression
         Check(plan.GeneratedFiles.ContainsKey(runconfigPath), "runconfig not generated");
         var runconfig = JsonNode.Parse(plan.GeneratedFiles[runconfigPath])!.AsObject();
         Equal("qwen35moe", runconfig["arch"]!.GetValue<string>());
-        Check(runconfig["exe"]!.GetValue<string>().EndsWith("strata.exe"), "runconfig exe wrong");
+        Check(runconfig["exe"]!.GetValue<string>().EndsWith("strata-poly.exe"),
+            "polystrata runconfig must point at strata-poly.exe");
         var runArgs = runconfig["args"]!.AsArray().Select(n => n!.GetValue<string>()).ToList();
-        Check(runArgs.Contains("--mtp") && runArgs.Contains("2"), "strata-upstream must pass --mtp 2 by default");
-        Check(runArgs.Contains("--expert-slots") && runArgs.Contains("16"), "strata-upstream must pass --expert-slots 16 by default");
-        Check(!runArgs.Contains("--vram-reserve-mib"), "strata-upstream must not pass --vram-reserve-mib");
-        // The panel's own fields must reach the command line, and nothing the engine silently
-        // ignores may be emitted: strata.exe logs "ignoring <flag>" for parallel/slots/batch/
-        // warm-start/fit-max-tokens/tail-skip, and rejects --expert-slots outright.
-        settings_ApplyPanelValues(config);
+        // strata-poly reads the GGUF in place: --model, never the upstream loader's --native.
+        Check(runArgs.Contains("--model"), "polystrata must load the GGUF with --model");
+        Check(!runArgs.Contains("--native"), "polystrata has no --native loader");
+        Check(runArgs.Contains("--max-context") && runArgs.Contains("4096"), "--max-context must follow the panel");
+        Check(runArgs.Contains("--vram-reserve-mib"), "polystrata must pass --vram-reserve-mib");
+        // Options the engine does not have must never be emitted: strata-poly rejects unknown
+        // options outright (it refuses --expert-slots with "unknown option"), so a stray flag
+        // would fail the launch instead of being ignored.
+        foreach (var unsupported in new[] { "--expert-slots", "--prefill", "--max-new", "--mtp", "--pool-workers" })
+            Check(!runArgs.Contains(unsupported), $"strata-poly has no {unsupported}; never emit it");
+
+        // The panel's own fields must reach the command line.
+        config.Engines["polystrata"].Parameters["threads"] = "8";
         var panelPlan = backend.BuildLaunch(new EngineStartRequest { Config = config });
         var panelArgs = panelPlan.Arguments.ToList();
-        var panelConfigPath = panelArgs[panelArgs.IndexOf("--config") + 1];
-        var panelRunconfig = JsonNode.Parse(panelPlan.GeneratedFiles[panelConfigPath])!.AsObject();
+        var panelRunconfig = JsonNode.Parse(panelPlan.GeneratedFiles[panelArgs[panelArgs.IndexOf("--config") + 1]])!.AsObject();
         var panelRunArgs = panelRunconfig["args"]!.AsArray().Select(n => n!.GetValue<string>()).ToList();
-        Check(panelRunArgs.Contains("--prefill") && panelRunArgs.Contains("1024"), "--prefill must follow the panel value");
-        Check(panelRunArgs.Contains("--max-new") && panelRunArgs.Contains("512"), "--max-new must follow the panel value");
-        Check(panelRunArgs.Contains("--pool-workers") && panelRunArgs.Contains("8"), "--pool-workers must follow the panel value");
-        Check(!panelRunArgs.Contains("--tail-skip"), "strata-upstream ignores --tail-skip; never emit it");
-        foreach (var ignored in new[] { "--parallel", "--slots", "--batch", "--warm-start", "--fit-max-tokens" })
-            Check(!panelRunArgs.Contains(ignored), $"strata-upstream ignores {ignored}; never emit it");
-        foreach (var spec in backend.Parameters)
-            Check(spec.Key is not ("parallel" or "slots" or "batch" or "warmStart" or "fitMaxTokens" or "tailSkip"),
-                $"{spec.Key} is not a strata-upstream option and must not appear in the panel");
-        settings_ClearPanelValues(config);
+        Check(panelRunArgs.Contains("--threads") && panelRunArgs.Contains("8"), "--threads must follow the panel value");
+        config.Engines["polystrata"].Parameters.Remove("threads");
 
-        // Large contexts use the engine's automatic sizing unless the user explicitly chooses a count.
-        var settings = config.Engines["strata-upstream"];
-        settings.Parameters["context"] = "40960";
-        var largePlan = backend.BuildLaunch(new EngineStartRequest { Config = config });
-        var largeArgs = largePlan.Arguments.ToList();
-        var largeConfigPath = largeArgs[largeArgs.IndexOf("--config") + 1];
-        var largeRunconfig = JsonNode.Parse(largePlan.GeneratedFiles[largeConfigPath])!.AsObject();
-        var largeRunArgs = largeRunconfig["args"]!.AsArray().Select(n => n!.GetValue<string>()).ToList();
-        Check(largeRunArgs.Contains("--mtp") && !largeRunArgs.Contains("--expert-slots"),
-            "large context must keep MTP and leave expert slots on auto");
-        settings.Parameters["expertSlots"] = "4";
-        largePlan = backend.BuildLaunch(new EngineStartRequest { Config = config });
-        largeArgs = largePlan.Arguments.ToList();
-        largeConfigPath = largeArgs[largeArgs.IndexOf("--config") + 1];
-        largeRunconfig = JsonNode.Parse(largePlan.GeneratedFiles[largeConfigPath])!.AsObject();
-        largeRunArgs = largeRunconfig["args"]!.AsArray().Select(n => n!.GetValue<string>()).ToList();
-        Check(largeRunArgs.Contains("--expert-slots") && largeRunArgs.Contains("4"),
-            "explicit expert slots must override the large-context auto default");
-        settings.Parameters["context"] = "4096";
-        settings.Parameters.Remove("expertSlots");
+        // tail-skip and kv are polystrata options; both must reach the engine, and the default
+        // (empty) kv must stay off the command line so the engine keeps its own default.
+        Check(!runArgs.Contains("--kv"), "an unset kv must not be passed at all");
+        Check(!runArgs.Contains("--tail-skip"), "tail-skip 0 must not be passed at all");
+        config.Engines["polystrata"].Parameters["kv"] = "q8_0";
+        config.Engines["polystrata"].Parameters["tailSkip"] = "6";
+        var kvPlan = backend.BuildLaunch(new EngineStartRequest { Config = config });
+        var kvArgs = kvPlan.Arguments.ToList();
+        var kvRunconfig = JsonNode.Parse(kvPlan.GeneratedFiles[kvArgs[kvArgs.IndexOf("--config") + 1]])!.AsObject();
+        var kvRunArgs = kvRunconfig["args"]!.AsArray().Select(n => n!.GetValue<string>()).ToList();
+        Check(kvRunArgs.Contains("--kv") && kvRunArgs.Contains("q8_0"), "--kv q8_0 must reach the runconfig");
+        Check(kvRunArgs.Contains("--tail-skip") && kvRunArgs.Contains("6"), "--tail-skip 6 must reach the runconfig");
+        config.Engines["polystrata"].Parameters.Remove("kv");
+        config.Engines["polystrata"].Parameters.Remove("tailSkip");
 
         // The engine page's settings must actually drive the runconfig (not the legacy Strata block).
         Equal(port, runconfig["port"]!.GetValue<int>());
@@ -156,36 +129,6 @@ internal static class StrataBackendRegression
         var overrideConfigPath = overrideArgs[overrideArgs.IndexOf("--config") + 1];
         var overrideRunconfig = JsonNode.Parse(overridePlan.GeneratedFiles[overrideConfigPath])!.AsObject();
         Equal(overridePort, overrideRunconfig["port"]!.GetValue<int>());
-
-        // Verify PolyStrata backend resolves its own strata-poly.exe and does not cross-wire to strata.exe.
-        var polyPackage = Path.Combine(root, "poly-pkg");
-        var polyEngineDir = Path.Combine(polyPackage, "engine-poly");
-        Directory.CreateDirectory(polyEngineDir);
-        File.WriteAllText(Path.Combine(polyEngineDir, "strata-poly.exe"), "# fake exe");
-        config.Engines["polystrata"] = new EngineSettings
-        {
-            ModelPath = model,
-            Port = port + 1,
-            Parameters = new Dictionary<string, string>
-            {
-                ["packageRoot"] = polyPackage,
-                ["serveRoot"] = source,
-                ["pythonPath"] = python,
-                ["servePort"] = (port + 1).ToString(),
-                ["context"] = "4096",
-            },
-        };
-        var polyBackend = BackendRegistry.ServerById("polystrata");
-        Check(polyBackend != null, "polystrata backend not registered");
-        var polyPlan = polyBackend!.BuildLaunch(new EngineStartRequest { Config = config });
-        var polyArgs = polyPlan.Arguments.ToList();
-        var polyRunconfigPath = polyArgs[polyArgs.IndexOf("--config") + 1];
-        var polyRunconfig = JsonNode.Parse(polyPlan.GeneratedFiles[polyRunconfigPath])!.AsObject();
-        Check(polyRunconfig["exe"]!.GetValue<string>().EndsWith("strata-poly.exe"),
-            "polystrata runconfig must point at strata-poly.exe, not strata.exe");
-        var polyRunArgs = polyRunconfig["args"]!.AsArray().Select(n => n!.GetValue<string>()).ToList();
-        Check(polyRunArgs.Contains("--vram-reserve-mib"), "polystrata must pass --vram-reserve-mib");
-        Check(!polyRunArgs.Contains("--expert-slots"), "polystrata must not pass --expert-slots");
     }
 
     /// <summary>Resolvers must report honest problems instead of throwing at random points.</summary>
@@ -194,37 +137,6 @@ internal static class StrataBackendRegression
         var empty = new ManagerConfig();
         Check(StrataBackend.ResolveEngine(empty) == null, "engine resolved from an empty config");
         Check(StrataBackend.ResolveServer(empty) == null, "server resolved from an empty config");
-        Check(!StrataBackend.EngineSupportsQwen35(Path.Combine(root, "missing.exe")), "missing engine advertised qwen35moe");
-    }
-
-    /// <summary>
-    /// Regression for the reported hang: selecting the Strata backend runs `strata.exe --families`.
-    /// An engine that floods stderr and never exits must not deadlock the caller; the probe is
-    /// bounded and kills the child. This is the bug the user hit as "选择 strata 卡死".
-    /// </summary>
-    public static async Task RunProbeHangAsync(string root)
-    {
-        var package = Path.Combine(root, "strata-hang-pkg");
-        var engineDir = Path.Combine(package, "engine");
-        Fixtures.CopyRuntime(engineDir);
-        var engine = Path.Combine(engineDir, "strata.exe");
-        File.Copy(Environment.ProcessPath!, engine, true);
-        File.WriteAllText(Path.Combine(engineDir, "families-hang"), "");
-
-        var config = new ManagerConfig();
-        config.Engines["strata-upstream"] = new EngineSettings
-        {
-            Parameters = new Dictionary<string, string> { ["packageRoot"] = package },
-        };
-        ConfigService.SaveConfig(config);
-        ConfigService.SaveEngineSettings(config, "strata-upstream", config.Engines["strata-upstream"]);
-
-        var backend = BackendRegistry.ServerById("strata-upstream")!;
-        var started = DateTime.UtcNow;
-        var probe = await backend.ProbeAsync(CancellationToken.None);
-        var elapsed = DateTime.UtcNow - started;
-        Check(elapsed < TimeSpan.FromSeconds(20), $"probe did not stay bounded: {elapsed.TotalSeconds:F1}s");
-        // A hung engine is not a usable backend, and the reason is reported (not an exception).
-        Check(!probe.Available, "hung engine reported as available");
+        Check(!StrataService.EngineSupportsQwen35(Path.Combine(root, "missing.exe")), "missing engine advertised qwen35moe");
     }
 }

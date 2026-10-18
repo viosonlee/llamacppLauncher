@@ -1,6 +1,9 @@
 # 引擎与资源更新维护指南（ENGINE-UPDATE-GUIDE）
 
-本指南说明如何在「本地大模型助手（LlamaManager）」中管理、集成与升级推理引擎（`polystrata`、`strata-upstream`）、分词表（Tokenizer）及大模型文件。
+本指南说明如何在「本地大模型助手（LlamaManager）」中管理、集成与升级推理引擎（`polystrata`）、分词表（Tokenizer）及大模型文件。
+
+> `strata-upstream` 已于 2026-10-18 退役（见 `docs/CHANGELOG-DECISIONS.md` 同日条目与 REQ-112）；
+> 本文中仍出现的该引擎路径均为历史说明，实际只剩 `polystrata` 一个 Strata 家族引擎。
 
 ---
 
@@ -18,21 +21,15 @@ C:\
     ├── llama-server.exe                   # llamacpp 标准引擎
     └── llamacppLauncher\                  # 启动器工程根目录
         ├── engines\                       # 推理引擎与服务资源（集成库）
-        │   ├── polystrata\
-        │   │   ├── engine-poly\strata-poly.exe  # PolyStrata 二进制
-        │   │   ├── serve\                       # HTTP 服务后端
-        │   │   ├── tools\                       # 打包与分词工具
-        │   │   └── expert-profile.txt           # 预置专家激活画像（如有）
-        │   └── strata-upstream\
-        │       ├── engine\strata.exe            # Upstream 原生引擎二进制
-        │       ├── serve\
-        │       └── tools\
+        │   └── polystrata\
+        │       ├── engine-poly\strata-poly.exe  # PolyStrata 二进制
+        │       ├── serve\                       # HTTP 服务后端
+        │       ├── tools\                       # 打包与分词工具
+        │       └── expert-profile.txt           # 预置专家激活画像（如有）
         ├── venvs\                         # 独立的 Python 隔离运行环境
-        │   ├── polystrata\Scripts\python.exe
-        │   └── strata-upstream\Scripts\python.exe
+        │   └── polystrata\Scripts\python.exe
         ├── data\                          # 自动生成的分词表与运行期配置缓存
-        │   ├── polystrata\<模型哈希>\tokenizer\
-        │   └── strata-upstream\<模型哈希>\tokenizer\
+        │   └── polystrata\<模型哈希>\tokenizer\
         └── logs\                          # 运行日志
 ```
 
@@ -70,22 +67,20 @@ C:\
 
 当上游源码更新或在本地（如 `C:\workspace\apex-on-strata`）编译出新版本时，请按以下步骤更新集成库：
 
-### 4.1 更新 Upstream 引擎（`strata-upstream`）
+### 4.1 更新 Upstream 引擎（`strata-upstream`）—— 已退役
 
-1. **编译产物**：
-   - 将新编译的 `strata.exe` 复制并替换到：
-     `llamacppLauncher\engines\strata-upstream\engine\strata.exe`
-2. **配套 DLL**（如 CUDA 驱动/数学库有更新）：
-   - 放入 `llamacppLauncher\engines\strata-upstream\engine\` 目录下。
-3. **配套服务源码与工具**：
-   - 同步复制仓库中的 `serve\` 和 `tools\` 文件夹到：
-     `llamacppLauncher\engines\strata-upstream\`
-4. **依赖就绪验证**：
-   - 执行体检命令核对状态：
-     ```powershell
-     pwsh -File llama-manager.ps1 -Doctor
-     ```
-     `strata-upstream` 显示 `[ok]` 即代表更新完成。
+该引擎已于 2026-10-18 退役，`engines\strata-upstream\`、`venvs\strata-upstream\` 与
+`data\strata-upstream\` 均已删除，注册表、下载计划与参数面板中的对应项也一并移除。
+它唯一独有的 `qwen4exp`（Qwen3.8-Flash-Next）最小 29.6 GB 文件、需 32 GB 内存，本机跑不动；
+在共同支持的 qwen35moe 上它比 `polystrata` 慢约 30%。若将来换到 32 GB 以上内存的机器，
+应改装 PolyStrata 的完整主引擎，而不是恢复这个定制分支。详见 `docs/CHANGELOG-DECISIONS.md`。
+
+引擎的日常更新不再需要手工替换二进制：已安装的引擎落后于最新发布时，`--bootstrap` 会自动升级，
+也可以直接执行：
+
+```powershell
+pwsh -File llama-manager.ps1 -Update            # 检查并更新可自动下载的引擎
+```
 
 ### 4.2 更新 PolyStrata 引擎（`polystrata`）
 
@@ -105,7 +100,6 @@ C:\
 
 ```powershell
 # 自动同步并安装指定引擎的所有 Python 依赖
-pwsh -File llama-manager.ps1 -Bootstrap -Backend strata-upstream
 pwsh -File llama-manager.ps1 -Bootstrap -Backend polystrata
 ```
 
@@ -135,6 +129,6 @@ pwsh -File llama-manager.ps1 -Bootstrap -Backend polystrata
 3. **正式归档状态（只读）**：
    - 启动器已于 2026-10 正式废弃 REQ-090，`strata-cyber` / `cyber` 分支**全面归档为只读（Read-Only）状态**，不再维护、不再构建、不再接受新改动。
    - 启动器后端注册表已彻底移除 `strata-cyber` 选项与旧 pack 界面。
-   - 所有针对 APEX 和 Strata 的新特性、补丁与上游同步，**统一在 `apex-on-strata` 仓库的 `upstream` 分支维护**。
-   - 启动器标准运行引擎统一对应为 `strata-upstream` 与 `polystrata`。
+   - 所有针对 APEX 和 Strata 的新特性、补丁与上游同步，曾统一在 `apex-on-strata` 仓库的 `upstream` 分支维护；该分支随 `strata-upstream` 引擎一并归档。
+   - 启动器标准运行引擎统一对应为 `polystrata`（加上 `llamacpp` 与可选的 Prism）。
 

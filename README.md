@@ -8,10 +8,11 @@ Windows 本地大模型启动器，使用 .NET 8 WPF。
 启动器把每个推理引擎抽象为「本地 HTTP 服务」，由统一的后端注册表驱动：
 
 - **llamacpp**（内置）：任意 GGUF 的通用后端，OpenAI 兼容。
-- **strata-upstream**（内置）：Strata 原生 qwen35moe 路径（原地读 GGUF），启动引擎自带的
+- **polystrata**（内置）：PolyStrata（strata-poly）MoE 引擎，启动引擎自带的
   `serve/server.py` HTTP 服务（OpenAI/Anthropic 兼容）。
-- **polystrata**（内置）：PolyStrata（strata-poly）MoE 引擎，同样经 `serve/server.py`
-  提供 HTTP 服务。
+  > 原 `strata-upstream`（`strata.exe`）已于 2026-10-18 退役：它唯一独有的 `qwen4exp`
+  > （Qwen3.8-Flash-Next）需 32 GB 以上内存，在共同支持的 qwen35moe 上又比 polystrata 慢约 30%。
+  > 见 `docs/CHANGELOG-DECISIONS.md` 同日条目。
 - **插件后端**：`plugins/<id>/plugin.json`（`schema:1`）声明如何启动自带 HTTP 服务的第三方引擎、
   如何探测就绪、参数表。插件是独立进程，崩溃不影响启动器，新增引擎无需重编译。
 

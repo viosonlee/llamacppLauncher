@@ -247,26 +247,14 @@ public partial class MainWindow
         {
             var legacy = spec.Key switch
             {
-                "prefill" => strata.LegacyPrefill(_config),
-                "maxNew" => strata.LegacyMaxNew(_config),
-                "poolWorkers" => strata.LegacyWorkers(_config),
+                "threads" => strata.LegacyWorkers(_config),
                 "reasoningBudget" => strata.LegacyReasoningBudget(_config),
                 "anthropicThinking" => strata.LegacyAnthropicThinking(_config),
                 _ => null,
             };
             if (!string.IsNullOrWhiteSpace(legacy)) return legacy!;
         }
-        var current = spec.Default ?? "";
-        // Strata upstream derives its expert slot count from the context size when unset;
-        // mirror that here so the panel shows the value the engine will actually use.
-        if (spec.Key == "expertSlots" && backend.Descriptor.Id == StrataBackend.UpstreamProfile.Id &&
-            (settings == null || !settings.Parameters.TryGetValue("expertSlots", out var slotSetting) || string.IsNullOrWhiteSpace(slotSetting)))
-        {
-            var context = int.TryParse(settings?.Parameters.GetValueOrDefault("context"), out var parsedContext)
-                ? parsedContext : 4096;
-            if (context > 8192) current = "0";
-        }
-        return current;
+        return spec.Default ?? "";
     }
 
     /// <summary>Builds one parameter row: label + editor + "?" button, with an inline error line.</summary>
@@ -599,8 +587,8 @@ public partial class MainWindow
             "packageRoot" =>
                 "【引擎包目录 (packageRoot)】\n" +
                 "• 作用：Strata 引擎二进制核心和配套服务脚本所在的根目录。\n" +
-                "• 默认建议：留空即可（系统会自动匹配 engines/strata-upstream 或 engines/polystrata）。\n" +
-                "• 包含文件：内含 engine\\strata.exe（或 engine-poly\\strata-poly.exe）与 serve\\server.py。",
+                "• 默认建议：留空即可（系统会自动匹配 engines/polystrata）。\n" +
+                "• 包含文件：内含 engine-poly\\strata-poly.exe 与 serve\\server.py。",
 
             "serveRoot" =>
                 "【服务源码根 (serveRoot)】\n" +
@@ -643,29 +631,11 @@ public partial class MainWindow
                 "  - 笔记本独显或单显卡用户：推荐 256 ~ 500 MiB 最佳。\n" +
                 "  - 双显卡（核显负责屏幕显示，独显仅推理）：可设为 256 MiB 以腾出更多显存给模型。",
 
-            "mtpDrafts" =>
-                "【MTP 草稿数 (mtpDrafts)】\n" +
-                "• 作用：Strata 引擎每步投机采样的草稿 Token 数（--mtp）。\n" +
-                "• 原理：带有 MTP（Multi-Token Prediction）模块的模型可以在每个解码步同时预测多个未来 Token，命中即可一次性输出多个 Token，使解码速度大幅提升 1.8x ~ 2.5x。\n" +
-                "• 推荐配置：\n" +
-                "  - 推荐设为 2（默认），兼顾高接受率（70%~95%）与生成吞吐。\n" +
-                "  - 设为 0 则关闭投机采样（单 Token 逐步生成）。",
-
-            "expertSlots" =>
-                "【显存专家槽位 (expertSlots)】\n" +
-                "• 作用：Strata upstream 引擎中，每个 MoE 层常驻在显存中的专家槽位数（--expert-slots）。\n" +
-                "• 原理：将高频使用的 MoE 专家预载进 GPU 显存，未命中的专家通过 CPU 线程池计算或动态置换，大幅提升 GPU 命中率。\n" +
-                "• 推荐配置：\n" +
-                "  - 6GB 显存：默认 16（约占用 0.75 GiB 显存）；24 槽在本机仅剩约 8 MiB 空闲显存，可能触发驱动换页。\n" +
-                "  - 8GB ~ 12GB 显存：可从 32 开始逐步测试\n" +
-                "  - 16GB+ 显存：可继续增大，并以启动日志与实测速度为准\n" +
-                "  - 0：让引擎自动计算；在 6GB 显存和 4096 上下文下可能算出 0，退化为纯 CPU 专家计算。\n" +
-                "  - 上下文大于 8192 时，未显式设置本项会默认使用 0；40K 上下文在 6GB 卡上已没有槽位空间，强行设置 16 会造成 WDDM 显存换页并严重掉速。",
-
-            "poolWorkers" =>
-                "【CPU 池线程数 (poolWorkers)】\n" +
-                "• 作用：Strata 引擎用于 CPU 密集型辅助计算（如文本特征处理、分词调度、投机候选搜索）的后台线程池大小。\n" +
-                "• 推荐配置：默认填 0 即可（0 表示由引擎根据 CPU 物理核心数自动检测和分配最佳线程）。",
+            "threads" =>
+                "【CPU 线程数 (threads)】\n" +
+                "• 作用：显存外的专家在 CPU 上计算时使用的线程数（--threads）。\n" +
+                "• 推荐配置：默认填 0 即可（0 表示由引擎根据 CPU 可用核心数自动分配）。\n" +
+                "• 调优：线程过多会和显卡搬运争抢内存带宽；可试 8 / 12 与自动值对比。",
 
             "reasoningBudget" =>
                 "【思考预算 (reasoningBudget)】\n" +

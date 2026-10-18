@@ -13,7 +13,6 @@ public static class BackendRegistry
     static BackendRegistry()
     {
         Register(new LlamaCppBackend());
-        Register(new StrataBackend(StrataBackend.UpstreamProfile));
         Register(new StrataBackend(StrataBackend.PolyProfile));
     }
 

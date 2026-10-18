@@ -70,22 +70,6 @@ internal static class DownloadRegression
         var none = JsonNode.Parse("""{ "tag_name": "b1", "assets": [] }""")!;
         Check(EngineCatalog.LlamaCppPlan(EngineCatalog.ParseRelease(none), @"C:\root") == null, "empty release produced a plan");
 
-        // Strata: patched fork engine zip + upstream-branch source archive.
-        var strata = JsonNode.Parse("""
-        { "tag_name": "v0.1.44.1-apex.1", "assets": [
-          { "name": "strata-windows-x64.zip", "browser_download_url": "https://x/strata.zip",
-            "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" },
-          { "name": "strata-windows-x64-cuda12.zip", "browser_download_url": "https://x/strata12.zip" } ] }
-        """)!;
-        var strataPlan = EngineCatalog.StrataPlan(EngineCatalog.ParseRelease(strata), @"C:\root");
-        Check(strataPlan != null, "strata plan not built");
-        Equal(1, strataPlan!.EngineArchives.Count);
-        Check(strataPlan.EngineArchives[0].Url.EndsWith("strata.zip"), "cuda12 zip wrongly preferred");
-        Check(strataPlan.EngineDir.EndsWith(Path.Combine("engines", "strata-upstream", "engine")), "strata engine dir wrong");
-        Check(strataPlan.SourceArchive != null
-            && strataPlan.SourceArchive.Url.Contains("viosonlee/apex-on-strata/archive/refs/heads/upstream.zip"),
-            "strata source archive must be the fork's upstream branch");
-
         // PolyStrata: hash-named asset + source archive.
         var poly = JsonNode.Parse("""
         { "tag_name": "v0.1.44.1-poly.2", "assets": [
@@ -103,7 +87,6 @@ internal static class DownloadRegression
 
         // Repo routing covers exactly the downloadable backends.
         Check(EngineAcquisitionService.CanAcquire("llamacpp"), "llamacpp not acquirable");
-        Check(EngineAcquisitionService.CanAcquire("strata-upstream"), "strata not acquirable");
         Check(EngineAcquisitionService.CanAcquire("polystrata"), "polystrata not acquirable");
         Check(!EngineAcquisitionService.CanAcquire("nope"), "unknown backend acquirable");
     }
@@ -118,7 +101,6 @@ internal static class DownloadRegression
         var cases = new (string File, string Backend, bool IsList)[]
         {
             ("llama-list.json", "llamacpp", true),
-            ("strata-rel.json", "strata-upstream", false),
             ("poly-rel.json", "polystrata", false),
         };
         foreach (var (file, backend, isList) in cases)
