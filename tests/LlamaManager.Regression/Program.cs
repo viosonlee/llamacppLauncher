@@ -52,6 +52,22 @@ internal static class Program
                 Console.WriteLine(line.StartsWith("────") ? $"\n{line}" : line);
             return 0;
         }
+        if (args.FirstOrDefault() == "--download-model")
+        {
+            // Real end-to-end check of the curated download: name or index from the catalogue.
+            var pick = args.Skip(1).FirstOrDefault() ?? "0";
+            var model = int.TryParse(pick, out var index)
+                ? ModelCatalog.Recommendations[index]
+                : ModelCatalog.Recommendations.First(m => m.FileName.Contains(pick, StringComparison.OrdinalIgnoreCase));
+            Console.WriteLine($"下载 {model.DisplayName}（{EngineDownloadService.FormatBytes(model.Bytes)}）");
+            Console.WriteLine($"目标：{ModelDownloadService.TargetDirectory}");
+            var result = await ModelDownloadService.DownloadAsync(model, Console.WriteLine,
+                CancellationToken.None, progress: (received, total) =>
+                    Console.Write($"\r{EngineDownloadService.FormatBytes(received)}" +
+                        (total is > 0 ? $" / {EngineDownloadService.FormatBytes(total.Value)}   " : "   ")));
+            Console.WriteLine($"\n完成：{result.Path}（{EngineDownloadService.FormatBytes(result.Bytes)}）");
+            return 0;
+        }
         if (args.FirstOrDefault() == "--check-strata")
         {
             if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("LLAMA_MANAGER_ROOT")))
@@ -630,6 +646,53 @@ internal static class Program
                 Check(!ServerService.IsSessionAlive(alive with { StartTimeUtcTicks = 1 }), "a mismatched start time passed");
                 Check(!ServerService.IsSessionAlive(null), "null passed");
                 Check(!ServerService.IsSessionAlive(new ServerSession()), "a record without PID passed");
+            }));
+            await Test("model catalog: URLs, ordering, fit and the download guard", () => Run(() =>
+            {
+                var list = ModelCatalog.Recommendations;
+                Check(list.Count >= 4, "catalogue too small for a first-run picker");
+                Check(list.SequenceEqual(list.OrderBy(m => m.VramMb)), "catalogue must be ordered smallest-first");
+                Check(list.Select(m => m.FileName).Distinct().Count() == list.Count, "duplicate file names");
+                // Sizes are the exact byte counts read from the CDN; a hand-edited round number
+                // would break the "same size = already downloaded" check.
+                Check(list.All(m => m.Bytes % (1L << 20) != 0), "byte counts look hand-rounded");
+                foreach (var m in list)
+                {
+                    Check(m.Url.StartsWith("https://huggingface.co/") && m.Url.Contains("/resolve/main/") &&
+                        m.Url.EndsWith(m.FileName), $"malformed URL: {m.Url}");
+                    Check(m.Bytes > 1_000_000, $"implausible size for {m.FileName}");
+                    Check(!string.IsNullOrWhiteSpace(m.Note) && !string.IsNullOrWhiteSpace(m.Repo), "row missing note or repo");
+                }
+                var smallest = list[0];
+                Check(smallest.Fits(0), "unknown VRAM must not hide the smallest model");
+                Check(!smallest.Fits(64), "a 64 MiB card cannot fit anything");
+                Check(list[^1].Fits(list[^1].VramMb * 2), "double the stated VRAM must fit");
+
+                // The GGUF guard rejects an HTML error page and accepts the real magic.
+                var junk = Path.Combine(_root, "junk.gguf");
+                File.WriteAllText(junk, "<html><body>Not Found</body></html>");
+                Throws<IOException>(() => ModelDownloadService.VerifyGguf(junk));
+                ModelDownloadService.RemoveInvalid(junk);
+                Check(!File.Exists(junk), "invalid download was not removed");
+                var good = Path.Combine(_root, "good.gguf");
+                File.WriteAllBytes(good, Fixtures.Gguf());
+                ModelDownloadService.VerifyGguf(good);
+            }));
+            await Test("model download: target honours the configured models directory", () => Run(() =>
+            {
+                var config = ConfigService.ReadConfig();
+                var saved = config.ModelsDirectory;
+                try
+                {
+                    var custom = Path.Combine(_root, "custom-models");
+                    config.ModelsDirectory = custom;
+                    ConfigService.SaveConfig(config);
+                    Equal(custom, ModelDownloadService.TargetDirectory);
+                    config.ModelsDirectory = "";
+                    ConfigService.SaveConfig(config);
+                    Equal(Path.Combine(ConfigService.GetRoot(), "models"), ModelDownloadService.TargetDirectory);
+                }
+                finally { config.ModelsDirectory = saved; ConfigService.SaveConfig(config); }
             }));
             await Test("lifecycle: server start truncates the shared stderr log", async () =>
             {

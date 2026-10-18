@@ -138,6 +138,15 @@ public partial class MainWindow
         if (dialog.ShowDialog() == true) await SelectModelAsync(Path.GetFullPath(dialog.FileName));
     }
 
+    private async void DownloadModelButton_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new ModelDownloadWindow { Owner = this };
+        if (dialog.ShowDialog() != true || string.IsNullOrEmpty(dialog.DownloadedPath)) return;
+        await RefreshModelsAsync();
+        var model = _models.FirstOrDefault(m => PathIdentity.Equals(m.FullName, dialog.DownloadedPath));
+        if (model != null) await SelectModelAsync(model.FullName);
+    }
+
     private async void RegenerateButton_Click(object sender, RoutedEventArgs e)
     {
         if (_selecting || _scanning) return;
