@@ -179,7 +179,9 @@ internal static class Fixtures
                 await writer.WriteAsync("data: {\"choices\":[{\"delta\":{\"content\":\"four five six\"}}]}\n\n");
                 if (!parsed.Has("--fake-no-usage"))
                 {
-                    var timings = parsed.Has("--fake-timings") ? ",\"timings\":{\"predicted_per_second\":42.5}" : "";
+                    var timings = parsed.Has("--fake-timings")
+                        ? ",\"timings\":{\"predicted_per_second\":42.5,\"prompt_per_second\":210,\"draft_n\":100,\"draft_n_accepted\":78}"
+                        : "";
                     await writer.WriteAsync($"data: {{\"choices\":[],\"usage\":{{\"prompt_tokens\":20,\"completion_tokens\":6,\"total_tokens\":26}}{timings}}}\n\n");
                 }
                 await writer.WriteAsync("data: [DONE]\n\n");

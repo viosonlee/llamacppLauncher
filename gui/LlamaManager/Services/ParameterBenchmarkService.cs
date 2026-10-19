@@ -7,6 +7,27 @@ namespace LlamaManager.Services;
 /// <summary>One A/B variant's result: a label, the args used, and the measured rates.</summary>
 public sealed record BenchmarkVariant(string Label, string Args, double?[] DecodeTps, double?[] TtftSeconds)
 {
+    /// <summary>Engine-reported prompt (prefill) rate per run; empty when the engine reported none.</summary>
+    public double?[] PrefillTps { get; init; } = [];
+    /// <summary>Speculative drafts offered/accepted across all runs of this variant.</summary>
+    public int DraftOffered { get; init; }
+    public int DraftAccepted { get; init; }
+    /// <summary>Peak VRAM in MiB sampled while the variant ran; 0 when unreadable.</summary>
+    public int PeakVramMb { get; init; }
+
+    /// <summary>Mean engine-reported prefill rate, or null when the engine never reported one.</summary>
+    public double? MeanPrefillTps
+    {
+        get
+        {
+            var values = PrefillTps.Where(v => v.HasValue).Select(v => v!.Value).ToArray();
+            return values.Length == 0 ? null : values.Average();
+        }
+    }
+
+    /// <summary>Share of the drafts the engine accepted, or null when it drafted none.</summary>
+    public double? DraftAcceptance => DraftOffered > 0 ? (double)DraftAccepted / DraftOffered : null;
+
     /// <summary>Mean of the successful runs, or null when every run failed.</summary>
     public double? MeanDecodeTps
     {
@@ -87,7 +108,7 @@ public static class ParameterBenchmarkService
     /// </summary>
     public static async Task<BenchmarkReport> RunAsync(string modelPath, string baseArgs,
         IReadOnlyList<(string Label, string Args)> plan, int runs, Action<string> log,
-        CancellationToken ct)
+        CancellationToken ct, Func<CancellationToken, Task<int>>? usedMemoryReader = null)
     {
         if (runs < 1) throw new ArgumentOutOfRangeException(nameof(runs));
         if (plan.Count == 0) throw new ArgumentException("实测计划为空。");
@@ -123,12 +144,21 @@ public static class ParameterBenchmarkService
             var stderr = Path.Combine(ConfigService.GetManagerRoot(), "logs", $"benchmark-{index}.stderr.log");
             var decode = new double?[runs];
             var ttft = new double?[runs];
+            var prefill = new double?[runs];
+            var draftOffered = 0;
+            var draftAccepted = 0;
+            var peakVram = 0;
             log($"[{label}] 启动：{fullArgs}");
             Process? process = null;
+            using var sampleCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            Task<int>? sampler = null;
             try
             {
                 process = DetachedProcess.Start(engine, fullArgs, stdout, stderr);
                 await WaitReadyAsync(process, index, port, label, log, ct).ConfigureAwait(false);
+                // Sample VRAM in the background while the variant answers, so the report shows how
+                // close the configuration sits to the card's limit (MoE offload tuning lives there).
+                sampler = SamplePeakAsync(usedMemoryReader ?? GpuMemoryService.ReadUsedMibAsync, sampleCts.Token);
                 for (var run = 0; run < runs; run++)
                 {
                     ct.ThrowIfCancellationRequested();
@@ -138,7 +168,10 @@ public static class ParameterBenchmarkService
                     if (!result.Success) throw new InvalidOperationException(result.Error ?? "测速失败");
                     decode[run] = result.DecodeTps;
                     ttft[run] = result.TtftSeconds;
-                    log($"[{label}] 第 {run + 1}/{runs} 次：{result.DecodeTps:F2} tok/s · TTFT {result.TtftSeconds:F3} s");
+                    prefill[run] = result.PrefillTps;
+                    draftOffered += result.DraftOffered;
+                    draftAccepted += result.DraftAccepted;
+                    log($"[{label}] 第 {run + 1}/{runs} 次：{result.DecodeTps:F2} tok/s · TTFT {result.TtftSeconds:F3} s{TelemetrySuffix(result)}");
                 }
             }
             catch (OperationCanceledException) { throw; }
@@ -149,15 +182,47 @@ public static class ParameterBenchmarkService
             }
             finally
             {
+                sampleCts.Cancel();
+                if (sampler != null) peakVram = await sampler.ConfigureAwait(false);
                 if (process != null)
                 {
                     try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch { }
                     process.Dispose();
                 }
             }
-            measured.Add(new BenchmarkVariant(label, args, decode, ttft));
+            measured.Add(new BenchmarkVariant(label, args, decode, ttft)
+            {
+                PrefillTps = prefill, DraftOffered = draftOffered, DraftAccepted = draftAccepted, PeakVramMb = peakVram
+            });
         }
         return new BenchmarkReport(measured, errors, vramNote);
+    }
+
+    /// <summary>Polls the GPU's used VRAM until cancelled and returns the highest value seen.</summary>
+    private static async Task<int> SamplePeakAsync(Func<CancellationToken, Task<int>> read, CancellationToken ct)
+    {
+        var peak = 0;
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                var used = await read(ct).ConfigureAwait(false);
+                if (used > peak) peak = used;
+                await Task.Delay(250, ct).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception) { }
+        return peak;
+    }
+
+    /// <summary>One line's worth of process telemetry; empty when the engine reported none.</summary>
+    private static string TelemetrySuffix(SpeedTestService.Result result)
+    {
+        var parts = new List<string>();
+        if (result.PrefillTps is { } prefill) parts.Add($"预填 {prefill:F0} tok/s");
+        if (result.DraftAcceptance is { } acceptance) parts.Add($"草稿 {acceptance:P0}");
+        return parts.Count == 0 ? "" : " · " + string.Join(" · ", parts);
     }
 
     private static async Task WaitReadyAsync(Process process, int index, int port, string label,
@@ -196,8 +261,13 @@ public static class ParameterBenchmarkService
             }
             var worst = variant.WorstDecodeTps is { } w ? $"（最差 {w:F2}）" : "";
             var ttft = variant.MeanTtft is { } t ? $" · TTFT {t:F3} s" : "";
+            var extras = new List<string>();
+            if (variant.MeanPrefillTps is { } prefill) extras.Add($"预填 {prefill:F0} tok/s");
+            if (variant.DraftAcceptance is { } acceptance) extras.Add($"草稿 {acceptance:P0}（{variant.DraftAccepted}/{variant.DraftOffered}）");
+            if (variant.PeakVramMb > 0) extras.Add($"显存峰 {variant.PeakVramMb:N0} MiB");
+            var telemetry = extras.Count > 0 ? " · " + string.Join(" · ", extras) : "";
             var mark = variant.Label == report.FastestLabel ? " ★" : "";
-            lines.Add($"  {variant.Label}：{mean:F2} tok/s {worst}{ttft}{mark}");
+            lines.Add($"  {variant.Label}：{mean:F2} tok/s {worst}{ttft}{telemetry}{mark}");
         }
         lines.AddRange(report.Errors.Select(e => $"  失败：{e}"));
         return string.Join("\n", lines);

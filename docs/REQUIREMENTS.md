@@ -212,4 +212,12 @@
   另有 `--benchmark <model> <runs> <plan文件>` CLI 诊断入口；已用真实模型完成
   moe 26 vs 30 的两变体实测验证（moe 30 更快，与历史校准方向一致）。
 
+- REQ-118 已实现（2026-10-19）：参数实测对比的过程遥测（REQ-117 扩展）。每组变体在测量期间
+  采集引擎自报的 prefill（`timings.prompt_per_second`）与投机草稿接受率（`timings.draft_n` /
+  `draft_n_accepted`），并在后台每 250 ms 采样一次显存占用（`nvidia-smi --query-gpu=memory.used`）
+  取峰值；三者随均值/最差/TTFT 一起写入报告，供 MoE 调优判断「离显存上限还有多远、草稿是否
+  真在起作用」。遥测取不到时静默省略（不写 0、不报错），采样失败不影响测量本身；解析为纯函数
+  （`SpeedTestService.ParseTimings`、`GpuMemoryService.ParseUsedMib`），有回归覆盖。
+  `--benchmark` 命令行同样输出这些字段。
+
 

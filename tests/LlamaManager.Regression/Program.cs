@@ -731,7 +731,48 @@ internal static class Program
                     "rendering incomplete: " + text);
                 Check(text.Contains("失败：坏: 未找到模型"), "error line missing");
                 Check(text.Contains("空闲 5000"), "VRAM note missing from the report");
+
+                // Process telemetry: engine timings (prefill + draft acceptance) and sampled VRAM.
+                var sample = SpeedTestService.ParseTimings(
+                    "{\"timings\":{\"predicted_per_second\":32.5,\"prompt_per_second\":210,\"draft_n\":100,\"draft_n_accepted\":78}}");
+                Check(sample != null && sample.DecodeTps == 32.5 && sample.PrefillTps == 210,
+                    "timings decode/prefill not parsed");
+                Check(sample!.DraftAcceptance is > 0.77 and < 0.79, "draft acceptance not computed");
+                Check(SpeedTestService.ParseTimings("{}") == null, "payload without timings must yield null");
+                Check(SpeedTestService.ParseTimings("not json") == null, "bad json must be ignored");
+                Equal(5900, GpuMemoryService.ParseUsedMib("5900\n"));
+                Equal(0, GpuMemoryService.ParseUsedMib("N/A\n"));
+                Equal(0, GpuMemoryService.ParseUsedMib(""));
+
+                var measured = new BenchmarkVariant("遥测", "-ngl 999", [32.0], [0.5])
+                {
+                    PrefillTps = [210.0], DraftOffered = 100, DraftAccepted = 78, PeakVramMb = 5900
+                };
+                Equal(210.0, measured.MeanPrefillTps);
+                Equal(0.78, measured.DraftAcceptance);
+                var telemetryText = ParameterBenchmarkService.Describe(
+                    new BenchmarkReport([measured], [], "开始时显存空闲 5000 / 6144 MiB"));
+                Check(telemetryText.Contains("预填 210 tok/s") && telemetryText.Contains("草稿 78%") &&
+                    telemetryText.Contains("显存峰 5,900 MiB"), "telemetry missing: " + telemetryText);
             }));
+            await Test("benchmark: per-variant telemetry is collected end-to-end and rendered", async () =>
+            {
+                var config = Config(Fixtures.FreePort());
+                config.ActiveBackendId = "llamacpp"; ConfigService.SaveConfig(config);
+                var report = await ParameterBenchmarkService.RunAsync(_model, "",
+                    [("快", "--fake-timings -ngl 999"), ("慢", "--fake-timings -ngl 999 -c 2048")], 2,
+                    _ => { }, CancellationToken.None, _ => Task.FromResult(5900));
+                Equal(2, report.Variants.Count);
+                var fast = report.Variants[0];
+                Equal(2, fast.SuccessfulRuns);
+                Equal(210.0, fast.MeanPrefillTps);
+                Equal(0.78, fast.DraftAcceptance);
+                Equal(5900, fast.PeakVramMb);
+                Check(report.Variants[1].PeakVramMb == 5900, "peak VRAM not collected for the second variant");
+                var rendered = ParameterBenchmarkService.Describe(report);
+                Check(rendered.Contains("预填 210 tok/s") && rendered.Contains("草稿 78%") &&
+                    rendered.Contains("显存峰 5,900 MiB"), "telemetry not rendered: " + rendered);
+            });
             await Test("lifecycle: server start truncates the shared stderr log", async () =>
             {
                 var log = ConfigService.GetMainStderrPath();
@@ -850,6 +891,9 @@ internal static class Program
                 Check(result.Success && result.HasUsage && result.CompletionTokens == 6 && result.StreamEvents == 2, "stream usage");
                 Check(result.TtftSeconds < .4, "model lookup incorrectly included");
                 Check(result.ServerDecodeTps == 42.5 && result.DecodeTps == 42.5, "engine timing was not preferred over SSE events");
+                Check(result.PrefillTps == 210, "engine prefill rate not captured");
+                Check(result.DraftOffered == 100 && result.DraftAccepted == 78 &&
+                    Math.Abs(result.DraftAcceptance!.Value - 0.78) < 1e-9, "engine draft acceptance not captured");
                 await ServerService.StopAsync(config);
                 config = Config(Fixtures.FreePort()); config.Args += " --fake-no-usage"; ConfigService.SaveConfig(config);
                 await ServerService.StartAsync(config);

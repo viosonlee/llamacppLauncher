@@ -33,10 +33,53 @@ public static class SpeedTestService
         /// <summary>Engine-reported decode rate when the server includes it in the final SSE chunk.</summary>
         public double? ServerDecodeTps { get; set; }
         public double? DecodeTps { get; set; }
+        /// <summary>Engine-reported prompt (prefill) rate from the same <c>timings</c> block, or null.</summary>
+        public double? PrefillTps { get; set; }
+        /// <summary>Speculative drafts offered/accepted across the request (0 when not speculating).</summary>
+        public int DraftOffered { get; set; }
+        public int DraftAccepted { get; set; }
         public double TotalSeconds { get; set; }
         public string? Error { get; set; }
         public bool Success => Error == null;
+
+        /// <summary>Share of the drafts the engine accepted, or null when it drafted none.</summary>
+        public double? DraftAcceptance => DraftOffered > 0 ? (double)DraftAccepted / DraftOffered : null;
     }
+
+    /// <summary>The engine's own <c>timings</c> block from one response: the authoritative rates.</summary>
+    public sealed record TimingsSample(double? DecodeTps, double? PrefillTps, int DraftOffered, int DraftAccepted)
+    {
+        /// <summary>Share of the speculation drafts the engine accepted, or null when it drafted none.</summary>
+        public double? DraftAcceptance => DraftOffered > 0 ? (double)DraftAccepted / DraftOffered : null;
+    }
+
+    /// <summary>Parses a server JSON payload's <c>timings</c> block; null when absent or all-empty.</summary>
+    public static TimingsSample? ParseTimings(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            return ParseTimingsElement(doc.RootElement);
+        }
+        catch (JsonException) { return null; }
+    }
+
+    private static TimingsSample? ParseTimingsElement(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object ||
+            !root.TryGetProperty("timings", out var timings) || timings.ValueKind != JsonValueKind.Object)
+            return null;
+        var decode = Sanitize(GetDouble(timings, "predicted_per_second"));
+        var prefill = Sanitize(GetDouble(timings, "prompt_per_second"));
+        var offered = GetInt(timings, "draft_n");
+        var accepted = GetInt(timings, "draft_n_accepted");
+        if (decode == null && prefill == null && offered <= 0) return null;
+        return new TimingsSample(decode, prefill, offered, Math.Max(0, accepted));
+    }
+
+    private static double? Sanitize(double? value) =>
+        value is > 0 && double.IsFinite(value.Value) ? value : null;
 
     public static async Task<Result> RunAsync(int port, CancellationToken ct = default)
     {
@@ -104,11 +147,11 @@ public static class SpeedTestService
                 using var chunk = JsonDocument.Parse(data);
                 var root = chunk.RootElement;
 
-                if (root.TryGetProperty("timings", out var timings) && timings.ValueKind == JsonValueKind.Object)
+                if (ParseTimingsElement(root) is { } sample)
                 {
-                    var serverRate = GetDouble(timings, "predicted_per_second");
-                    if (serverRate is > 0 && double.IsFinite(serverRate.Value))
-                        result.ServerDecodeTps = serverRate;
+                    if (sample.DecodeTps is { } rate) result.ServerDecodeTps = rate;
+                    if (sample.PrefillTps is { } prefill) result.PrefillTps = prefill;
+                    if (sample.DraftOffered > 0) { result.DraftOffered = sample.DraftOffered; result.DraftAccepted = sample.DraftAccepted; }
                 }
 
                 if (root.TryGetProperty("usage", out var usage) && usage.ValueKind == JsonValueKind.Object)
