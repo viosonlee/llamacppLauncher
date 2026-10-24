@@ -62,7 +62,15 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
     {
         if (_loaded)
         {
-            try { SaveCurrentConfig(); }
+            try
+            {
+                SaveCurrentConfig();
+                var backend = SelectedEngineBackend();
+                if (backend != null && backend is not LlamaCppBackend)
+                {
+                    SaveEngineParameters(backend);
+                }
+            }
             catch (Exception ex) { ShowError("保存失败，请修正参数后再关闭", ex); e.Cancel = true; return; }
         }
         _statusTimer?.Stop();

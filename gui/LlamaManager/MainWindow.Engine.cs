@@ -191,16 +191,31 @@ public partial class MainWindow
     /// The values the panel should display. llama.cpp keeps its settings in the raw argument
     /// string, so they are projected onto the schema; every other backend reads EngineSettings.
     /// </summary>
-    private EngineSettings SettingsFor(IEngineBackend backend) =>
-        backend is LlamaCppBackend
-            // The raw box is the live source of truth while the window is up; _config.Args is only
-            // written on save, so projecting from it would show stale values after a manual edit.
-            ? new EngineSettings
+    private EngineSettings SettingsFor(IEngineBackend backend)
+    {
+        if (backend is LlamaCppBackend)
+        {
+            return new EngineSettings
             {
                 ModelPath = _config.ModelPath,
                 Parameters = LlamaCppParameters.ReadFromArgs(_loaded ? ArgsTextBox.Text : _config.Args),
+            };
+        }
+        var settings = _config.Engines.GetValueOrDefault(backend.Descriptor.Id) ?? new EngineSettings();
+        var model = EngineModelFor(backend);
+        if (!string.IsNullOrWhiteSpace(model))
+        {
+            var key = PathIdentity.Normalize(model);
+            if (settings.ModelPresets.TryGetValue(key, out var preset))
+            {
+                foreach (var (k, v) in preset)
+                {
+                    settings.Parameters[k] = v;
+                }
             }
-            : _config.Engines.GetValueOrDefault(backend.Descriptor.Id) ?? new EngineSettings();
+        }
+        return settings;
+    }
 
     private void RegisterParameter(ParameterSpec spec, FrameworkElement element)
     {
@@ -425,10 +440,38 @@ public partial class MainWindow
     /// <summary>Re-evaluates visibility after an edit: a condition may depend on another field.</summary>
     private void OnParameterEdited(ParameterSpec spec, Control control, string? explicitValue = null)
     {
-        if (SelectedEngineBackend() is LlamaCppBackend) ApplyLlamaCppParameter(spec, control, explicitValue);
+        var backend = SelectedEngineBackend();
+        if (backend is LlamaCppBackend)
+        {
+            ApplyLlamaCppParameter(spec, control, explicitValue);
+        }
+        else if (backend != null)
+        {
+            ApplyEngineParameter(backend, spec, control, explicitValue);
+        }
         ValidateEngineParameters();
         ApplyParameterVisibility();
         ApplyParameterFilter();
+    }
+
+    private void ApplyEngineParameter(IEngineBackend backend, ParameterSpec spec, Control control, string? explicitValue = null)
+    {
+        var value = explicitValue ?? ReadControlValue(control, spec);
+        var settings = _config.Engines.GetValueOrDefault(backend.Descriptor.Id) ?? new EngineSettings();
+        settings.Parameters[spec.Key] = value;
+        var model = EngineModelFor(backend);
+        if (!string.IsNullOrWhiteSpace(model))
+        {
+            var key = PathIdentity.Normalize(model);
+            if (!settings.ModelPresets.TryGetValue(key, out var preset))
+            {
+                preset = new Dictionary<string, string>(settings.Parameters, StringComparer.OrdinalIgnoreCase);
+                settings.ModelPresets[key] = preset;
+            }
+            preset[spec.Key] = value;
+        }
+        _config.Engines[backend.Descriptor.Id] = settings;
+        ConfigService.SaveEngineSettings(_config, backend.Descriptor.Id, settings);
     }
 
     /// <summary>
@@ -818,7 +861,13 @@ public partial class MainWindow
             if (untouched) continue;
             settings.Parameters[spec.Key] = value;
         }
-        if (string.IsNullOrEmpty(settings.ModelPath)) settings.ModelPath = EngineModelFor(backend);
+        var model = EngineModelFor(backend);
+        if (string.IsNullOrEmpty(settings.ModelPath)) settings.ModelPath = model;
+        if (!string.IsNullOrWhiteSpace(model))
+        {
+            var key = PathIdentity.Normalize(model);
+            settings.ModelPresets[key] = new Dictionary<string, string>(settings.Parameters, StringComparer.OrdinalIgnoreCase);
+        }
         _config.Engines[backend.Descriptor.Id] = settings;
         ConfigService.SaveEngineSettings(_config, backend.Descriptor.Id, settings);
         return true;

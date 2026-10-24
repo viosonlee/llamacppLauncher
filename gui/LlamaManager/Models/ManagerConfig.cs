@@ -86,6 +86,19 @@ public class ManagerConfig
         // the next save no longer writes the pre-plugin keys.
         if (Running.ContainsKey(SlotMain)) { LastPid = 0; LastStartedAt = null; }
         if (Running.ContainsKey(SlotEmbedding)) { EmbeddingLastPid = 0; EmbeddingLastStartedAt = null; }
+        foreach (var (_, settings) in Engines)
+        {
+            settings.ModelPresets ??= [];
+            settings.Parameters ??= [];
+            if (!string.IsNullOrWhiteSpace(settings.ModelPath) && settings.Parameters.Count > 0)
+            {
+                var norm = Services.PathIdentity.Normalize(settings.ModelPath);
+                if (!settings.ModelPresets.ContainsKey(norm))
+                {
+                    settings.ModelPresets[norm] = new Dictionary<string, string>(settings.Parameters, StringComparer.OrdinalIgnoreCase);
+                }
+            }
+        }
     }
 
     [JsonPropertyName("CreatedAt")]
@@ -129,6 +142,9 @@ public class EngineSettings
 
     [JsonPropertyName("Parameters")]
     public Dictionary<string, string> Parameters { get; set; } = new();
+
+    [JsonPropertyName("ModelPresets")]
+    public Dictionary<string, Dictionary<string, string>> ModelPresets { get; set; } = new();
 
     [JsonPropertyName("LastStats")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

@@ -76,13 +76,16 @@ public partial class MainWindow
         RebuildEngineParameters();
     }
 
+    private static bool IsEngineLevelParam(string key) =>
+        key is "packageRoot" or "serveRoot" or "pythonPath" or "servePort" or "host" or "enginePath" or "executablePath";
+
     private async Task SelectModelAsync(string path)
     {
         if (_selecting || _scanning) return;
         var backend = SelectedEngineBackend();
         var backendId = backend?.Descriptor.Id ?? "llamacpp";
 
-        // Non-llama.cpp engines keep their model in their own settings; no preset/args pipeline.
+        // Non-llama.cpp engines use per-model presets within EngineSettings.ModelPresets.
         if (backendId != "llamacpp")
         {
             if (PathIdentity.Equals(path, SelectedEngineModelPath())) return;
@@ -90,20 +93,41 @@ public partial class MainWindow
             ConfigurationTabs.IsEnabled = false;
             try
             {
+                var previousModel = SelectedEngineModelPath();
+                if (!string.IsNullOrWhiteSpace(previousModel))
+                {
+                    SaveEngineParameters(backend!);
+                }
+
                 var settings = _config.Engines.GetValueOrDefault(backendId) ?? new EngineSettings();
-                settings.ModelPath = path;
-                if (!settings.Parameters.ContainsKey("mmproj") || string.IsNullOrWhiteSpace(settings.Parameters["mmproj"]))
+                var newKey = PathIdentity.Normalize(path);
+
+                var enginePaths = settings.Parameters
+                    .Where(kv => IsEngineLevelParam(kv.Key))
+                    .ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase);
+
+                if (settings.ModelPresets.TryGetValue(newKey, out var existingPreset))
                 {
+                    settings.Parameters = new Dictionary<string, string>(existingPreset, StringComparer.OrdinalIgnoreCase);
+                    foreach (var (k, v) in enginePaths)
+                    {
+                        if (!settings.Parameters.ContainsKey(k) || string.IsNullOrWhiteSpace(settings.Parameters[k]))
+                            settings.Parameters[k] = v;
+                    }
+                }
+                else
+                {
+                    var newParams = new Dictionary<string, string>(enginePaths, StringComparer.OrdinalIgnoreCase);
                     var pairedMmproj = ModelPairingService.FindPairedMmproj(path);
-                    if (!string.IsNullOrEmpty(pairedMmproj))
-                        settings.Parameters["mmproj"] = pairedMmproj;
-                }
-                if (!settings.Parameters.ContainsKey("draftModel") || string.IsNullOrWhiteSpace(settings.Parameters["draftModel"]))
-                {
+                    if (!string.IsNullOrEmpty(pairedMmproj)) newParams["mmproj"] = pairedMmproj;
                     var pairedDraft = ModelPairingService.FindPairedDraftModel(path);
-                    if (!string.IsNullOrEmpty(pairedDraft))
-                        settings.Parameters["draftModel"] = pairedDraft;
+                    if (!string.IsNullOrEmpty(pairedDraft)) newParams["draftModel"] = pairedDraft;
+
+                    settings.Parameters = newParams;
+                    settings.ModelPresets[newKey] = new Dictionary<string, string>(newParams, StringComparer.OrdinalIgnoreCase);
                 }
+
+                settings.ModelPath = path;
                 _config.Engines[backendId] = settings;
                 ConfigService.SaveEngineSettings(_config, backendId, settings);
                 LogService.Write($"已为 {backend!.Descriptor.DisplayName} 选择 {Path.GetFileName(path)}。");

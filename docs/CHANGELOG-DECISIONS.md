@@ -5,6 +5,15 @@
 
 ## 2026-10-24
 
+- **非 llama.cpp 引擎（PolyStrata 等）按模型隔离并保存独立参数预设**（REQ-121）
+  - 现象与痛点：先前除 llama.cpp 具备 \ModelPresets\ 机制外，其它后端（如 PolyStrata）所有模型共用单一 \EngineSettings.Parameters\ 字典。切换模型时，上一个模型的上下文、KV、tailSkip、mmproj、草稿模型等参数被直接沿用并覆盖，无法对不同模型（如文本模型 vs 视觉模型，轻量模型 vs 大显存模型）做独立调优与记忆。
+  - 架构决策：
+    1. 在 \EngineSettings\ 中扩展 \ModelPresets: Dictionary<string, Dictionary<string, string>>\，使用规范化绝对路径索引各模型专属参数。
+    2. \ManagerConfig.Normalize()\ 自动进行数据结构平滑迁移，保证旧版配置文件在加载时自动为活跃模型建立首份预设。
+    3. 参数变更事件（\OnParameterEdited\）与保存（\SaveEngineParameters\）实时双向同步至当前模型的 \ModelPresets\。
+    4. 模型切换流程（\SelectModelAsync\）：切换前先保存前序模型的配置，切换到目标模型时，若已有预设则恢复参数，若为首次选中的新模型则生成新预设，保留引擎级安装与通信路径（packageRoot, serveRoot, pythonPath, servePort, host 等）并触发自动智能配对。
+  - 测试：新增 \StrataBackendRegression.RunModelPresets\ 单元回归测试，全套回归用例由 77 项提升至 **78 项** 并全数通过。
+
 - **视觉多模态投影（mmproj）与投机草稿模型（MTP）UI 接入与同目录智能配对**（REQ-120）：
   为了让包含 `mmproj-Q8_0.gguf`、`mmproj-BF16.gguf` 或 `mtp-*.gguf` 的多模态/投机模型能够开箱即用，
   在启动器参数面板新增视觉与草稿权重配置，并实现智能联动：

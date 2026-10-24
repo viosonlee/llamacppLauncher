@@ -151,4 +151,51 @@ internal static class StrataBackendRegression
         Check(StrataBackend.ResolveServer(empty) == null, "server resolved from an empty config");
         Check(!StrataService.EngineSupportsQwen35(Path.Combine(root, "missing.exe")), "missing engine advertised qwen35moe");
     }
+
+    public static void RunModelPresets(string root)
+    {
+        var config = new ManagerConfig();
+        var modelA = Path.Combine(root, "modelA.gguf");
+        var modelB = Path.Combine(root, "modelB.gguf");
+        File.WriteAllText(modelA, "a");
+        File.WriteAllText(modelB, "b");
+
+        var settings = new EngineSettings
+        {
+            ModelPath = modelA,
+            Parameters = new()
+            {
+                ["packageRoot"] = Path.Combine(root, "pkg"),
+                ["context"] = "8192",
+                ["kv"] = "q8_0",
+                ["tailSkip"] = "6"
+            }
+        };
+        config.Engines["polystrata"] = settings;
+        ConfigService.SaveConfig(config);
+
+        config.Normalize();
+        var normA = PathIdentity.Normalize(modelA);
+        Check(settings.ModelPresets.ContainsKey(normA), "ModelPresets did not seed modelA");
+        Equal("8192", settings.ModelPresets[normA]["context"]);
+
+        var normB = PathIdentity.Normalize(modelB);
+        settings.ModelPresets[normB] = new()
+        {
+            ["packageRoot"] = Path.Combine(root, "pkg"),
+            ["context"] = "16384",
+            ["kv"] = "int8",
+            ["tailSkip"] = "1"
+        };
+        settings.ModelPath = modelB;
+        settings.Parameters = new(settings.ModelPresets[normB]);
+        ConfigService.SaveEngineSettings(config, "polystrata", settings);
+
+        Equal("16384", config.Engines["polystrata"].Parameters["context"]);
+        Equal("int8", config.Engines["polystrata"].Parameters["kv"]);
+
+        Check(config.Engines["polystrata"].ModelPresets.ContainsKey(normA), "modelA preset missing");
+        Equal("8192", config.Engines["polystrata"].ModelPresets[normA]["context"]);
+        Equal("q8_0", config.Engines["polystrata"].ModelPresets[normA]["kv"]);
+    }
 }
