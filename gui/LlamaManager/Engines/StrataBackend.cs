@@ -76,14 +76,24 @@ public sealed class StrataBackend : IServerBackend
             Help: "【尾部跳过】\n• 作用：显存外、且在一个窗口内每个 token 都排在第 N+1 位或更后的专家被直接跳过（--tail-skip）。\n• 为什么能快：被跳过的是本来也进不了显存、命中率最低的那批专家，省掉了它们的搬运和计算。\n• 代价：答案会略有变化（官方原文：the answers move a little）。\n• 默认 0（不跳过）；项目自带的安装脚本给 Qwen3.6 家族设 6。\n• 建议：6 是质量与速度的平衡点；1 更快，但偏离更大。",
             RangeHint: "0–64，推荐 6（质量优先）或 1（速度优先）"));
         list.Add(new("kv", "KV 缓存格式", "基本", ParamType.Choice, "",
-            "注意力缓存的存储格式（--kv）。q8_0 把 KV 显存减半，长上下文时能把省下的显存留给专家缓存。",
-            Help: "【KV 缓存格式】\n• 作用：K/V 注意力缓存的格式（--kv）。\n• 默认（fp16）：精度最高，引擎不传该参数。\n• q8_0：显存约为一半，答案略有差异；省下的显存会给专家缓存，长上下文时解码更快。\n• 限制：只有 qwen35moe 家族（Qwen3.6 / Ornith / Tiel）支持，其它模型启动时会直接拒绝。",
+            "注意力缓存的存储格式（--kv）。q8_0 把 KV 显存减半；int8/int8k 适用于 Gemma 4。",
+            Help: "【KV 缓存格式】\n• 作用：K/V 注意力缓存的格式（--kv）。\n• 默认（fp16）：精度最高，引擎不传该参数。\n• q8_0：显存约为一半，答案略有差异；省下的显存会给专家缓存，长上下文时解码更快（限 qwen35moe 家族）。\n• int8 / int8k：Gemma 4 系列专用，int8k 仅压缩 Key 缓存。",
             Choices:
             [
                 new ParamChoice("", "默认（fp16）", "引擎默认，精度最高。", Recommended: true),
                 new ParamChoice("fp16", "fp16", "显式指定全精度。"),
-                new ParamChoice("q8_0", "q8_0（KV 减半）", "只有 qwen35moe 家族支持；长上下文更省显存。"),
+                new ParamChoice("q8_0", "q8_0（KV 减半）", "qwen35moe 家族支持；长上下文更省显存。"),
+                new ParamChoice("int8", "int8（Gemma 4）", "Gemma 4 系列专用，KV 均使用 int8。"),
+                new ParamChoice("int8k", "int8k（Gemma 4 仅键）", "Gemma 4 系列专用，仅 Key 缓存使用 int8。"),
             ]));
+        list.Add(new("tensorCoreMma", "Tensor-Core 线性注意力", "高级", ParamType.Boolean, "1",
+            "设置 STRATA_GDN_MMA=1，利用 Tensor Core 加速 Qwen3.6 / Ornith / Tiel 等线性注意力层，Prompt 提速 12%~18%（RTX 30+ 显卡）。",
+            Help: "【Tensor-Core 线性注意力加速】\n• 作用：设置环境变量 STRATA_GDN_MMA=1。\n• 效果：利用 llama.cpp 的 Tensor-Core 内核读取 Qwen3.6、Ornith 1.5、Tiel Coder 和 MiniCPM-V 的线性注意力层，Prompt 吞吐提升约 12%~18%。\n• 要求：RTX 30 系列及更新显卡（本机 RTX 3060 支持）。",
+            Advanced: true));
+        list.Add(new("polyFlashAttention", "Flash Attention 加速", "高级", ParamType.Boolean, "1",
+            "设置 STRATA_FATTN=1 与 STRATA_FDEC=1，启用长上下文 Flash Attention 与 Tensor Core 写入核，大幅加速长文本。",
+            Help: "【Flash Attention 与解码加速】\n• 作用：设置环境变量 STRATA_FATTN=1 与 STRATA_FDEC=1。\n• 效果：在 Qwen3.6 及其衍生模型（Ornith、Tiel 等）上，长文本 Prompt 通过 Flash Attention 内核计算，生成阶段通过单次显存读取的 Tensor Core 核解码，极大降低显存带宽瓶颈。\n• 要求：RTX 30 系列及更新显卡。",
+            Advanced: true));
         list.Add(new("threads", "CPU 线程数", "高级", ParamType.Integer, "0",
             "显存外的专家在 CPU 上计算时使用的线程数（--threads）。0 表示由引擎自动分配。", 0, 256,
             Help: "【CPU 线程数】\n• 作用：显存外的专家在 CPU 上计算时使用的线程数（--threads）。\n• 默认 0：由引擎按可用核心自动分配（本机为 16 线程）。\n• 建议：默认先跑一次，再试 8 / 12 对比；线程过多会与显卡搬运争抢内存带宽，反而变慢。",
@@ -100,6 +110,13 @@ public sealed class StrataBackend : IServerBackend
                 new ParamChoice("model", "跟随模型", "由模型的系统提示与思考模板决定是否思考（默认）。", Recommended: true),
                 new ParamChoice("on_request", "按客户端请求", "仅在 Anthropic 客户端显式要求思考时才产生思考内容。"),
             ],
+            Advanced: true));
+        list.Add(new("mmproj", "视觉投影 (mmproj)", "视觉 / 多模态", ParamType.FilePath, "",
+            "多模态视觉投影模型文件（如 mmproj-Q8_0.gguf）。设置后由 strata-vision 伴生服务提供图像理解。",
+            Help: "【视觉投影 (mmproj)】\n• 作用：指定多模态视觉投影模型文件（如 mmproj-Q8_0.gguf）。\n• 原理：Strata 引擎会启动同目录下的 strata-vision.exe 视觉伴生服务，将图片编码为特征嵌入，使大模型具备多模态识图问答能力。\n• 留空：不启动视觉编码器。"));
+        list.Add(new("draftModel", "草稿 / MTP 模型", "高级", ParamType.FilePath, "",
+            "外部草稿或 MTP 模型文件（--draft-model，如 mtp-*.gguf）。当主模型未内置草稿头时使用。",
+            Help: "【草稿 / MTP 模型】\n• 作用：为 strata-poly 指定外部草稿权重文件（--draft-model）。\n• 适用：模型本身未内置 MTP 块、但附带独立的 mtp-*.gguf 文件时。\n• 留空：使用内置草稿块或不使用外部草稿。",
             Advanced: true));
         Parameters = list;
     }
@@ -190,6 +207,14 @@ public sealed class StrataBackend : IServerBackend
         if (!string.Equals(host, "127.0.0.1", StringComparison.Ordinal)) { args.Add("--host"); args.Add(host); }
 
         var env = new Dictionary<string, string> { ["PYTHONUTF8"] = "1", ["PYTHONUNBUFFERED"] = "1" };
+        var mma = Param(config, "tensorCoreMma") ?? "1";
+        if (mma is "1" or "true" or "True") env["STRATA_GDN_MMA"] = "1";
+        var fattn = Param(config, "polyFlashAttention") ?? "1";
+        if (fattn is "1" or "true" or "True")
+        {
+            env["STRATA_FATTN"] = "1";
+            env["STRATA_FDEC"] = "1";
+        }
         var engineDir = Path.GetDirectoryName(engine);
         var managerRoot = ConfigService.GetManagerRoot();
         var llamaCppRoot = ConfigService.GetLlamaCppRoot();
@@ -346,7 +371,7 @@ public sealed class StrataBackend : IServerBackend
         // KV format: only qwen35moe accepts q8_0; the engine refuses it for other families,
         // so the panel documents the limit and an empty value keeps the engine default.
         var kv = Param(config, "kv");
-        if (kv is "fp16" or "q8_0") { args.Add("--kv"); args.Add(kv); }
+        if (kv is "fp16" or "q8_0" or "int8" or "int8k") { args.Add("--kv"); args.Add(kv); }
         var cfg = new Dictionary<string, object>
         {
             ["exe"] = engine,
@@ -363,6 +388,36 @@ public sealed class StrataBackend : IServerBackend
         if (reasoning > 0) cfg["reasoning_budget_tokens"] = reasoning;
         var thinking = Param(config, "anthropicThinking") ?? s.AnthropicThinking;
         if (!string.IsNullOrWhiteSpace(thinking)) cfg["anthropic_thinking"] = thinking;
+        var mmproj = Param(config, "mmproj");
+        if (string.IsNullOrWhiteSpace(mmproj))
+        {
+            mmproj = ModelPairingService.FindPairedMmproj(model);
+        }
+        if (!string.IsNullOrWhiteSpace(mmproj) && File.Exists(mmproj))
+        {
+            var engineDir = Path.GetDirectoryName(engine)!;
+            var visionExe = Path.Combine(engineDir, "strata-vision.exe");
+            if (File.Exists(visionExe))
+            {
+                cfg["vision"] = new Dictionary<string, object>
+                {
+                    ["exe"] = visionExe,
+                    ["mmproj"] = Path.GetFullPath(mmproj),
+                    ["model"] = Path.GetFullPath(model),
+                    ["gpu"] = true,
+                };
+            }
+        }
+        var draftModel = Param(config, "draftModel");
+        if (string.IsNullOrWhiteSpace(draftModel))
+        {
+            draftModel = ModelPairingService.FindPairedDraftModel(model);
+        }
+        if (!string.IsNullOrWhiteSpace(draftModel) && File.Exists(draftModel))
+        {
+            args.Add("--draft-model");
+            args.Add(Path.GetFullPath(draftModel));
+        }
         return cfg;
     }
 

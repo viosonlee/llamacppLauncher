@@ -146,6 +146,32 @@ internal static class CoreUtilitiesRegression
         var kvRead = LlamaCppParameters.ReadFromArgs(kv);
         Equal("q8_0", kvRead["contextQuantK"]);
         Equal("q4_0", kvRead["contextQuantV"]);
+
+        // mmproj and draftModel can be read and written cleanly.
+        var withMm = LlamaCppParameters.Apply("-c 4096", "mmproj", @"C:\AIModel\Qwen3.6-35B-A3B\mmproj-Q8_0.gguf");
+        Check(withMm.Contains("--mmproj"), "--mmproj was not added");
+        Equal(@"C:\AIModel\Qwen3.6-35B-A3B\mmproj-Q8_0.gguf", LlamaCppParameters.ReadFromArgs(withMm)["mmproj"]);
+        var withoutMm = LlamaCppParameters.Apply(withMm, "mmproj", "");
+        Check(!withoutMm.Contains("--mmproj"), "--mmproj was not removed");
+
+        var withDraft = LlamaCppParameters.Apply("-c 4096", "draftModel", @"C:\AIModel\draft.gguf");
+        Check(withDraft.Contains("-md"), "-md was not added");
+        Equal(@"C:\AIModel\draft.gguf", LlamaCppParameters.ReadFromArgs(withDraft)["draftModel"]);
+    }
+
+    public static void RunModelPairing(string root)
+    {
+        var modelDir = Path.Combine(root, "test-pair-dir");
+        Directory.CreateDirectory(modelDir);
+        var model = Path.Combine(modelDir, "Qwen.gguf");
+        var mmproj = Path.Combine(modelDir, "mmproj-Q8_0.gguf");
+        var draft = Path.Combine(modelDir, "mtp-draft.gguf");
+        File.WriteAllText(model, "m");
+        File.WriteAllText(mmproj, "v");
+        File.WriteAllText(draft, "d");
+
+        Equal(mmproj, ModelPairingService.FindPairedMmproj(model));
+        Equal(draft, ModelPairingService.FindPairedDraftModel(model));
     }
 
     public static void RunStrataDiagnostics()

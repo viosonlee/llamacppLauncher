@@ -118,11 +118,11 @@ public static class DoctorService
         if (!ConfigService.HasPrismServer())
             return new Finding("prism", "missing",
                 $"未找到 Prism 引擎（{path}）。三元量化模型（如 Bonsai TQ1_0）需要它。",
-                "把 Prism 发行包解压到 llama.cpp\\engines\\prism\\（无公开下载源，需手动安装）。");
+                "从 https://github.com/PrismML-Eng/llama.cpp/releases 下载解压到 llama.cpp\\engines\\prism\\。");
         var version = PrismVersion(path);
         return new Finding("prism", "manual",
             version != null ? $"{path}（{version}）" : path,
-            "更新需手动替换发行包（无公开下载源）。");
+            "更新可从 https://github.com/PrismML-Eng/llama.cpp/releases 下载替换发行包。");
     }
 
     private static Finding PythonFinding()
@@ -216,6 +216,11 @@ public static class DoctorService
                 if (a[i] != b[j]) return a[i] < b[j];
                 i++; j++;
             }
+        }
+        if (i == a.Length && j < b.Length)
+        {
+            var remainder = b[j..];
+            if (remainder.StartsWith("-poly.") || remainder.StartsWith(".")) return true;
         }
         return false; // one side is a prefix of the other ("1.2" vs "1.2.1"): not clearly older
     }

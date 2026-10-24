@@ -219,5 +219,15 @@
   真在起作用」。遥测取不到时静默省略（不写 0、不报错），采样失败不影响测量本身；解析为纯函数
   （`SpeedTestService.ParseTimings`、`GpuMemoryService.ParseUsedMib`），有回归覆盖。
   `--benchmark` 命令行同样输出这些字段。
+- REQ-119 已实现（2026-10-24）：三引擎版本升级与 PolyStrata 硬件加速参数集成。
+  llamacpp 升级至 b11853（CUDA 13.4）、Prism 升级至 b10787、PolyStrata 升级至 v0.1.45-poly.3。
+  修复 DoctorService 对 -poly. 等后缀的版本对比解析；PolyStrata 参数面板新增 Tensor-Core 线性注意力
+  （STRATA_GDN_MMA=1）、Flash Attention（STRATA_FATTN=1 / STRATA_FDEC=1）及 Gemma 4 的 int8/int8k
+  KV 格式选择。实测在 RTX 3060 上 Prefill 提速 39.0%，Decode 提速 63.6%。
 
-
+- REQ-120 已实现（2026-10-24）：视觉多模态投影（mmproj）与草稿模型（MTP/draft）UI 接入与智能匹配。
+  llama.cpp、Prism 与 PolyStrata 引擎均增加「视觉 / 多模态」参数配置与 mmproj 路径选择器：
+  llama.cpp 传递 --mmproj，PolyStrata 自动编排伴生 strata-vision.exe；
+  ModelPairingService 自动探测主模型同目录下的 mmproj-*.gguf（优先匹配 Q8_0 / BF16）与 mtp-*.gguf，
+  在模型信息栏高亮显示配对状态并自动装配；主模型列表自动过滤排除独立的 mmproj 与 mtp 辅助权重文件；
+  参数文件浏览器对 GGUF 模型类型自适应过滤 *.gguf 文件。

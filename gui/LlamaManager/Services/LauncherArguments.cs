@@ -20,7 +20,8 @@ public sealed class LauncherArguments
         ["--fit-target", "-fitt"], ["--embedding", "--embeddings"],
         ["-p", "--prompt"], ["-f", "--file"], ["--system-prompt"],
         ["--log-file"], ["--device", "-dev"], ["-np", "--parallel"],
-        ["-md", "--model-draft", "--spec-draft-model"], ["--spec-type"]
+        ["-md", "--model-draft", "--spec-draft-model"], ["--spec-type"],
+        ["--mmproj", "-mm"]
     ];
     private static readonly HashSet<string> Flags = ["--cpu-moe", "-v", "--embedding"];
     private readonly string _source;

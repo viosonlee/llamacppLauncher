@@ -127,6 +127,24 @@ public static class EngineAcquisitionService
             ExtractFlattened(archive, plan.SourceDir, log);
         }
 
+        if (chosen != null)
+        {
+            var buildPath = Path.Combine(plan.EngineDir, "BUILD.json");
+            if (File.Exists(buildPath))
+            {
+                try
+                {
+                    var node = JsonNode.Parse(File.ReadAllText(buildPath))?.AsObject();
+                    if (node != null)
+                    {
+                        node["version"] = chosen.Tag.TrimStart('v');
+                        File.WriteAllText(buildPath, node.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+                    }
+                }
+                catch { }
+            }
+        }
+
         RecordPaths(backendId, plan, log);
         return plan.EngineDir;
     }

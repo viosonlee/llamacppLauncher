@@ -337,7 +337,13 @@ public partial class MainWindow
                 }
                 else
                 {
-                    var dialog = new Microsoft.Win32.OpenFileDialog { Title = spec.Label, Filter = "可执行文件|*.exe|所有文件|*.*" };
+                    var isGguf = spec.Key.Contains("model", StringComparison.OrdinalIgnoreCase) ||
+                                 spec.Key.Contains("mmproj", StringComparison.OrdinalIgnoreCase) ||
+                                 spec.Key.Contains("draft", StringComparison.OrdinalIgnoreCase);
+                    var filter = isGguf
+                        ? "GGUF 模型文件 (*.gguf)|*.gguf|所有文件 (*.*)|*.*"
+                        : "可执行文件 (*.exe)|*.exe|所有文件 (*.*)|*.*";
+                    var dialog = new Microsoft.Win32.OpenFileDialog { Title = spec.Label, Filter = filter };
                     if (dialog.ShowDialog() == true) pathBox.Text = dialog.FileName;
                 }
             };

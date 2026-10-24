@@ -339,6 +339,8 @@ internal static class Program
                 Run(CoreUtilitiesRegression.RunModelInfo));
             await Test("llama.cpp: argument projection round trip keeps hand-written flags", () =>
                 Run(CoreUtilitiesRegression.RunLlamaCppRoundTrip));
+            await Test("model pairing: automatically detects paired mmproj and draft/mtp models", () =>
+                Run(() => CoreUtilitiesRegression.RunModelPairing(_root)));
             await Test("strata: GPU summary parsing and PolyStrata compatibility verdicts", () =>
                 Run(CoreUtilitiesRegression.RunStrataDiagnostics));
             await Test("strata: tokenizer path shape and port precedence", () =>

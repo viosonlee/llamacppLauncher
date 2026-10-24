@@ -117,6 +117,18 @@ internal static class StrataBackendRegression
         config.Engines["polystrata"].Parameters.Remove("kv");
         config.Engines["polystrata"].Parameters.Remove("tailSkip");
 
+        // mmproj and strata-vision integration
+        File.WriteAllText(Path.Combine(engineDir, "strata-vision.exe"), "# fake vision");
+        var visionMmproj = Path.Combine(root, "mmproj-test.gguf");
+        File.WriteAllText(visionMmproj, "# fake mmproj");
+        config.Engines["polystrata"].Parameters["mmproj"] = visionMmproj;
+        var visionPlan = backend.BuildLaunch(new EngineStartRequest { Config = config });
+        var visionArgs = visionPlan.Arguments.ToList();
+        var visionRunconfig = JsonNode.Parse(visionPlan.GeneratedFiles[visionArgs[visionArgs.IndexOf("--config") + 1]])!.AsObject();
+        Check(visionRunconfig.ContainsKey("vision"), "runconfig must contain vision block when mmproj is set");
+        Equal(visionMmproj, visionRunconfig["vision"]!["mmproj"]!.GetValue<string>());
+        config.Engines["polystrata"].Parameters.Remove("mmproj");
+
         // The engine page's settings must actually drive the runconfig (not the legacy Strata block).
         Equal(port, runconfig["port"]!.GetValue<int>());
         Check(args.Contains(port.ToString()), "port not passed to the server");

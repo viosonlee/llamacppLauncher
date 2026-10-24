@@ -22,7 +22,7 @@ public partial class MainWindow
                 if (!Directory.Exists(directory)) return new List<ModelInfo>();
                 var options = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true };
                 var list = Directory.EnumerateFiles(directory, "*.gguf", options)
-                    .Where(f => !Path.GetFileName(f).StartsWith("mmproj-", StringComparison.OrdinalIgnoreCase))
+                    .Where(f => !Path.GetFileName(f).StartsWith("mmproj", StringComparison.OrdinalIgnoreCase) && !Path.GetFileName(f).StartsWith("mtp-", StringComparison.OrdinalIgnoreCase))
                     .OrderBy(f => f).Select(f =>
                     {
                         _ = GgufService.TryRead(f); // warm metadata cache away from the dispatcher
@@ -63,8 +63,14 @@ public partial class MainWindow
         if (string.IsNullOrEmpty(path)) { SelectedModelText.Text = "未选择模型"; ModelInfoText.Text = ""; return; }
         SelectedModelText.Text = Path.GetFileName(path);
         var metadata = GgufService.TryRead(path);
+        var pairedMmproj = ModelPairingService.FindPairedMmproj(path);
+        var pairedDraft = ModelPairingService.FindPairedDraftModel(path);
+        var extraNotes = new List<string>();
+        if (pairedMmproj != null) extraNotes.Add($"已匹配视觉投影: {Path.GetFileName(pairedMmproj)}");
+        if (pairedDraft != null) extraNotes.Add($"已匹配草稿模型: {Path.GetFileName(pairedDraft)}");
+        var extraText = extraNotes.Count > 0 ? "\n" + string.Join(" · ", extraNotes) : "";
         ModelInfoText.Text = metadata == null ? "无法读取 GGUF 元数据，请检查文件。" :
-            $"{metadata.Architecture} · {metadata.LayerCount} 层 · 原生上下文 {metadata.ContextLength}\n{metadata.CompatibilityNote}";
+            $"{metadata.Architecture} · {metadata.LayerCount} 层 · 原生上下文 {metadata.ContextLength}\n{metadata.CompatibilityNote}{extraText}";
         // The MoE / MTP sections are no longer hand-hidden here: the schema panel decides with
         // VisibleWhen="model.moe" / "model.mtp", so one rule covers every backend.
         RebuildEngineParameters();
@@ -86,6 +92,18 @@ public partial class MainWindow
             {
                 var settings = _config.Engines.GetValueOrDefault(backendId) ?? new EngineSettings();
                 settings.ModelPath = path;
+                if (!settings.Parameters.ContainsKey("mmproj") || string.IsNullOrWhiteSpace(settings.Parameters["mmproj"]))
+                {
+                    var pairedMmproj = ModelPairingService.FindPairedMmproj(path);
+                    if (!string.IsNullOrEmpty(pairedMmproj))
+                        settings.Parameters["mmproj"] = pairedMmproj;
+                }
+                if (!settings.Parameters.ContainsKey("draftModel") || string.IsNullOrWhiteSpace(settings.Parameters["draftModel"]))
+                {
+                    var pairedDraft = ModelPairingService.FindPairedDraftModel(path);
+                    if (!string.IsNullOrEmpty(pairedDraft))
+                        settings.Parameters["draftModel"] = pairedDraft;
+                }
                 _config.Engines[backendId] = settings;
                 ConfigService.SaveEngineSettings(_config, backendId, settings);
                 LogService.Write($"已为 {backend!.Descriptor.DisplayName} 选择 {Path.GetFileName(path)}。");
@@ -109,6 +127,7 @@ public partial class MainWindow
             var preset = ConfigService.GetModelPreset(_config, path);
             var args = preset?.Args ?? await Task.Run(() => PresetService.GeneratePresetArgs(path, _config.Port));
             args = EnsureBundledMtp(path, args);
+            args = EnsurePairedMmproj(path, args);
             if (_lifetime.IsCancellationRequested) return;
             _config.ModelPath = path;
             _config.Args = args;

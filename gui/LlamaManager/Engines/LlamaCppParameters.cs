@@ -32,6 +32,7 @@ public static class LlamaCppParameters
         ["cpuMoe"] = "--cpu-moe",
         ["specType"] = "--spec-type",
         ["draftModel"] = "-md",
+        ["mmproj"] = "--mmproj",
         ["verbose"] = "-v",
     };
 
@@ -161,13 +162,16 @@ public static class LlamaCppParameters
                 Help: "【投机解码类型】\n• 作用：选择投机解码方式（--spec-type）。\n• draft-mtp：使用模型内置 MTP 头，带 MTP 的模型可显著加速。\n• draft-simple / draft-eagle3：需要额外草稿模型（-md）。\n• ngram-mod：不依赖草稿模型的 n-gram 投机。"),
 
             new("draftModel", "草稿模型", "投机解码", ParamType.FilePath, "", "草稿模型路径（-md）。",
-                Help: "【草稿模型】\n• 作用：投机解码所用的小模型路径（-md）。\n• 仅 draft-simple / draft-eagle3 需要；draft-mtp 用模型自带的 MTP 头，不需要单独文件。",
-                VisibleWhen: "model.mtp"),
+                Help: "【草稿模型】\n• 作用：投机解码所用的小模型或外部 MTP 权重路径（-md）。\n• 适用于 draft-simple、draft-eagle3 或搭配独立 mtp-*.gguf 文件时。\n• 留空：使用内置 MTP 头或不启用外部草稿。"),
 
             new("mtp", "启用内置 MTP", "投机解码", ParamType.Boolean, "0",
                 "把 --spec-type 设为 draft-mtp（仅当模型带 MTP 头）。",
                 Help: "【启用内置 MTP】\n• 作用：把投机解码切换为模型自带的 MTP 头（等价于 --spec-type draft-mtp）。\n• 关闭时只移除 draft-mtp，不会覆盖你手填的其他投机类型。",
                 VisibleWhen: "model.mtp"),
+
+            new("mmproj", "视觉投影 (mmproj)", "视觉 / 多模态", ParamType.FilePath, "",
+                "多模态视觉投影模型文件路径（--mmproj，如 mmproj-Q8_0.gguf）。设置后开启图片理解与视觉交互。",
+                Help: "【视觉投影 (mmproj)】\n• 作用：指定多模态视觉投影模型文件（--mmproj / -mm），使语言模型获得图像理解与多模态交互能力（支持 Qwen2-VL、MiniCPM-V、Qwen3.5/3.6 Vision 等）。\n• 常见文件：mmproj-Q8_0.gguf、mmproj-BF16.gguf 等。\n• 留空：不加载视觉投影，按纯文本运行。"),
 
             new("verbose", "详细日志", "基本", ParamType.Boolean, "0", "输出详细运行日志（-v）。",
                 Help: "【详细日志】\n• 作用：打开引擎的详细日志（-v），排查问题时有帮助，日常可关闭。"),

@@ -44,11 +44,30 @@ public partial class MainWindow
         catch (Exception ex) { ShowError("端口设置失败", ex); }
     }
 
-    /// <summary>Bundled MTP heads get speculative decoding by default; explicit user choices win.</summary>
-    private static string EnsureBundledMtp(string path, string args) =>
-        GgufService.TryRead(path) is { HasMtp: true } && !new LauncherArguments(args).Has("--spec-type")
-            ? new LauncherArguments(args).Set("--spec-type", "draft-mtp")
-            : args;
+    /// <summary>Bundled MTP heads or paired draft models get speculative decoding by default; explicit user choices win.</summary>
+    private static string EnsureBundledMtp(string path, string args)
+    {
+        var parsed = new LauncherArguments(args);
+        if (parsed.Has("--spec-type")) return args;
+        if (GgufService.TryRead(path) is { HasMtp: true })
+            return parsed.Set("--spec-type", "draft-mtp");
+        var pairedDraft = ModelPairingService.FindPairedDraftModel(path);
+        if (!string.IsNullOrEmpty(pairedDraft))
+        {
+            var withSpec = parsed.Set("--spec-type", "draft-mtp");
+            return new LauncherArguments(withSpec).Set("-md", pairedDraft);
+        }
+        return args;
+    }
+
+    /// <summary>Automatically pairs a multimodal projector file (mmproj) from the model directory if not yet specified.</summary>
+    private static string EnsurePairedMmproj(string path, string args)
+    {
+        var parsed = new LauncherArguments(args);
+        if (parsed.Has("--mmproj")) return args;
+        var pairedMmproj = ModelPairingService.FindPairedMmproj(path);
+        return !string.IsNullOrEmpty(pairedMmproj) ? parsed.Set("--mmproj", pairedMmproj) : args;
+    }
 
     public static void ShowParameterHelp(string title, string? content)
     {

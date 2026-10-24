@@ -3,6 +3,23 @@
 按时间倒序记录影响需求或架构的变更。每条引用需求编号（见 docs/REQUIREMENTS.md）。
 普通修复不记；**改变行为、需求或取舍的**才记。
 
+## 2026-10-24
+
+- **视觉多模态投影（mmproj）与投机草稿模型（MTP）UI 接入与同目录智能配对**（REQ-120）：
+  为了让包含 `mmproj-Q8_0.gguf`、`mmproj-BF16.gguf` 或 `mtp-*.gguf` 的多模态/投机模型能够开箱即用，
+  在启动器参数面板新增视觉与草稿权重配置，并实现智能联动：
+  1. `LlamaCppParameters` 新增「视觉 / 多模态」分组与 `mmproj` 参数（映射 `--mmproj` / `-mm`）；
+  2. `StrataBackend` 新增 `mmproj` 参数，自动拉起伴生 `strata-vision.exe` 并生成 runconfig 的 `vision` 配置；新增 `draftModel`（`--draft-model`）；
+  3. 新增 `ModelPairingService`：用户选择模型时，自动探测所在目录是否包含 `mmproj-*.gguf`（优先 Q8_0、BF16）与 `mtp-*.gguf`，并在模型信息面板提示已匹配；
+  4. 主模型列表智能过滤：排除 `mmproj*.gguf` 与 `mtp-*.gguf` 独立辅助文件，防止用户误启动裸视觉头或适配器；
+  5. 浏览按钮自适应：模型/投影/草稿类文件自动采用 `*.gguf` 过滤器。
+  回归测试 76 增至 **77 项**，全部通过。
+
+- **三引擎升级（llamacpp b11853 / prism 10787 / polystrata v0.1.45-poly.3）与 PolyStrata 加速面板**（REQ-119）：
+  三引擎均升级至最新上游 release 并清理旧版归档。PolyStrata 参数面板扩充 Tensor-Core 线性注意力（`STRATA_GDN_MMA=1`）
+  与长文本 Flash Attention（`STRATA_FATTN=1`、`STRATA_FDEC=1`）以及 Gemma 4 `int8`/`int8k` KV 选项。
+  修复 `DoctorService` 跨变体版本解析；A/B 基准实测 RTX 3060 Laptop 上 Qwen3.6-35B Prefill 提速 39.0%，Decode 提速 63.6%。
+
 ## 2026-10-19
 
 - **参数实测对比接入过程遥测**（REQ-118，REQ-117 扩展）：此前每组只报完成后的 tok/s。
