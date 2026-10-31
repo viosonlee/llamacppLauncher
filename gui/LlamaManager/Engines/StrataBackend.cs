@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Text.Json;
 using LlamaManager.Models;
@@ -85,6 +86,21 @@ public sealed class StrataBackend : IServerBackend
                 new ParamChoice("q8_0", "q8_0（KV 减半）", "qwen35moe 家族支持；长上下文更省显存。"),
                 new ParamChoice("int8", "int8（Gemma 4）", "Gemma 4 系列专用，KV 均使用 int8。"),
                 new ParamChoice("int8k", "int8k（Gemma 4 仅键）", "Gemma 4 系列专用，仅 Key 缓存使用 int8。"),
+            ]));
+        list.Add(new("cacheBias", "显存专家路由偏置", "基本", ParamType.Decimal, "0",
+            "给已在显存内的专家加路由偏置（--cache-bias），减少跨内存取专家。仅 qwen35moe 家族有效，0 为关闭。", 0, 2,
+            Help: "【显存专家路由偏置】\n• 作用：设置 --cache-bias F，token 逐个生成时，路由器给已在显存内的专家加分，偏向选用无需跨 PCIe 搬运的专家（权重仍是路由器原始值）。\n• 效果：官方实测 12 GB 显存下解码 196 → 234 tok/s；128 步贪心采样里 121–126 步 top token 不变，答案略有变化。\n• 适用：仅 qwen35moe 家族（Qwen3.6、Tiel Coder、Ornith 等）。\n• 建议：0.3–0.5 起试；显存外专家越多（小显存显卡）收益越大。\n• 默认 0：关闭。",
+            RangeHint: "0–2，推荐 0.5", Unit: "F"));
+        list.Add(new("conversationCache", "对话驻留缓存", "基本", ParamType.Choice, "",
+            "把暂停的对话驻留在内存（--conversation-cache-mib），多会话切换无需重新读取提示词。",
+            Help: "【对话驻留缓存】\n• 作用：设置 --conversation-cache-mib，把暂停中的对话状态驻留在物理内存，切回时无需重新预填充。\n• 适用场景：多个 agent 工具（pi / Claude Code 等）共用同一服务端口、来回切换对话时直接有感。\n• auto：按模型加载后的空闲内存自动分配（40%，上限 8192 MiB，空闲不足 1024 MiB 时关闭）。\n• 固定值：显式指定驻留缓存的 MiB 数。\n• 默认（关闭）：引擎行为不变。",
+            Choices:
+            [
+                new ParamChoice("", "关闭", "不驻留，切回对话时重新读取提示词（引擎默认）。", Recommended: true),
+                new ParamChoice("auto", "auto（按空闲内存）", "模型加载后空闲内存的 40%，最多 8192 MiB。"),
+                new ParamChoice("2048", "2048 MiB", "固定 2 GiB。"),
+                new ParamChoice("4096", "4096 MiB", "固定 4 GiB。"),
+                new ParamChoice("8192", "8192 MiB", "固定 8 GiB。"),
             ]));
         list.Add(new("tensorCoreMma", "Tensor-Core 线性注意力", "高级", ParamType.Boolean, "1",
             "设置 STRATA_GDN_MMA=1，利用 Tensor Core 加速 Qwen3.6 / Ornith / Tiel 等线性注意力层，Prompt 提速 12%~18%（RTX 30+ 显卡）。",
@@ -372,6 +388,20 @@ public sealed class StrataBackend : IServerBackend
         // so the panel documents the limit and an empty value keeps the engine default.
         var kv = Param(config, "kv");
         if (kv is "fp16" or "q8_0" or "int8" or "int8k") { args.Add("--kv"); args.Add(kv); }
+        // Router bias and the conversation park are opt-in (strata-poly defaults both off);
+        // emit them only when the user chose a value, so older configs stay byte-identical.
+        var cacheBias = Param(config, "cacheBias");
+        if (double.TryParse(cacheBias, NumberStyles.Float, CultureInfo.InvariantCulture, out var bias) && bias > 0)
+        {
+            args.Add("--cache-bias");
+            args.Add(bias.ToString("0.0######", CultureInfo.InvariantCulture));
+        }
+        var conversationCache = Param(config, "conversationCache");
+        if (conversationCache is "auto" || (int.TryParse(conversationCache, out var parkMib) && parkMib > 0))
+        {
+            args.Add("--conversation-cache-mib");
+            args.Add(conversationCache);
+        }
         var cfg = new Dictionary<string, object>
         {
             ["exe"] = engine,

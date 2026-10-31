@@ -173,7 +173,11 @@ public sealed record ParameterSpec(
 |---|---|---|---|---|---|---|
 | 基本 | vramReserveMib | 显存预留 MiB | Integer | 256 | 0–60000；推荐 256/512 | `--vram-reserve-mib` |
 | 基本 | context | 上下文 | Integer | 4096 | 256–1048576 | `--max-context` |
-| 高级 | tailSkip | 尾部跳过 | Integer | 0 | 0–？ | `--tail-skip`（待 `--help` 确认） |
+| 基本 | kv | KV 缓存格式 | Choice | 空（fp16） | fp16/q8_0/int8/int8k | `--kv` |
+| 基本 | cacheBias | 显存专家路由偏置 | Decimal | 0 | 0–2；推荐 0.5；仅 qwen35moe | `--cache-bias`（v0.1.45-poly.6 起） |
+| 基本 | conversationCache | 对话驻留缓存 | Choice | 空（关闭） | auto/2048/4096/8192 | `--conversation-cache-mib`（poly.4 起） |
+| 高级 | tailSkip | 尾部跳过 | Integer | 0 | 0–64；推荐 6/1 | `--tail-skip` |
+| 高级 | tensorCoreMma / polyFlashAttention | 加速开关 | Boolean | 1 | RTX 30+ 默认开 | env `STRATA_GDN_MMA` / `STRATA_FATTN`+`STRATA_FDEC`（poly.6 起引擎默认开） |
 | 高级 | parallel / warmStart / adaptAsync / pinByNeed | 同 5.1 | — | — | — | 服务端共用键（待确认） |
 
 `expertSlots`、`mtpDrafts` 在 poly 上通过 `VisibleWhen="profile==upstream"` 隐藏；

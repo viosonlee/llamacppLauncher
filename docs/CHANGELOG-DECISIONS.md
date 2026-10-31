@@ -3,6 +3,19 @@
 按时间倒序记录影响需求或架构的变更。每条引用需求编号（见 docs/REQUIREMENTS.md）。
 普通修复不记；**改变行为、需求或取舍的**才记。
 
+## 2026-10-31
+
+- **引擎更新（llamacpp b12020 / polystrata v0.1.45-poly.6）与 PolyStrata 新增路由偏置、对话驻留缓存参数**（REQ-122）：
+  - 引擎更新：llamacpp 手动替换发行包至 b12020（启动器对 llamacpp 仅做存在性检查，不自动更新）；
+    polystrata 由 `--update` 自动升级至 v0.1.45-poly.6（含 Windows 冷启动双线程预热、Qwen3.6 家族
+    Flash-Attention 与 Tensor-Core 解码内核默认开启）。
+  - `StrataBackend` 参数面板新增 `cacheBias`（`--cache-bias`，十进制，仅 qwen35moe 家族有效，默认 0 不传）
+    与 `conversationCache`（`--conversation-cache-mib`，可选 auto / 固定 MiB，默认关闭不传）：
+    未设置时命令行与旧版逐字节一致；十进制值用 InvariantCulture 输出，避免 zh-CN 区域设置发出 "0,5"。
+  - 测试：`StrataBackendRegression` 扩展断言（未设置不传、auto 逐字传递、固定 MiB 传递、偏置 0 不传），
+    回归 78 项，77 通过；「benchmark: per-variant telemetry」一项为预先存在的环境性失败（与本改动无关，
+    改动前后失败一致）。
+
 ## 2026-10-24
 
 - **非 llama.cpp 引擎（PolyStrata 等）按模型隔离并保存独立参数预设**（REQ-121）

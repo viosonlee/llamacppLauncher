@@ -117,6 +117,36 @@ internal static class StrataBackendRegression
         config.Engines["polystrata"].Parameters.Remove("kv");
         config.Engines["polystrata"].Parameters.Remove("tailSkip");
 
+        // cache-bias and the conversation park are opt-in (both default off in strata-poly):
+        // unset must stay off the command line, "auto" must be passed verbatim, and a decimal
+        // bias must use an invariant dot so a zh-CN locale never emits "0,5".
+        Check(!runArgs.Contains("--cache-bias"), "an unset cache-bias must not be passed at all");
+        Check(!runArgs.Contains("--conversation-cache-mib"), "an unset conversation cache must not be passed at all");
+        config.Engines["polystrata"].Parameters["cacheBias"] = "0.5";
+        config.Engines["polystrata"].Parameters["conversationCache"] = "auto";
+        var biasPlan = backend.BuildLaunch(new EngineStartRequest { Config = config });
+        var biasArgs = biasPlan.Arguments.ToList();
+        var biasRunconfig = JsonNode.Parse(biasPlan.GeneratedFiles[biasArgs[biasArgs.IndexOf("--config") + 1]])!.AsObject();
+        var biasRunArgs = biasRunconfig["args"]!.AsArray().Select(n => n!.GetValue<string>()).ToList();
+        var biasIndex = biasRunArgs.IndexOf("--cache-bias");
+        Check(biasIndex >= 0 && biasIndex + 1 < biasRunArgs.Count && biasRunArgs[biasIndex + 1] == "0.5",
+            "--cache-bias 0.5 must reach the runconfig with an invariant decimal point");
+        var parkIndex = biasRunArgs.IndexOf("--conversation-cache-mib");
+        Check(parkIndex >= 0 && parkIndex + 1 < biasRunArgs.Count && biasRunArgs[parkIndex + 1] == "auto",
+            "--conversation-cache-mib auto must reach the runconfig verbatim");
+        config.Engines["polystrata"].Parameters["cacheBias"] = "0";
+        config.Engines["polystrata"].Parameters["conversationCache"] = "4096";
+        var parkPlan = backend.BuildLaunch(new EngineStartRequest { Config = config });
+        var parkArgs = parkPlan.Arguments.ToList();
+        var parkRunconfig = JsonNode.Parse(parkPlan.GeneratedFiles[parkArgs[parkArgs.IndexOf("--config") + 1]])!.AsObject();
+        var parkRunArgs = parkRunconfig["args"]!.AsArray().Select(n => n!.GetValue<string>()).ToList();
+        Check(!parkRunArgs.Contains("--cache-bias"), "cache-bias 0 must stay off the command line");
+        var parkIndex2 = parkRunArgs.IndexOf("--conversation-cache-mib");
+        Check(parkIndex2 >= 0 && parkIndex2 + 1 < parkRunArgs.Count && parkRunArgs[parkIndex2 + 1] == "4096",
+            "--conversation-cache-mib 4096 must reach the runconfig");
+        config.Engines["polystrata"].Parameters.Remove("cacheBias");
+        config.Engines["polystrata"].Parameters.Remove("conversationCache");
+
         // mmproj and strata-vision integration
         File.WriteAllText(Path.Combine(engineDir, "strata-vision.exe"), "# fake vision");
         var visionMmproj = Path.Combine(root, "mmproj-test.gguf");

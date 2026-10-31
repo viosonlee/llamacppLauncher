@@ -232,9 +232,15 @@
   在模型信息栏高亮显示配对状态并自动装配；主模型列表自动过滤排除独立的 mmproj 与 mtp 辅助权重文件；
   参数文件浏览器对 GGUF 模型类型自适应过滤 *.gguf 文件。
 
-- REQ-121 （实现：2026-10-24）非 llama.cpp 引擎（PolyStrata 等）支持按模型隔离并持久化独立参数预设。
+- REQ-121 已实现（2026-10-24）：非 llama.cpp 引擎（PolyStrata 等）支持按模型隔离并持久化独立参数预设。
   在 EngineSettings 中引入 ModelPresets（按规范化模型绝对路径键入参数字典），与 llama.cpp 的 ModelPresets 逻辑对齐。
   ManagerConfig.Normalize() 自动迁移现有全局参数并为当前活跃模型建立首份预设。
   UI 参数编辑（OnParameterEdited）与保存（SaveEngineParameters）实时更新当前模型的专属预设字典。
   模型切换（SelectModelAsync）自动提交旧模型修改，并载入新模型已保存的专属预设；针对首次选中的新模型，在保留 engine 级公共路径（packageRoot, serveRoot, pythonPath, servePort, host 等）的同时触发智能配对（mmproj 与 draftModel）。
   保证每个模型的上下文长度、KV缓存量化、跳层配置、视觉投影与草稿模型相互独立，切换时无缝恢复。
+
+- REQ-122 已实现（2026-10-31）：PolyStrata 参数面板接入 v0.1.45-poly.6 新增的显存专家路由偏置与对话驻留缓存。
+  `StrataBackend` 新增 `cacheBias`（映射 `--cache-bias`，ParamType.Decimal，仅 qwen35moe 家族有效，默认 0 不传）
+  与 `conversationCache`（映射 `--conversation-cache-mib`，Choice：关闭 / auto / 2048 / 4096 / 8192，默认关闭不传）。
+  两个选项均为引擎 opt-in，未设置时启动命令行与旧版保持一致；十进制经 InvariantCulture 格式化。
+  同批把本机 llamacpp 手动更新至 b12020、polystrata 自动更新至 v0.1.45-poly.6。
