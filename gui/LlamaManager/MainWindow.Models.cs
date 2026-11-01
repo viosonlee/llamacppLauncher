@@ -14,6 +14,7 @@ public partial class MainWindow
     {
         if (_scanning || _selecting) return;
         _scanning = true;
+        UpdateStartButtonState();
         ModelCountText.Text = "正在扫描模型…";
         EmptyModelsHint.Visibility = Visibility.Collapsed;
         try
@@ -57,7 +58,11 @@ public partial class MainWindow
             }
             finally { _selecting = false; }
         }
-        finally { _scanning = false; }
+        finally
+        {
+            _scanning = false;
+            UpdateStartButtonState();
+        }
     }
 
     private void ModelSearchBox_TextChanged(object sender, TextChangedEventArgs e)

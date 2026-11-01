@@ -413,9 +413,12 @@ internal static class UiRegression
                 windowConfig.ModelsDirectory = uiModelsDir;
                 var refreshModels = typeof(MainWindow).GetMethod("RefreshModelsAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
                 var scanTask = (Task)refreshModels.Invoke(window, null)!;
+                var scanStartButton = (Button)window.FindName("StartButton");
+                Program.Check(!scanStartButton.IsEnabled, "start button stayed clickable while models were scanning");
                 for (var i = 0; i < 400 && !scanTask.IsCompleted; i++)
                     window.Dispatcher.Invoke(() => { }, DispatcherPriority.Background);
                 scanTask.GetAwaiter().GetResult();
+                Program.Check(scanStartButton.IsEnabled, "start button was not restored after model scanning");
 
                 var modelList = (ListBox)window.FindName("ModelListBox");
                 var modelSearch = (Wpf.Ui.Controls.TextBox)window.FindName("ModelSearchBox");

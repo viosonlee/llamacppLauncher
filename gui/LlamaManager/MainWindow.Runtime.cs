@@ -61,7 +61,7 @@ public partial class MainWindow
 
             StartButton.Content = _serverStarting ? "正在启动…" : running ? "重启服务" : "启动服务";
             StopButton.Content = _serverStarting ? "终止启动" : "停止服务";
-            StartButton.IsEnabled = !busy && !_selecting && !_scanning;
+            UpdateStartButtonState();
             StopButton.IsEnabled = !_serverStopping && (running || _serverStarting);
             OpenButton.IsEnabled = ready && !busy;
             SpeedTestButton.IsEnabled = (_speedTesting || ready && !busy);
@@ -120,6 +120,15 @@ public partial class MainWindow
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
         catch (Exception ex) { LogService.Write("状态检测失败：" + ex.Message); }
         finally { _refreshing = false; }
+    }
+
+    /// <summary>Keeps the primary action visibly blocked while a model scan owns configuration.</summary>
+    private void UpdateStartButtonState()
+    {
+        StartButton.IsEnabled = !(_serverStarting || _serverStopping || _selecting || _scanning);
+        StartButton.ToolTip = _scanning
+            ? "正在扫描模型并恢复预设，完成后即可启动"
+            : "启动或重启服务（Ctrl+Enter）";
     }
 
     private int ResolveConfiguredPort(IEngineBackend? backend)
