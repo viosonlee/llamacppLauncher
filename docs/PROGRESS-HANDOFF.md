@@ -10,9 +10,9 @@
 | 工作树 | `/home/vioson/.codex/worktrees/launcher-polish-iteration/llamacppLauncher` |
 | Windows 路径 | `\\wsl.localhost\Debian\home\vioson\.codex\worktrees\launcher-polish-iteration\llamacppLauncher` |
 | 分支 | `codex/launcher-polish-iteration` |
-| HEAD | `4f32071`（已与 origin 同步） |
+| 功能/发布 HEAD | `4f32071` |
 | 基线 | `d57ad11`（origin/main） |
-| 本阶段提交 | **功能/修复 5 笔**；加本交接文档共 **6 笔** |
+| 本阶段提交 | **功能/修复 5 笔 + 交接文档 2 笔，共 7 笔** |
 | 正式安装 | `C:\llama-b9822-bin-win-cuda-13.3-x64\llamacppLauncher\dist` |
 
 主工作区 `C:\llama-b9822-bin-win-cuda-13.3-x64\llamacppLauncher` 仍停在 `d57ad11`，
@@ -131,5 +131,5 @@ dotnet run --project tests/LlamaManager.Regression -c Release --no-build -- --ch
 ## 八、目标状态
 
 用户要求“完成这个阶段后暂停目标”。本阶段已完成代码迭代、测试、5 笔功能/修复提交推送、正式本机部署
-和交接文件；交接文档作为第 6 笔提交推送。恢复时从「下一阶段候选」第 1 项开始，
+和交接文件；交接文档及其最终校验修正作为另外 2 笔提交推送。恢复时从「下一阶段候选」第 1 项开始，
 不自动继续新功能。
