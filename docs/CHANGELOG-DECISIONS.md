@@ -5,6 +5,15 @@
 
 ## 2026-11-01
 
+- **PowerShell 包装脚本恢复对 WinExe 的命令行调用**（REQ-104）：
+  - Windows PowerShell 5.1 不允许把 GUI 子系统的 `LlamaManager.exe` 放在管道中间；旧写法
+    `& exe @args | Out-Host` 会让 `-Start/-Status/-Stop` 等所有命令行开关在执行前报
+    “无法在管道中间运行文档”。
+  - 改为 `Start-Process -PassThru` 配合临时 stdout/stderr 文件和进程对象
+    `WaitForExit()`：只等待启动器本身，避免 `-Wait` 连带等待 `--start` 创建的常驻模型服务；
+    按 UTF-8 转发两路输出并原样返回退出码，不把 WinExe 放进管道。参数按 Windows 命令行规则
+    逐个加引号，保留带空格路径。发布冒烟同时执行直接 EXE 与 PowerShell 包装两条路径。
+
 - **引擎更新选择复用一次探测与同一发布计划**（REQ-133、REQ-136）：
   - `SelectLatestPlan` 在整批 release 中只读取一次本机 GPU 计算能力，避免为每个候选重复启动
     `nvidia-smi`；体检、首次安装和更新共用这条选择路径。

@@ -43,6 +43,7 @@
 | DEF-23 | P2 | 已实测确认 → 已修复（2026-11-01） | `TestPortInUse` 漏报刚绑定的监听，接管/停止误判“无服务” |
 | DEF-24 | P2 | 已修复（2026-11-01） | 引擎更新可能覆盖运行中文件，失败会留下半新半旧安装 |
 | DEF-25 | P3 | 已修复（2026-11-01） | 端口探测的监听表兜底偶发拖慢数秒，改为 IPv4/IPv6 双绑定 |
+| DEF-26 | P2 | 已实测确认 → 已修复（2026-11-01） | PowerShell 5.1 将 WinExe 放入管道导致全部包装命令失败 |
 
 ---
 
@@ -540,6 +541,24 @@
 
 ---
 
+## DEF-26 PowerShell 包装脚本把 WinExe 放进管道
+
+**严重度 P2 · 已实测确认 → 已修复（2026-11-01）**
+
+- 位置：`llama-manager.ps1` 的命令分支。
+- 现象：发布 EXE 冒烟执行 `llama-manager.ps1 -Start -ModelPath <路径> -Port <端口>` 时，
+  PowerShell 5.1 在启动器运行前报
+  `CantActivateDocumentInPipeline / 无法在管道中间运行文档`，包装脚本整体不可用。
+- 根因：主程序是 `WinExe`（GUI 子系统），而脚本用 `& $launcherExecutable @args | Out-Host`。
+  Windows PowerShell 5.1 不允许 GUI 可执行文件出现在管道中间；直接调用不受此限制。
+- 修复：去掉 `| Out-Host`，改用 `Start-Process -PassThru` 和进程对象 `WaitForExit()`，将
+  stdout/stderr 重定向到临时文件后按 UTF-8 转发，并返回 `$process.ExitCode`；参数按 Windows
+  命令行规则逐个转义。不能使用 `Start-Process -Wait`，否则 `--start` 会连带等待常驻模型服务。
+- 验证：发布版 `--check-published` 同时覆盖直接 EXE 与 PowerShell 包装的 help/service/
+  status/stop，包含带空格模型路径；修复后两条路径均通过。
+
+---
+
 ## 建议修复顺序
 
 1. **已完成 DEF-01 / DEF-08 / DEF-21**：正式服务默认 8080，测速使用独立临时端口，小数保存一致，回归转绿。
@@ -554,6 +573,7 @@
    当前审查表只剩经验证后确认的实现，不再有待修复的 P1/P2 项；后续以真实使用回归和性能实测为主。
 10. **DEF-24 已完成**：引擎更新与初始化增加运行中门禁、暂存发布和失败回滚。
 11. **DEF-25 已完成**：端口存活探测改为 IPv4/IPv6 双绑定，去掉慢速监听表兜底。
+12. **DEF-26 已完成**：PowerShell 包装通过显式等待和输出重定向避开 WinExe 管道限制，发布冒烟覆盖包装脚本。
 
 ## 验证方式（本次审查使用）
 

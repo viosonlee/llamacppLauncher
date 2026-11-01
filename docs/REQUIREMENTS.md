@@ -142,7 +142,9 @@
   报错并指明选项名。
 - REQ-104 已实现：全新电脑一键配置并启动：
   - GUI: 当所选引擎未就绪（缺少引擎二进制文件、服务源码或 Python 依赖）时，点击「启动服务」自动检测到缺失，向用户弹出友好提示并确认一键自动下载并配置环境，配置完成后无缝自动启动服务；同时在顶部控制条提供直观的「配置环境」按钮，并在未就绪时状态栏清晰提示一键配置；支持配置进度实时呈现（全局日志联动）。
-  - CLI: `--start` 支持在缺少环境时通过 `--auto-bootstrap`（或 `--bootstrap`）开关一键全自动配置环境并拉起服务；`--bootstrap --all` 支持一条命令配置所有内置引擎环境；`llama-manager.ps1` 和 `llama-manager.cmd` 完整支持 `-Bootstrap`、`-Doctor`、`-All`、`-Offline`、`-AutoBootstrap`、`-Backend` 等参数。
+  - CLI: `--start` 支持在缺少环境时通过 `--auto-bootstrap`（或 `--bootstrap`）开关一键全自动配置环境并拉起服务；`--bootstrap --all` 支持一条命令配置所有内置引擎环境；`llama-manager.ps1` 和 `llama-manager.cmd` 完整支持 `-Bootstrap`、`-Doctor`、`-All`、`-Offline`、`-AutoBootstrap`、`-Backend` 等参数；
+    Windows PowerShell 5.1 绕过 WinExe 管道限制，使用 `Start-Process` 重定向并转发输出、
+    显式等待执行、保留退出码，参数转义支持带空格和引号的模型路径。
   - 引擎自包含与 DLL 补全：在 polystrata 初始化时，自动补充/共享 CUDA 运行时依赖（`cublas64_*.dll`, `cudart64_*.dll`），且子进程环境变量 PATH 补全相关目录，彻底杜绝 Windows 下 `STATUS_DLL_NOT_FOUND` (0xC0000135) 错误。
 - REQ-105 已实现：多引擎日志与实时速度监控适配（polystrata）：
   - 日志系统（LogService）支持按当前所选后端动态读取其专属日志（`logs/engine-{backendId}.log`、`.stdout.log`、`.stderr.log`），“打开日志文件”按钮自动定位打开当前引擎的主日志文件。
