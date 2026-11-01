@@ -5,6 +5,23 @@ namespace LlamaManager.Services;
 
 public static class ConfigService
 {
+    public sealed record PresetRebindSnapshot(
+        string ModelPath,
+        IReadOnlyList<KeyValuePair<string, ModelPreset>> Presets);
+
+    public sealed record PresetMove(
+        string FromKey,
+        string ToKey,
+        string ModelPath,
+        ModelPreset Original,
+        ModelPreset Rebound);
+
+    public sealed record PresetSignatureUpgrade(string Key, string Signature);
+
+    public sealed record PresetRebindPlan(
+        IReadOnlyList<PresetMove> Moves,
+        IReadOnlyList<PresetSignatureUpgrade> SignatureUpgrades);
+
     private static readonly string ManagerRoot;
     private static readonly string LlamaCppRoot;
     private static readonly string LogsDir;
@@ -91,6 +108,7 @@ public static class ConfigService
             latest.AutoOpenBrowser = config.AutoOpenBrowser;
             latest.EmbeddingModelPath = config.EmbeddingModelPath;
             latest.EmbeddingPort = config.EmbeddingPort;
+            latest.Window = config.Window ?? new WindowSettings();
             if (string.IsNullOrEmpty(latest.CreatedAt)) latest.CreatedAt = DateTime.Now.ToString("o");
             latest.UpdatedAt = DateTime.Now.ToString("o");
         });
@@ -254,19 +272,45 @@ public static class ConfigService
     /// 匹配依据：文件签名（最强）→ 文件名 + 尾部目录段相似度。
     /// </summary>
     public static int RebindOrphanPresets(ManagerConfig config, IEnumerable<string> modelPaths, bool save)
+        => ApplyOrphanPresetRebind(
+            config,
+            PlanOrphanPresetRebind(CreatePresetRebindSnapshot(config), modelPaths),
+            save);
+
+    /// <summary>
+    /// Copy the small preset map on the dispatcher. The returned objects are detached clones, so
+    /// expensive signature/scoring work can run on a worker without reading the live config.
+    /// </summary>
+    public static PresetRebindSnapshot CreatePresetRebindSnapshot(ManagerConfig config)
+        => new(
+            config.ModelPath,
+            (config.ModelPresets ?? [])
+                .Select(kv => new KeyValuePair<string, ModelPreset>(kv.Key, ClonePreset(kv.Value)))
+                .ToList());
+
+    /// <summary>
+    /// Pure, potentially slow part of orphan rebinding. It never mutates <paramref name="snapshot"/>.
+    /// </summary>
+    public static PresetRebindPlan PlanOrphanPresetRebind(
+        PresetRebindSnapshot snapshot,
+        IEnumerable<string> modelPaths)
     {
-        if (config.ModelPresets == null || config.ModelPresets.Count == 0) return 0;
+        if (snapshot.Presets.Count == 0) return new PresetRebindPlan([], []);
 
         var models = modelPaths
             .Where(p => !string.IsNullOrEmpty(p) && File.Exists(p))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
-        if (models.Count == 0) return 0;
+        if (models.Count == 0) return new PresetRebindPlan([], []);
 
-        var orphans = config.ModelPresets
+        // Work on detached copies. This also models the old sequential removal of moved orphans.
+        var working = snapshot.Presets
+            .Where(kv => kv.Value != null)
+            .ToDictionary(kv => kv.Key, kv => ClonePreset(kv.Value), StringComparer.Ordinal);
+        var orphans = working
             .Where(kv => string.IsNullOrEmpty(kv.Key) || !File.Exists(kv.Key))
             .ToList();
-        if (orphans.Count == 0) return 0;
+        if (orphans.Count == 0) return new PresetRebindPlan([], []);
 
         var needSignature = orphans.Any(kv => !string.IsNullOrEmpty(kv.Value.Signature));
         var signatures = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
@@ -274,11 +318,11 @@ public static class ConfigService
             foreach (var m in models)
                 signatures[m] = FileSignature.Compute(m);
 
-        var moved = 0;
+        var moves = new List<PresetMove>();
         foreach (var model in models)
         {
             var targetKey = NormalizePath(model);
-            if (config.ModelPresets.ContainsKey(targetKey)) continue;
+            if (working.ContainsKey(targetKey)) continue;
 
             var sig = needSignature && signatures.TryGetValue(model, out var s) ? s : null;
             string? bestKey = null;
@@ -287,7 +331,7 @@ public static class ConfigService
 
             foreach (var kv in orphans)
             {
-                if (!config.ModelPresets.ContainsKey(kv.Key)) continue; // 已被其他模型占用（已迁走）
+                if (!working.ContainsKey(kv.Key)) continue; // 已被其他模型占用（已迁走）
                 if (string.IsNullOrEmpty(kv.Value.Signature) &&
                     models.Count(m => string.Equals(Path.GetFileName(m), Path.GetFileName(kv.Key), StringComparison.OrdinalIgnoreCase)) != 1)
                     continue;
@@ -304,35 +348,103 @@ public static class ConfigService
 
             if (bestKey == null || bestPreset == null) continue;
 
-            config.ModelPresets.Remove(bestKey);
-            bestPreset.Signature = FileSignature.Compute(model) ?? bestPreset.Signature;
-            config.ModelPresets[targetKey] = bestPreset;
-            if (PathIdentity.Equals(config.ModelPath, bestKey)) config.ModelPath = model;
-            moved++;
-            LogService.Write($"检测到模型文件变更，已恢复预设: {Path.GetFileName(model)}");
+            var rebound = ClonePreset(bestPreset);
+            rebound.Signature = FileSignature.Compute(model) ?? rebound.Signature;
+            working.Remove(bestKey);
+            working[targetKey] = rebound;
+            moves.Add(new PresetMove(bestKey, targetKey, model, ClonePreset(bestPreset), rebound));
         }
 
         // 给还没有签名的预设补签名（仅首次，后续直接命中缓存）
-        var upgraded = 0;
+        var upgrades = new List<PresetSignatureUpgrade>();
         foreach (var model in models)
         {
-            if (!config.ModelPresets.TryGetValue(NormalizePath(model), out var p)
+            if (!working.TryGetValue(NormalizePath(model), out var p)
                 || !string.IsNullOrEmpty(p.Signature))
                 continue;
             var s = FileSignature.Compute(model);
-            if (s != null)
-            {
-                p.Signature = s;
-                upgraded++;
-            }
+            if (s != null) upgrades.Add(new PresetSignatureUpgrade(NormalizePath(model), s));
         }
 
-        if ((moved > 0 || upgraded > 0) && save)
-        {
-            SaveConfig(config);
-        }
-        return moved;
+        return new PresetRebindPlan(moves, upgrades);
     }
+
+    /// <summary>
+    /// Applies a precomputed plan. With <paramref name="save"/> this is one serialized config
+    /// transaction and merges with presets added while the scan was running; callers should invoke
+    /// it on the dispatcher because it also updates the in-memory config object.
+    /// </summary>
+    public static int ApplyOrphanPresetRebind(
+        ManagerConfig config,
+        PresetRebindPlan plan,
+        bool save)
+    {
+        if (plan.Moves.Count == 0 && plan.SignatureUpgrades.Count == 0) return 0;
+
+        (int Moved, bool Changed) applied;
+        if (save)
+        {
+            applied = default;
+            var saved = Store.Update(latest => applied = ApplyPlan(latest, plan));
+            // Preset rebinding touches only this slice; never replace unrelated GUI settings with a
+            // stale copy while merging the transaction result back into the in-memory config.
+            config.ModelPresets = saved.ModelPresets;
+            config.ModelPath = saved.ModelPath;
+        }
+        else
+        {
+            applied = ApplyPlan(config, plan);
+        }
+
+        return applied.Moved;
+    }
+
+    private static (int Moved, bool Changed) ApplyPlan(ManagerConfig target, PresetRebindPlan plan)
+    {
+        target.ModelPresets ??= [];
+        var moved = 0;
+        foreach (var move in plan.Moves)
+        {
+            // The target may have received a user preset after planning; that newer value wins.
+            if (target.ModelPresets.ContainsKey(move.ToKey)) continue;
+            if (!target.ModelPresets.TryGetValue(move.FromKey, out var current)
+                || !PresetEquals(current, move.Original))
+                continue;
+
+            target.ModelPresets.Remove(move.FromKey);
+            target.ModelPresets[move.ToKey] = ClonePreset(move.Rebound);
+            if (PathIdentity.Equals(target.ModelPath, move.FromKey)) target.ModelPath = move.ModelPath;
+            moved++;
+            LogService.Write($"检测到模型文件变更，已恢复预设: {Path.GetFileName(move.ModelPath)}");
+        }
+
+        var upgraded = 0;
+        foreach (var upgrade in plan.SignatureUpgrades)
+        {
+            if (!target.ModelPresets.TryGetValue(upgrade.Key, out var preset)
+                || !string.IsNullOrEmpty(preset.Signature))
+                continue;
+            preset.Signature = upgrade.Signature;
+            upgraded++;
+        }
+
+        if (moved > 0 || upgraded > 0) Touch(target);
+        return (moved, moved > 0 || upgraded > 0);
+    }
+
+    private static ModelPreset ClonePreset(ModelPreset preset) => new()
+    {
+        Args = preset.Args,
+        Port = preset.Port,
+        LastUsed = preset.LastUsed,
+        Signature = preset.Signature
+    };
+
+    private static bool PresetEquals(ModelPreset a, ModelPreset b)
+        => a.Port == b.Port
+           && string.Equals(a.Args, b.Args, StringComparison.Ordinal)
+           && string.Equals(a.LastUsed, b.LastUsed, StringComparison.Ordinal)
+           && string.Equals(a.Signature, b.Signature, StringComparison.Ordinal);
 
     private static int ScoreOrphan(string orphanKey, ModelPreset preset, string modelPath, string? signature)
     {

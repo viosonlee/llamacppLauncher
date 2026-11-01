@@ -100,6 +100,9 @@ public sealed class LlamaCppBackend : IServerBackend
 
     public async Task<EngineSession> StartAsync(EngineStartRequest request, ILogSink log, CancellationToken ct)
     {
+        // Shared gate: CLI/autostart reach this method directly and must not start a second
+        // GPU-heavy engine while another one is alive (REQ-127).
+        EngineArbiter.EnsureCanStart(Descriptor.Id);
         if (request.Embedding)
             await ServerService.StartEmbeddingAsync(request.Config, log.Write, ct).ConfigureAwait(false);
         else

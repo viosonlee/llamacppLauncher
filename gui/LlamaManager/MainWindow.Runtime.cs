@@ -20,7 +20,7 @@ public partial class MainWindow
         {
             // The log page must never wait on the network probes below: a slow or failing
             // health check used to freeze it for as long as the failure lasted.
-            RefreshLog();
+            if (IsLogSurfaceVisible()) RefreshLog();
             var backend = SelectedEngineBackend();
             var backendId = backend?.Descriptor.Id ?? "llamacpp";
             var isLlamacpp = backendId == "llamacpp";
@@ -71,7 +71,10 @@ public partial class MainWindow
             LiveSpeedText.Foreground = (Brush)FindResource(status.IsActive ? "AccentFillColorDefaultBrush" : "SystemFillColorSuccessBrush");
             // The service's own telemetry (expert cache, VRAM, GPU load) beats a one-off parse of its
             // startup log, and is the only live source on PolyStrata.
-            var gpuSummary = status.Detail.Length > 0 ? status.Detail : LogService.GetGpuSummary(session!, backendId);
+            // Skip the log-backed GPU summary when no session is running: it cannot produce a
+            // value and used to read two log files every poll anyway.
+            var gpuSummary = !running || session == null ? "" :
+                status.Detail.Length > 0 ? status.Detail : LogService.GetGpuSummary(session, backendId);
             ProcessInfoText.Text = running
                 ? $"{Path.GetFileName(Path.GetDirectoryName(session!.EnginePath))} · PID {session.ProcessId}" +
                   (!string.IsNullOrEmpty(gpuSummary) ? $" · {gpuSummary}" : "") : "进程: 无";
@@ -89,7 +92,7 @@ public partial class MainWindow
                         ? $" · 草稿接受 {sample.DraftsAccepted}/{sample.DraftsOffered}（{acceptance:P0}）"
                         : "";
                     LogService.Write($"[{backendId}] 请求完成：{sample.Tokens:N0} tokens · {sample.Rate:F2} tok/s · {sample.Seconds:F1} s{drafts}");
-                    RefreshLog();
+                    if (IsLogSurfaceVisible()) RefreshLog();
                 }
             }
             var cuda = cudaTask.Result;
@@ -112,7 +115,7 @@ public partial class MainWindow
 
             AutostartStatusText.Text = autostartTask.Result.Text;
             AutostartButton.Content = autostartTask.Result.Enabled ? "关闭自启" : "开启自启";
-            RefreshLog();
+            if (IsLogSurfaceVisible()) RefreshLog();
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
         catch (Exception ex) { LogService.Write("状态检测失败：" + ex.Message); }

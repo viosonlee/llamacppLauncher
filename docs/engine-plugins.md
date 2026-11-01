@@ -294,7 +294,8 @@ public sealed record EngineSession
 - 提升为 `ICompatibilityCheck`，按 `driver` 选择：
   - `none`（llamacpp）：恒 `Runnable`，附带量化与层数说明（保留 Prism/TQ1 例外）。
   - `strata-matrix`：现 `StrataCompatibility`（格式矩阵 + 结构校验）。
-  - `polystrata-matrix`：其矩阵（Q3_K/Q4_K/IQ2_S/IQ3_XXS/Q4_0/Q4_1/Q5_0/Q5_1/Q6_K/Q8_0 + MTP 草稿块 + `--tail-skip` 说明）。
+  - `polystrata-matrix`：其矩阵（Q2_K/Q3_K/Q4_K/IQ2_S/IQ3_XXS/Q4_0/Q4_1/Q5_0/Q5_1/Q6_K/Q8_0/MXFP4
+    + MTP 草稿块 + `--tail-skip` 说明）。
 - 新增 `ResourceEstimate`：按层数、专家格式、上下文估算显存与主机内存；6GB 卡给「会打页/可能 OOM」警告（不阻断）。
 - 统一为 `CompatibilityReport`，UI 用同一控件展示（摘要行 + 详细 ToolTip）。
 
@@ -351,7 +352,10 @@ public class EngineSettings
 
 - `EngineArbiter`：
   - 每个后端一把生命周期锁（沿用 `logs/*.lock` 命名）。
-  - GPU 重负载后端互斥：启动 A 前若 B 在运行，走统一确认（迁移现 `MainWindow.Strata.cs` 弹窗）。
+  - GPU 重负载后端互斥：GUI 用 `ConflictFor` 弹统一确认；`IServerBackend.StartAsync` 首行调用
+    `EnsureCanStart`，因此 CLI 的 `--start`/`--service`（登录自启动走的正是这条）遇到冲突直接报错退出，
+    不会悄悄和另一个引擎同抢显存。
+  - 占用判定以“会话进程仍存活”为准：崩溃/手动结束后残留的记录不再触发冲突确认。
   - 启动取消 / 停止 / 状态轮询的令牌与版本控制集中。
 - `StatusAsync`：PID + 创建时间 + 引擎路径 + 就绪探测。
 - 日志：`DetachedProcess` 标准句柄输出；`IncrementalLogReader`/`LogService` 读取；`ParsePerf` 按后端正则提取 tok/s。
@@ -398,17 +402,20 @@ public class EngineSettings
 
 启动器提供「初始化引擎环境」入口（GUI 按钮 + CLI `--bootstrap --backend <id>`），按后端执行：
 
-- **llamacpp**：定位 `llama-server.exe`；缺失则从 `ggml-org/llama.cpp` 发布下载 Windows CUDA 包 + cudart（`llama-<build>-bin-win-cuda-13.4-x64.zip`；CUDA 13.4 优先，12.4 回退）。注意 llama.cpp 的 Windows 二进制位于**预发布（nightly）**，因此取「发布列表中第一个含可用 Windows CUDA 资产的版本」。
+- **llamacpp**：定位 `llama-server.exe`；缺失则从 `ggml-org/llama.cpp` 发布下载 Windows CUDA 包 + cudart（`llama-<build>-bin-win-cuda-13.4-x64.zip`；CUDA 13.4 优先，12.4 回退）。注意 llama.cpp 的 Windows 二进制位于**预发布（nightly）**，因此取「发布列表中第一个含可用 Windows CUDA 资产的版本」。已安装时执行 `llama-server --version` 提取 build 并与该版本比较；版本不可读则跳过自动更新，不覆盖手工安装。
 - **polystrata**：
   1. 定位 `engine-poly/strata-poly.exe` 与 `serve/server.py`；缺失则从 `VecSzn/PolyStrata` 下载 `strata-poly-windows-x64-<hash>.zip`（引擎）与该 tag 的源码归档（`serve/` + `requirements.txt`），校验 SHA-256 后解压。
   2. 探测 Python ≥ 3.10（`py -3` / `python` / 配置项）；缺失则自动安装。
   3. 创建本地 venv（`<ManagerRoot>/venvs/polystrata`）。
   4. `pip install` 依赖：优先读取引擎源码根的 `requirements.txt`（版本已固定）；源码缺失时回退内置列表。
-  5. 已安装时顺带检查更新：`BUILD.json` 版本落后于最新发布就原地升级（`EngineAcquisitionService.UpdateAsync`，`--update` 是它的命令行入口）。
+  5. 已安装时顺带检查更新：`BUILD.json` 版本落后于最新发布就安全升级
+     （`EngineAcquisitionService.UpdateAsync`，`--update` 是命令行入口）；服务运行时拒绝替换引擎文件。
 
 依赖清单来源（已确认）：优先读取引擎源码根的 `requirements.txt`（版本已固定）；仅在源码缺失时回退到启动器内置的兼容版本表（带版本标记）。启动器**不复制** `requirements.txt` 内容。
 
-下载实现：`EngineDownloadService`（HTTP 流式下载 + SHA-256 校验 + zip-slip 防护解压）、`EngineCatalog`（把 GitHub 发布 JSON 映射为安装计划，纯函数、可测）、`EngineAcquisitionService`（查询发布 → 下载 → 解压 → 写回配置路径）。
+下载实现：`EngineDownloadService`（HTTP 流式下载 + SHA-256 校验 + zip-slip 防护解压 +
+暂存目录事务发布/失败回滚）、`EngineCatalog`（把 GitHub 发布 JSON 映射为安装计划，纯函数、可测）、
+`EngineAcquisitionService`（查询发布 → 下载全部归档 → 解压暂存 → 校验运行状态 → 发布 → 写回配置路径）。
 
 ### 15.3 校验与幂等
 

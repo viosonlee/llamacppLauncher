@@ -86,6 +86,7 @@ public static class EngineAcquisitionService
     /// </summary>
     public static async Task<string> AcquireAsync(string backendId, ILogSink log, CancellationToken ct)
     {
+        EnsureNotRunning(backendId);
         var repo = RepoFor(backendId)
             ?? throw new InvalidOperationException($"{backendId} 不支持自动下载。");
         log.Write($"查询 {repo} 的最新版本…");
@@ -108,50 +109,99 @@ public static class EngineAcquisitionService
         if (plan == null || chosen == null)
             throw new InvalidOperationException($"{repo} 的近期发布没有适用于本机的下载文件。");
         log.Write($"选用版本：{chosen.Tag}");
+        return await InstallPlanAsync(plan, chosen.Tag, log, ct).ConfigureAwait(false);
+    }
 
+    /// <summary>
+    /// Downloads and transactionally installs one already-selected plan. Exposed separately so
+    /// the complete download-to-config path can be exercised against a local HTTP release fixture.
+    /// </summary>
+    public static async Task<string> InstallPlanAsync(
+        EngineInstallPlan plan,
+        string version,
+        ILogSink log,
+        CancellationToken ct)
+    {
+        EnsureNotRunning(plan.BackendId);
         var downloadDir = Path.Combine(ConfigService.GetManagerRoot(), "downloads");
         Directory.CreateDirectory(downloadDir);
 
-        // Engine archives first: these carry the executable the backend probes for.
-        foreach (var asset in plan.EngineArchives)
+        // Download every archive before touching the installation. Extract into a same-volume
+        // staging tree, then publish with rollback so a failed second download/extract cannot
+        // leave the existing engine partly replaced.
+        var staged = Path.Combine(downloadDir, $".install-{plan.BackendId}-{Guid.NewGuid():N}");
+        var engineStage = Path.Combine(staged, "engine");
+        var sourceStage = Path.Combine(staged, "source");
+        var backup = Path.Combine(staged, "backup");
+        Directory.CreateDirectory(engineStage);
+        try
         {
-            var archive = await FetchAsync(asset, downloadDir, log, ct).ConfigureAwait(false);
-            var extracted = EngineDownloadService.ExtractZip(archive, plan.EngineDir);
-            log.Write($"已解压 {extracted} 个文件到 {plan.EngineDir}。");
-        }
+            var downloads = new Dictionary<ReleaseAsset, string>();
+            foreach (var asset in plan.AllArchives)
+                downloads[asset] = await FetchAsync(asset, downloadDir, log, ct).ConfigureAwait(false);
 
-        // Then the source archive (serve/server.py + requirements.txt), flattened to the root.
-        if (plan.SourceArchive != null && plan.SourceDir != null)
-        {
-            var archive = await FetchAsync(plan.SourceArchive, downloadDir, log, ct).ConfigureAwait(false);
-            ExtractFlattened(archive, plan.SourceDir, log);
-        }
+            ct.ThrowIfCancellationRequested();
+            // The user can start the engine while archives download; never replace files beneath
+            // a live process. The same check runs again immediately before publishing.
+            EnsureNotRunning(plan.BackendId);
 
-        if (chosen != null)
-        {
-            var buildPath = Path.Combine(plan.EngineDir, "BUILD.json");
-            if (File.Exists(buildPath))
+            foreach (var asset in plan.EngineArchives)
             {
-                try
-                {
-                    var node = JsonNode.Parse(File.ReadAllText(buildPath))?.AsObject();
-                    if (node != null)
-                    {
-                        node["version"] = chosen.Tag.TrimStart('v');
-                        File.WriteAllText(buildPath, node.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
-                    }
-                }
-                catch { }
+                var extracted = EngineDownloadService.ExtractZip(downloads[asset], engineStage);
+                log.Write($"已暂存 {extracted} 个引擎文件。");
             }
-        }
 
-        RecordPaths(backendId, plan, log);
-        return plan.EngineDir;
+            if (plan.SourceArchive != null && plan.SourceDir != null)
+                ExtractFlattened(downloads[plan.SourceArchive], sourceStage, log);
+
+            EnsureNotRunning(plan.BackendId);
+            var roots = new List<(string StagingRoot, string DestinationRoot)> { (engineStage, plan.EngineDir) };
+            if (plan.SourceDir != null && Directory.Exists(sourceStage)) roots.Add((sourceStage, plan.SourceDir));
+            var published = EngineDownloadService.PublishStagedDirectories(roots, backup);
+            log.Write($"已安全安装 {published} 个文件。");
+
+            if (!string.IsNullOrWhiteSpace(version))
+                UpdateBuildVersion(plan.EngineDir, version);
+
+            RecordPaths(plan.BackendId, plan, log);
+            return plan.EngineDir;
+        }
+        finally
+        {
+            try { if (Directory.Exists(staged)) Directory.Delete(staged, recursive: true); } catch { }
+        }
+    }
+
+    private static void EnsureNotRunning(string backendId)
+    {
+        if (!EngineArbiter.IsBackendRunning(backendId)) return;
+        throw new InvalidOperationException(
+            $"{EngineArbiter.DisplayName(backendId)} 正在运行，已拒绝替换引擎文件。" +
+            "请先停止服务，再运行初始化环境或更新。");
+    }
+
+    private static void UpdateBuildVersion(string engineDir, string tag)
+    {
+        var buildPath = Path.Combine(engineDir, "BUILD.json");
+        if (!File.Exists(buildPath)) return;
+        try
+        {
+            var node = JsonNode.Parse(File.ReadAllText(buildPath))?.AsObject();
+            if (node == null) return;
+            node["version"] = tag.TrimStart('v');
+            File.WriteAllText(buildPath,
+                node.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+        }
+        catch { }
     }
 
     /// <summary>The outcome of an update check: whether it installed, and which versions were seen.</summary>
     public sealed record EngineUpdateResult(
-        bool Updated, string? InstalledVersion, string? LatestVersion, string? EngineDir);
+        bool Updated,
+        string? InstalledVersion,
+        string? LatestVersion,
+        string? EngineDir,
+        string? SkippedReason = null);
 
     /// <summary>
     /// Updates an already-installed engine to the published release when it is behind.
@@ -161,18 +211,25 @@ public static class EngineAcquisitionService
     /// engine was missing, so an installed-but-outdated engine never moved and the doctor's
     /// "运行初始化环境更新" advice did nothing. This compares the installed version with the newest
     /// release that has a usable asset for this machine and reinstalls only when it is behind.
-    /// Engines whose version cannot be read (llama.cpp nightlies) are left to the caller.
+    /// A missing engine is acquired as a repair. An installed engine whose version cannot be read
+    /// is never replaced blindly; the result explains why the update was skipped.
     /// </remarks>
     public static async Task<EngineUpdateResult> UpdateAsync(string backendId, ILogSink log, CancellationToken ct)
     {
         var repo = RepoFor(backendId)
             ?? throw new InvalidOperationException($"{backendId} 不支持自动下载。");
-        var installed = await InstalledVersionAsync(backendId, ct).ConfigureAwait(false);
-        if (installed == null)
+        var (exists, installed) = await ReadInstalledVersionAsync(backendId, ct).ConfigureAwait(false);
+        if (!exists)
         {
-            // Nothing readable to compare against: install, which is also the repair path.
+            // Missing engine: install, which is also the repair path.
             var fresh = await AcquireAsync(backendId, log, ct).ConfigureAwait(false);
             return new EngineUpdateResult(true, null, null, fresh);
+        }
+        if (installed == null)
+        {
+            var reason = $"{backendId}：已安装，但无法读取 build/版本号；为避免全量覆盖用户安装，已跳过自动更新。";
+            log.Write(reason);
+            return new EngineUpdateResult(false, null, null, null, reason);
         }
 
         var releases = await ReleasesFetcher(repo, ct).ConfigureAwait(false)
@@ -194,31 +251,54 @@ public static class EngineAcquisitionService
             log.Write($"{backendId}：已是最新（本机 {installed}，远端 {latest}）。");
             return new EngineUpdateResult(false, installed, latest, null);
         }
+        if (EngineArbiter.IsBackendRunning(backendId))
+        {
+            var reason = $"{EngineArbiter.DisplayName(backendId)} 正在运行；为避免替换正在使用的引擎文件，已跳过更新。请先停止服务。";
+            log.Write(reason);
+            return new EngineUpdateResult(false, installed, latest, null, reason);
+        }
 
         log.Write($"{backendId}：发现新版本 {latest}（本机 {installed}），开始更新…");
         var engineDir = await AcquireAsync(backendId, log, ct).ConfigureAwait(false);
         return new EngineUpdateResult(true, installed, latest, engineDir);
     }
 
-    /// <summary>The version of an installed engine, or null when this backend has no readable one.</summary>
-    private static async Task<string?> InstalledVersionAsync(string backendId, CancellationToken ct)
+    /// <summary>Whether the engine exists, and its readable version when available.</summary>
+    private static async Task<(bool Exists, string? Version)> ReadInstalledVersionAsync(
+        string backendId,
+        CancellationToken ct)
     {
-        if (backendId != "polystrata") return null;
-        var profile = StrataBackend.PolyProfile;
-        var engine = StrataBackend.ResolveEngine(ConfigService.ReadConfig(), profile);
-        return engine == null ? null : await DoctorService.ReadStrataVersionAsync(engine, ct).ConfigureAwait(false);
+        if (backendId == "llamacpp")
+        {
+            var engine = ConfigService.GetLlamaServerPath();
+            return File.Exists(engine)
+                ? (true, await DoctorService.ReadLlamaCppVersionAsync(engine, ct).ConfigureAwait(false))
+                : (false, null);
+        }
+        if (backendId == "polystrata")
+        {
+            var profile = StrataBackend.PolyProfile;
+            var engine = StrataBackend.ResolveEngine(ConfigService.ReadConfig(), profile);
+            return engine == null
+                ? (false, null)
+                : (true, await DoctorService.ReadStrataVersionAsync(engine, ct).ConfigureAwait(false));
+        }
+        return (false, null);
     }
 
     /// <summary>
     /// Acquires the official cudart zip from llama.cpp releases and unpacks it into <paramref name="destinationDir"/>.
     /// Used by Strata family engines when CUDA DLLs (cublas64_*.dll, cudart64_*.dll) are missing.
     /// </summary>
-    public static async Task AcquireCudartToAsync(string destinationDir, ILogSink log, CancellationToken ct)
+    public static async Task AcquireCudartToAsync(string destinationDir, ILogSink log, CancellationToken ct,
+        string? backendId = null)
     {
+        if (backendId != null) EnsureNotRunning(backendId);
         var repo = EngineCatalog.LlamaCppRepo;
         var releases = await ReleasesFetcher(repo, ct).ConfigureAwait(false);
         if (releases == null) return;
-        var cuda = DetectComputeCapability() > 0 && DetectComputeCapability() < 8.0 ? "12.4" : "13.4";
+        var capability = DetectComputeCapability();
+        var cuda = capability > 0 && capability < 8.0 ? "12.4" : "13.4";
         ReleaseAsset? cudart = null;
         foreach (var node in releases)
         {
@@ -231,8 +311,19 @@ public static class EngineAcquisitionService
         var downloadDir = Path.Combine(ConfigService.GetManagerRoot(), "downloads");
         Directory.CreateDirectory(downloadDir);
         var archive = await FetchAsync(cudart, downloadDir, log, ct).ConfigureAwait(false);
-        var extracted = EngineDownloadService.ExtractZip(archive, destinationDir);
-        log.Write($"已解压 CUDA 运行时 {extracted} 个文件到 {destinationDir}。");
+        var staged = Path.Combine(downloadDir, $".cudart-{Guid.NewGuid():N}");
+        try
+        {
+            var extracted = EngineDownloadService.ExtractZip(archive, staged);
+            if (backendId != null) EnsureNotRunning(backendId);
+            var published = EngineDownloadService.PublishStagedDirectories(
+                [(staged, destinationDir)], Path.Combine(staged, "backup"));
+            log.Write($"已安装 CUDA 运行时 {published} 个文件到 {destinationDir}（暂存 {extracted} 个）。");
+        }
+        finally
+        {
+            try { if (Directory.Exists(staged)) Directory.Delete(staged, recursive: true); } catch { }
+        }
     }
 
     private static async Task<string> FetchAsync(ReleaseAsset asset, string downloadDir, ILogSink log, CancellationToken ct)
@@ -275,7 +366,7 @@ public static class EngineAcquisitionService
             entry.ExtractToFile(target, overwrite: true);
             count++;
         }
-        log.Write($"已解压源码 {count} 个文件到 {root}。");
+        log.Write($"已暂存 {count} 个源码文件。");
         return count;
     }
 

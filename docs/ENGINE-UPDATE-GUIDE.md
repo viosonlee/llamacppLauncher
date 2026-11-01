@@ -76,13 +76,23 @@ C:\
 应改装 PolyStrata 的完整主引擎，而不是恢复这个定制分支。详见 `docs/CHANGELOG-DECISIONS.md`。
 
 引擎的日常更新不再需要手工替换二进制：已安装的引擎落后于最新发布时，`--bootstrap` 会自动升级，
-也可以直接执行：
+也可以直接执行下面的命令。更新前请先停止对应服务；检测到主服务或嵌入服务仍在运行时会跳过替换并说明原因。
 
 ```powershell
 pwsh -File llama-manager.ps1 -Update            # 检查并更新可自动下载的引擎
 ```
 
 ### 4.2 更新 PolyStrata 引擎（`polystrata`）
+
+优先使用自动更新：GUI「初始化环境」或
+
+```powershell
+pwsh -File llama-manager.ps1 -Update            # --all 会同时检查 llamacpp 与 polystrata
+```
+
+更新器读取 `BUILD.json`，只在本机版本落后时下载官方引擎与源码归档，并保留 Python venv。
+归档先下载并解压到暂存目录，再事务式替换；任一文件失败会恢复旧文件。服务运行时不会执行替换。
+只有离线、自行编译或需要替换未公开测试版时，才使用下面的手工流程：
 
 1. **编译产物**：
    - 将新编译的 `strata-poly.exe` 复制并替换到：

@@ -11,7 +11,11 @@ namespace LlamaManager.Services;
 public static class FileSignature
 {
     private const int Chunk = 1024 * 1024;
-    private static readonly ConcurrentDictionary<string, string> Cache = new();
+    private const int MaxEntries = 512;
+    private sealed record Entry(long Length, long ModifiedTicks, string Signature);
+    // Keyed by path (not path+size+mtime): the entry is replaced when the file changes, so a
+    // long-running session cannot accumulate one entry per model edit.
+    private static readonly ConcurrentDictionary<string, Entry> Cache = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>返回形如 "14658690080:abcd...ef01..." 的签名；失败返回 null。</summary>
     public static string? Compute(string path)
@@ -21,8 +25,10 @@ public static class FileSignature
             var fi = new FileInfo(path);
             if (!fi.Exists || fi.Length <= 0) return null;
 
-            var cacheKey = $"{path}|{fi.Length}|{fi.LastWriteTimeUtc.Ticks}";
-            if (Cache.TryGetValue(cacheKey, out var hit)) return hit;
+            var key = fi.FullName;
+            var modifiedTicks = fi.LastWriteTimeUtc.Ticks;
+            if (Cache.TryGetValue(key, out var hit) && hit.Length == fi.Length && hit.ModifiedTicks == modifiedTicks)
+                return hit.Signature;
 
             string sig;
             using (var fs = fi.Open(FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
@@ -39,7 +45,13 @@ public static class FileSignature
                 }
             }
 
-            Cache[cacheKey] = sig;
+            if (Cache.Count >= MaxEntries)
+                foreach (var stale in Cache.Keys)
+                {
+                    if (Cache.Count < MaxEntries) break;
+                    Cache.TryRemove(stale, out _);
+                }
+            Cache[key] = new Entry(fi.Length, modifiedTicks, sig);
             return sig;
         }
         catch

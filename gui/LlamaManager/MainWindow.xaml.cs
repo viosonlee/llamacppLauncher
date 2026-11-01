@@ -1,6 +1,9 @@
+using System.ComponentModel;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
+using System.Windows.Input;
 using System.Windows.Threading;
 using LlamaManager.Engines;
 using LlamaManager.Models;
@@ -16,6 +19,9 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
     private readonly SpeedMonitorService _speedMonitor = new();
     private DispatcherTimer? _statusTimer;
     private List<ModelInfo> _models = [];
+    private ICollectionView? _modelView;
+    private string _modelQuery = "";
+    private int _modelSortMode;
     private bool _loaded, _parsingArgs, _refreshing, _serverStarting, _serverStopping, _embeddingStarting, _speedTesting, _selecting, _scanning;
     private int _updateCount, _statusVersion;
     private string? _lastLogText;
@@ -39,16 +45,19 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         try
         {
             _config = ConfigService.ReadConfig();
+            RestoreWindowPlacement();
             var recovery = ConfigService.RecoveryWarning;
-            await RefreshModelsAsync();
+            // Render the controls before the slower model scan and engine probe. The window is
+            // interactive immediately; Start remains gated by _scanning until the model list is ready.
+            InitializeEngineSelection();
             ApplyConfig();
-            await ApplyEngineConfigAsync();
             _loaded = true;
             if (recovery != null) MessageBox.Show(recovery, "配置恢复");
             _statusTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
             _statusTimer.Tick += async (_, _) => await RefreshStatusAsync();
             _statusTimer.Start();
             await RefreshStatusAsync();
+            await Task.WhenAll(RefreshModelsAsync(), RefreshEngineAsync());
         }
         catch (Exception ex)
         {
@@ -64,6 +73,7 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         {
             try
             {
+                CaptureWindowPlacement();
                 SaveCurrentConfig();
                 var backend = SelectedEngineBackend();
                 if (backend != null && backend is not LlamaCppBackend)
@@ -79,6 +89,97 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         _embeddingCancellation?.Cancel();
         _speedCancellation?.Cancel();
     }
+
+    /// <summary>
+    /// Restores the last window size/position without letting a config edited on another monitor
+    /// make the window disappear. Out-of-range values fall back to CenterScreen.
+    /// </summary>
+    private void RestoreWindowPlacement()
+    {
+        var saved = _config.Window ?? new WindowSettings();
+        var maxWidth = Math.Max(MinWidth, SystemParameters.VirtualScreenWidth);
+        var maxHeight = Math.Max(MinHeight, SystemParameters.VirtualScreenHeight);
+        Width = Math.Clamp(saved.Width, MinWidth, maxWidth);
+        Height = Math.Clamp(saved.Height, MinHeight, maxHeight);
+
+        if (saved.Left is { } left && saved.Top is { } top)
+        {
+            var virtualScreen = new Rect(
+                SystemParameters.VirtualScreenLeft, SystemParameters.VirtualScreenTop,
+                SystemParameters.VirtualScreenWidth, SystemParameters.VirtualScreenHeight);
+            var candidate = new Rect(left, top, Width, Height);
+            if (virtualScreen.IntersectsWith(candidate) && left < virtualScreen.Right && top < virtualScreen.Bottom)
+            {
+                WindowStartupLocation = WindowStartupLocation.Manual;
+                Left = left;
+                Top = top;
+            }
+        }
+
+        if (saved.Maximized) WindowState = WindowState.Maximized;
+    }
+
+    private void CaptureWindowPlacement()
+    {
+        var bounds = WindowState == WindowState.Normal
+            ? new Rect(Left, Top, Width, Height)
+            : RestoreBounds;
+        if (bounds.Width >= MinWidth && bounds.Height >= MinHeight)
+        {
+            _config.Window.Width = Math.Round(bounds.Width);
+            _config.Window.Height = Math.Round(bounds.Height);
+            if (double.IsFinite(bounds.Left)) _config.Window.Left = Math.Round(bounds.Left);
+            if (double.IsFinite(bounds.Top)) _config.Window.Top = Math.Round(bounds.Top);
+        }
+        _config.Window.Maximized = WindowState == WindowState.Maximized;
+    }
+
+    private void MainWindow_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        var modifiers = Keyboard.Modifiers;
+        if (modifiers == ModifierKeys.Control && e.Key == Key.Enter && StartButton.IsEnabled)
+        {
+            StartButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            e.Handled = true;
+            return;
+        }
+        if (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.S && StopButton.IsEnabled)
+        {
+            StopButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            e.Handled = true;
+            return;
+        }
+        if (modifiers == ModifierKeys.Control && e.Key == Key.F)
+        {
+            ConfigurationTabs.SelectedIndex = 0;
+            ModelSearchBox.Focus();
+            ModelSearchBox.SelectAll();
+            e.Handled = true;
+            return;
+        }
+        if (modifiers == ModifierKeys.Control && e.Key == Key.L)
+        {
+            ConfigurationTabs.SelectedIndex = ConfigurationTabs.Items.Count - 1;
+            e.Handled = true;
+            return;
+        }
+        if (e.Key == Key.Escape && ModelSearchBox.IsKeyboardFocusWithin)
+        {
+            ModelSearchBox.Clear();
+            e.Handled = true;
+        }
+    }
+
+    private void ConfigurationTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_loaded) return;
+        if (ConfigurationTabs.SelectedIndex == ConfigurationTabs.Items.Count - 1) RefreshLog();
+    }
+
+    /// <summary>The log page and the foreign-engine output box are the only surfaces that render logs.</summary>
+    private bool IsLogSurfaceVisible() =>
+        ConfigurationTabs.SelectedIndex == ConfigurationTabs.Items.Count - 1
+        || (ConfigurationTabs.SelectedIndex == 2 && EngineAdvancedPanel.Visibility == Visibility.Visible);
 
     private void ApplyConfig()
     {

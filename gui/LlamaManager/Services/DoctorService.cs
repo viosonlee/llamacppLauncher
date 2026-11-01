@@ -54,10 +54,45 @@ public static class DoctorService
 
         // ---- llama.cpp ----
         var llamaExe = ConfigService.GetLlamaServerPath();
-        findings.Add(File.Exists(llamaExe)
-            ? new Finding("llamacpp", "ok", llamaExe)
-            : new Finding("llamacpp", "missing", "未找到 llama-server.exe。",
+        if (!File.Exists(llamaExe))
+        {
+            findings.Add(new Finding("llamacpp", "missing", "未找到 llama-server.exe。",
                 EngineAcquisitionService.CanAcquire("llamacpp") ? "运行初始化环境自动下载。" : null));
+        }
+        else
+        {
+            var version = await ReadLlamaCppVersionAsync(llamaExe, ct).ConfigureAwait(false);
+            var detail = version == null ? llamaExe : $"{llamaExe}（{version}）";
+            var llamaFinding = new Finding("llamacpp", "ok", detail);
+            if (checkUpdates)
+            {
+                if (version == null)
+                {
+                    llamaFinding = new Finding("llamacpp", "manual",
+                        $"{detail}；无法读取 build 号，未检查更新。",
+                        "如需升级，请手动替换发行包；自动更新不会覆盖无法识别的安装。");
+                }
+                else
+                {
+                    try
+                    {
+                        var latest = await LatestRelease(EngineCatalog.LlamaCppRepo, ct).ConfigureAwait(false);
+                        if (latest != null && IsOutdated(version, latest.Tag))
+                        {
+                            llamaFinding = new Finding("llamacpp", "outdated",
+                                $"{detail}；远端 {latest.Tag}。", "运行初始化环境更新。");
+                        }
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception ex) when (ex is IOException or System.Net.Http.HttpRequestException or InvalidOperationException or TimeoutException)
+                    {
+                        llamaFinding = new Finding("llamacpp", "manual",
+                            $"{detail}；无法查询更新（{ex.Message}）。");
+                    }
+                }
+            }
+            findings.Add(llamaFinding);
+        }
 
         // ---- Prism (ternary-quantized llama.cpp) ----
         findings.Add(PrismFinding());
@@ -153,10 +188,49 @@ public static class DoctorService
             return Regex.Match(output, @"prism-b\d+[0-9a-z-]*", RegexOptions.IgnoreCase) is { Success: true } m
                 ? m.Value : null;
         }
+        catch (OperationCanceledException) { return null; }
         catch (Exception ex) when (ex is IOException or System.ComponentModel.Win32Exception or InvalidOperationException or TimeoutException)
         {
             return null;
         }
+    }
+
+    /// <summary>Reads the nightly build number from llama-server --version.</summary>
+    public static async Task<string?> ReadLlamaCppVersionAsync(string engineExe, CancellationToken ct)
+    {
+        try
+        {
+            var output = await ProcessProbe.RunAsync(engineExe, "--version", TimeSpan.FromSeconds(5), ct)
+                .ConfigureAwait(false);
+            return ParseLlamaCppVersion(output);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return null; }
+        catch (Exception ex) when (ex is IOException or System.ComponentModel.Win32Exception or InvalidOperationException or TimeoutException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Current nightlies print "version: 0.8.0-dev (build 12020, commit …)". Older Windows
+    /// archives may print "b12020" or a bare build number; accept those without mistaking the
+    /// semantic version (0.8.0) for the nightly build.
+    /// </summary>
+    public static string? ParseLlamaCppVersion(string? output)
+    {
+        if (string.IsNullOrWhiteSpace(output)) return null;
+        var build = Regex.Match(output, @"\bbuild\s+(\d+)\b", RegexOptions.IgnoreCase);
+        if (build.Success) return BuildTag(build.Groups[1].Value);
+        var tag = Regex.Match(output, @"\bb(\d+)\b", RegexOptions.IgnoreCase);
+        if (tag.Success) return BuildTag(tag.Groups[1].Value);
+        var legacy = Regex.Match(output, @"(?im)^\s*version:\s*(\d+)\s*$");
+        return legacy.Success ? BuildTag(legacy.Groups[1].Value) : null;
+    }
+
+    private static string BuildTag(string digits)
+    {
+        var trimmed = digits.TrimStart('0');
+        return "b" + (trimmed.Length == 0 ? "0" : trimmed);
     }
 
     /// <summary>Strata-family engines report their version through BUILD.json (engine zip) or --version.</summary>
@@ -177,6 +251,7 @@ public static class DoctorService
             var output = await ProcessProbe.RunAsync(engineExe, "--version", TimeSpan.FromSeconds(5), ct).ConfigureAwait(false);
             return output.Trim().Split('\n')[0].Trim() is { Length: > 0 } line ? line : null;
         }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return null; }
         catch (Exception ex) when (ex is IOException or System.ComponentModel.Win32Exception or InvalidOperationException or TimeoutException)
         {
             return null;

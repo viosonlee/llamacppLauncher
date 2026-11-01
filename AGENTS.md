@@ -39,6 +39,7 @@ tracked by id in `docs/REQUIREMENTS.md`; decisions in `docs/CHANGELOG-DECISIONS.
 - Services/ConfigStore.cs: atomic transactions and corruption recovery.
 - Services/GgufService.cs: metadata and tensor descriptor inspection.
 - Services/CommandLineService.cs: headless commands used by autostart and legacy wrappers.
+- Known defects and their evidence: docs/KNOWN-DEFECTS.md (read before claiming a bug is new).
 - Tests and architecture notes: README.md and docs/architecture.md.
 
 ## Constraints

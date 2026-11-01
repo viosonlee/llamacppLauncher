@@ -7,7 +7,17 @@ namespace LlamaManager.Services;
 public static class LogService
 {
     private static readonly object Gate = new();
-    private static readonly Dictionary<string, IncrementalLogReader> Readers = new(StringComparer.OrdinalIgnoreCase);
+    private sealed class ReaderSlot(IncrementalLogReader reader)
+    {
+        public IncrementalLogReader Reader { get; } = reader;
+        public long LastUsed { get; set; }
+    }
+
+    // Log paths are few in practice, but plugin engines and ad-hoc diagnostics can add more.
+    // Bounded LRU keeps the steady-state footprint flat without re-reading hot logs.
+    private const int MaxReaders = 64;
+    private static readonly Dictionary<string, ReaderSlot> Readers = new(StringComparer.OrdinalIgnoreCase);
+    private static long _readerTick;
     public static void Write(string message)
     {
         lock (Gate)
@@ -21,13 +31,30 @@ public static class LogService
     {
         lock (Gate)
         {
-            if (!Readers.TryGetValue(path, out var reader)) Readers[path] = reader = new IncrementalLogReader();
-            try { return reader.Read(path).TakeLast(count).ToList(); }
+            // Retain what this caller asked for: a fixed 500-line reader capacity silently
+            // truncated longer tails even though the caller (and the UI) asked for more.
+            var reader = GetReader(path);
+            try { return reader.Read(path, Math.Max(count, 64)).TakeLast(count).ToList(); }
             // A log that is being truncated, rotated or deleted while we read it must never take the
             // whole status refresh (and with it the log page) down; the next poll retries.
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException
                 or ArgumentException or System.Security.SecurityException) { return []; }
         }
+    }
+
+    private static IncrementalLogReader GetReader(string path)
+    {
+        if (!Readers.TryGetValue(path, out var slot))
+        {
+            if (Readers.Count >= MaxReaders)
+            {
+                var oldest = Readers.MinBy(pair => pair.Value.LastUsed);
+                Readers.Remove(oldest.Key);
+            }
+            Readers[path] = slot = new ReaderSlot(new IncrementalLogReader());
+        }
+        slot.LastUsed = ++_readerTick;
+        return slot.Reader;
     }
 
     public static string GetPrimaryLogPath(string? backendId = null)

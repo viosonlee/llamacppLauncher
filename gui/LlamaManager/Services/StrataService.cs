@@ -278,8 +278,13 @@ public static class StrataService
     private static async Task<StrataResult> RunCoreAsync(ManagerConfig config, Action<string>? log, CancellationToken ct)
     {
         var model0 = config.Strata.ModelPath;
-        var q36 = !string.IsNullOrWhiteSpace(model0) && GgufService.GetArchitecture(model0) == "qwen35moe" &&
-            EngineSupportsQwen35(Path.Combine(Path.GetFullPath(config.Strata.PackageRoot), "engine", "strata.exe"));
+        var packageRoot = config.Strata.PackageRoot;
+        // ResolvePaths/ResolveQ36Paths below already turn an unset package into a friendly
+        // DirectoryNotFoundException; never call GetFullPath on this optional field first.
+        var q36 = !string.IsNullOrWhiteSpace(packageRoot)
+            && !string.IsNullOrWhiteSpace(model0)
+            && GgufService.GetArchitecture(model0) == "qwen35moe"
+            && EngineSupportsQwen35(Path.Combine(Path.GetFullPath(packageRoot), "engine", "strata.exe"));
         var paths = q36 ? ResolveQ36Paths(config) : ResolvePaths(config);
         var model = ResolveModel(config, paths);
         var prompt = config.Strata.Prompt;

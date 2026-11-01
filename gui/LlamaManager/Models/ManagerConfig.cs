@@ -80,6 +80,12 @@ public class ManagerConfig
     /// <summary>Folds legacy session keys into <see cref="Running"/> (migrate-and-delete). Idempotent.</summary>
     public void Normalize()
     {
+        Window ??= new WindowSettings();
+        if (!double.IsFinite(Window.Width) || Window.Width is < 640 or > 20000) Window.Width = 900;
+        if (!double.IsFinite(Window.Height) || Window.Height is < 520 or > 20000) Window.Height = 720;
+        if (Window.Left is { } left && !double.IsFinite(left)) Window.Left = null;
+        if (Window.Top is { } top && !double.IsFinite(top)) Window.Top = null;
+
         if (LegacyRunningServer != null) { Running.TryAdd(SlotMain, LegacyRunningServer); LegacyRunningServer = null; }
         if (LegacyRunningEmbedding != null) { Running.TryAdd(SlotEmbedding, LegacyRunningEmbedding); LegacyRunningEmbedding = null; }
         // Once a full session exists, the PID-only recovery hints are redundant: drop them so
@@ -126,6 +132,30 @@ public class ManagerConfig
 
     [JsonPropertyName("Strata")]
     public StrataConfig Strata { get; set; } = new();
+
+    /// <summary>Window placement remembered between launches. Values are validated in Normalize().</summary>
+    [JsonPropertyName("Window")]
+    public WindowSettings Window { get; set; } = new();
+}
+
+public class WindowSettings
+{
+    [JsonPropertyName("Width")]
+    public double Width { get; set; } = 900;
+
+    [JsonPropertyName("Height")]
+    public double Height { get; set; } = 720;
+
+    [JsonPropertyName("Left")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? Left { get; set; }
+
+    [JsonPropertyName("Top")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? Top { get; set; }
+
+    [JsonPropertyName("Maximized")]
+    public bool Maximized { get; set; }
 }
 
 /// <summary>Per-backend user settings. Model/executable/port are common; parameters are backend-defined.</summary>
@@ -167,7 +197,7 @@ public class StrataConfig
 
     /// <summary>服务端口（HTTP API 端口）。</summary>
     [JsonPropertyName("ServePort")]
-    public int ServePort { get; set; } = 8091;
+    public int ServePort { get; set; } = 8080;
 
     /// <summary>reasoning 预算（0 = 不限制）。</summary>
     [JsonPropertyName("ReasoningBudgetTokens")]

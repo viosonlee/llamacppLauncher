@@ -10,6 +10,7 @@ internal static class Program
 {
     private static int _passed, _failed;
     private static string _root = "", _model = "", _prismModel = "";
+    private static string? _filter;
     private static ManagerConfig Config(int port) => new() { ModelPath = _model, Port = port, Args = $"--host 127.0.0.1 --port {port} -ngl 0" };
     internal static void Equal<T>(T expected, T actual)
     {
@@ -23,6 +24,7 @@ internal static class Program
     }
     private static async Task Test(string name, Func<Task> test)
     {
+        if (_filter != null && !name.Contains(_filter, StringComparison.OrdinalIgnoreCase)) return;
         try { await test(); _passed++; Console.WriteLine("PASS " + name); }
         catch (Exception ex) { _failed++; Console.WriteLine("FAIL " + name + "\n" + ex); }
     }
@@ -30,6 +32,7 @@ internal static class Program
 
     public static async Task<int> Main(string[] args)
     {
+        _filter = args.FirstOrDefault(a => a.StartsWith("--only=", StringComparison.Ordinal))?.Substring("--only=".Length);
         if (args.FirstOrDefault() == "--check-published")
             return await PublishedSmoke.RunAsync(args[1]);
         if (args.FirstOrDefault() == "--read-live-speed")
@@ -120,7 +123,14 @@ internal static class Program
         }
         if (args.FirstOrDefault() == "--version")
         {
-            Console.WriteLine("version: 0.0.0-fixture (fake llama-server)"); return 0;
+            var overridePath = Path.Combine(AppContext.BaseDirectory, "version-override.txt");
+            if (File.Exists(overridePath))
+                Console.WriteLine(File.ReadAllText(overridePath).Trim());
+            else
+                Console.WriteLine(File.Exists(Path.Combine(AppContext.BaseDirectory, "no-build"))
+                    ? "version: 0.0.0-fixture (fake llama-server)"
+                    : "version: 0.8.0-dev (build 12020, commit fixture)");
+            return 0;
         }
         if (args.FirstOrDefault() == "--probe-hang") { await Task.Delay(60000); return 0; }
         if (args.FirstOrDefault() == "--probe-output")
@@ -214,6 +224,36 @@ internal static class Program
                 ConfigService.SaveSession(config, null);
                 Equal("-t 7", ConfigService.ReadConfig().Args);
             }));
+            await Test("config: window placement round-trips and repairs invalid values", () => Run(() =>
+            {
+                var path = Path.Combine(_root, "window-store.json");
+                var store = new ConfigStore(path);
+                var config = new ManagerConfig
+                {
+                    Window = new WindowSettings { Width = 1280, Height = 900, Left = -1200, Top = 80, Maximized = true },
+                };
+                store.Save(config);
+                var reloaded = store.Read();
+                Equal(1280d, reloaded.Window.Width);
+                Equal(900d, reloaded.Window.Height);
+                Equal(-1200d, reloaded.Window.Left);
+                Equal(80d, reloaded.Window.Top);
+                Equal(true, reloaded.Window.Maximized);
+
+                // A corrupt or hand-edited placement must not hide the window or fail startup.
+                store.Save(new ManagerConfig
+                {
+                    Window = new WindowSettings
+                    {
+                        Width = double.NaN, Height = -4, Left = double.PositiveInfinity, Top = double.NaN,
+                    },
+                });
+                var repaired = store.Read().Window;
+                Equal(900d, repaired.Width);
+                Equal(720d, repaired.Height);
+                Equal<double?>(null, repaired.Left);
+                Equal<double?>(null, repaired.Top);
+            }));
             await Test("strata: config persistence does not clobber sessions or main settings", () => Run(() =>
             {
                 var config = Config(Fixtures.FreePort());
@@ -294,6 +334,10 @@ internal static class Program
                 EnginesRegression.RunEmbeddingAsync(_root, _model));
             await Test("engines: registry resolution and GPU arbitration", () =>
                 Run(EnginesRegression.RunRegistryAndArbiter));
+            await Test("engines: GPU exclusion cannot be bypassed by CLI or autostart", () =>
+                EnginesRegression.RunGpuStartGateAsync(_model));
+            await Test("engines: port probe distinguishes busy, free and service ports", () =>
+                Run(EnginesRegression.RunPortProbe));
             await Test("strata backend: launches serve.server with a generated runconfig", () =>
                 StrataBackendRegression.RunLaunchAsync(_root, _model));
             await Test("strata backend: resolvers report honest problems", () =>
@@ -306,7 +350,11 @@ internal static class Program
                 Run(() => PluginRegression.RunDiscovery(_root)));
             await Test("download: release-to-plan mapping and repo routing", () =>
                 Run(DownloadRegression.RunCatalog));
-            await Test("download: extract, zip-slip guard and checksum enforcement", () =>
+            await Test("download: update reads build and never replaces an unknown or running install", () =>
+                DownloadRegression.RunUpdateCheckAsync(_root, _model));
+            await Test("download: local HTTP release installs engine, source and paths end-to-end", () =>
+                DownloadRegression.RunInstallIntegrationAsync(_root));
+            await Test("download: extract, transactional publish, zip-slip and checksum enforcement", () =>
                 DownloadRegression.RunDownloadMechanicsAsync(_root));
             await Test("download: real GitHub release dumps map to install plans", () =>
                 Run(() => DownloadRegression.RunAgainstRealReleases(_root)));
@@ -361,6 +409,66 @@ internal static class Program
                 Equal(1, ConfigService.RebindOrphanPresets(config, [_model], false));
                 Equal("wrong", config.ModelPresets[PathIdentity.Normalize(_model)].Args);
             }));
+            await Test("presets: off-thread rebinding is pure and merges with concurrent edits", async () =>
+            {
+                var old = Path.Combine(_root, "gone", Path.GetFileName(_model));
+                var target = PathIdentity.Normalize(_model);
+                var config = new ManagerConfig { ModelPath = old };
+                config.ModelPresets[old] = new ModelPreset
+                {
+                    Args = "recovered", Signature = FileSignature.Compute(_model)
+                };
+
+                var plan = await Task.Run(() =>
+                    ConfigService.PlanOrphanPresetRebind(
+                        ConfigService.CreatePresetRebindSnapshot(config), [_model]));
+                Equal(1, plan.Moves.Count);
+                Check(config.ModelPresets.ContainsKey(old), "worker plan mutated the live preset map");
+
+                var concurrent = Path.Combine(_root, "concurrent-preset.gguf");
+                config.ModelPresets[concurrent] = new ModelPreset { Args = "keep-me" };
+                Equal(1, ConfigService.ApplyOrphanPresetRebind(config, plan, save: false));
+                Equal("recovered", config.ModelPresets[target].Args);
+                Equal("keep-me", config.ModelPresets[concurrent].Args);
+                Check(!config.ModelPresets.ContainsKey(old), "orphan preset was not removed");
+                Equal(_model, config.ModelPath);
+
+                // A user edit made while the scan runs is newer than the plan and must survive.
+                var edited = new ManagerConfig { ModelPath = old };
+                edited.ModelPresets[old] = new ModelPreset
+                {
+                    Args = "before-scan", Signature = FileSignature.Compute(_model)
+                };
+                var stalePlan = ConfigService.PlanOrphanPresetRebind(
+                    ConfigService.CreatePresetRebindSnapshot(edited), [_model]);
+                edited.ModelPresets[old].Args = "edited-during-scan";
+                Equal(0, ConfigService.ApplyOrphanPresetRebind(edited, stalePlan, save: false));
+                Equal("edited-during-scan", edited.ModelPresets[old].Args);
+                Check(!edited.ModelPresets.ContainsKey(target), "stale plan overwrote a concurrent edit");
+
+                // Saving the plan must merge with presets written by another window during the scan.
+                var savedConfig = Config(Fixtures.FreePort());
+                savedConfig.ModelPath = old;
+                savedConfig.ModelPresets[old] = new ModelPreset
+                {
+                    Args = "from-disk", Signature = FileSignature.Compute(_model)
+                };
+                ConfigService.SaveConfig(savedConfig);
+                var savedPlan = await Task.Run(() =>
+                    ConfigService.PlanOrphanPresetRebind(
+                        ConfigService.CreatePresetRebindSnapshot(savedConfig), [_model]));
+                var externalConfig = ConfigService.ReadConfig();
+                var externalKey = Path.Combine(_root, "external-added.gguf");
+                externalConfig.ModelPresets[externalKey] = new ModelPreset { Args = "external" };
+                ConfigService.SaveConfig(externalConfig);
+
+                Equal(1, ConfigService.ApplyOrphanPresetRebind(savedConfig, savedPlan, save: true));
+                var persisted = ConfigService.ReadConfig();
+                Equal("from-disk", persisted.ModelPresets[target].Args);
+                Equal("external", persisted.ModelPresets[externalKey].Args);
+                Check(!persisted.ModelPresets.ContainsKey(old), "transaction did not remove the orphan");
+                Equal(_model, persisted.ModelPath);
+            });
             await Test("GGUF: unordered metadata, real layers and renamed Prism routing", () => Run(() =>
             {
                 using var stream = new MemoryStream(Fixtures.Gguf(prism: true, type: 34));
@@ -462,6 +570,25 @@ internal static class Program
                 Equal(1, File.ReadAllLines(Path.Combine(_root, "engines", "prism", "probe.count")).Length);
                 CudaService.Invalidate(); await CudaService.DetectAsync(_model);
                 Equal(2, File.ReadAllLines(file).Length);
+
+                // Driver output with absurd numbers must clamp instead of throwing (DEF-18).
+                var huge = CudaService.Parse("CUDA0: Fake GPU (4294967296 MiB, 99999999999999999999999 MiB free)");
+                Check(huge.Available && huge.TotalVramMb == int.MaxValue && huge.FreeVramMb == 0,
+                    "overflowing device numbers broke the parser");
+
+                // The cache expires on its own so stale VRAM numbers refresh (DEF-17).
+                var previousTtl = CudaService.CacheTtl;
+                try
+                {
+                    CudaService.CacheTtl = TimeSpan.FromMilliseconds(80);
+                    CudaService.Invalidate(); await CudaService.DetectAsync(_model);
+                    Equal(3, File.ReadAllLines(file).Length);
+                    await CudaService.DetectAsync(_model);
+                    Equal(3, File.ReadAllLines(file).Length);
+                    await Task.Delay(200); await CudaService.DetectAsync(_model);
+                    Equal(4, File.ReadAllLines(file).Length);
+                }
+                finally { CudaService.CacheTtl = previousTtl; CudaService.Invalidate(); }
             });
             await Test("logs: incremental reads, partial UTF8, truncation and actual GPU buffers", () => Run(() =>
             {
@@ -482,6 +609,25 @@ internal static class Program
                 var shrunk = LogService.ParseStrataGpuSummary(["strata-poly: the expert cache 2162 -> 2069 experts (2.25 GiB) for the VRAM free now, 288 MiB left"]);
                 Check(shrunk.Contains("2069") && shrunk.Contains("2.25 GiB"), "strata diagnostic parses a shrunk expert cache");
                 Check(LogService.GetPrimaryLogPath("polystrata").EndsWith("engine-polystrata.log"), "polystrata log path matches");
+
+                // A tail longer than the reader's old fixed 500-line capacity must not be short-changed.
+                var many = Path.Combine(_root, "many.log");
+                File.WriteAllLines(many, Enumerable.Range(0, 800).Select(i => "line-" + i));
+                var tail = LogService.ReadFileTail(many, 700);
+                Equal(700, tail.Count);
+                Equal("line-100", tail[0]);
+                Equal("line-799", tail.Last());
+            }));
+            await Test("files: signature cache follows file changes", () => Run(() =>
+            {
+                var file = Path.Combine(_root, "signature.bin");
+                File.WriteAllText(file, "abc");
+                var first = FileSignature.Compute(file);
+                Check(first != null && first == FileSignature.Compute(file), "signature cache hit changed the answer");
+                File.WriteAllText(file, "abcd");
+                var changed = FileSignature.Compute(file);
+                Check(changed != null && changed != first, "signature did not follow the file change");
+                Check(FileSignature.Compute(Path.Combine(_root, "missing.bin")) == null, "missing file got a signature");
             }));
             await Test("speed monitor: supports object/array counters, ignores idle stale timings", () => Run(() =>
             {
@@ -777,6 +923,8 @@ internal static class Program
                 Check(rendered.Contains("预填 210 tok/s") && rendered.Contains("草稿 78%") &&
                     rendered.Contains("显存峰 5,900 MiB"), "telemetry not rendered: " + rendered);
             });
+            await Test("benchmark: failure and cancellation preserve the existing service", () =>
+                BenchmarkRegression.RunFailureAndCancellationAsync(_model));
             await Test("lifecycle: server start truncates the shared stderr log", async () =>
             {
                 var log = ConfigService.GetMainStderrPath();
@@ -825,13 +973,25 @@ internal static class Program
                     Check(latest.RunningServer != null && latest.RunningServer.ProcessId == relaunch.Id,
                         $"session not migrated (pid={(latest.RunningServer == null ? "null" : latest.RunningServer.ProcessId.ToString())})");
                 }
-                finally { Check(await ServerService.StopAsync(config), "could not stop adopted server"); }
+                finally
+                {
+                    var stopLog = new List<string>();
+                    var stopped = await ServerService.StopAsync(config, stopLog.Add);
+                    var latest = ConfigService.ReadConfig().RunningServer;
+                    Check(stopped,
+                        "could not stop adopted server (" +
+                        $"recorded={(latest == null ? "null" : latest.ProcessId.ToString())}, " +
+                        $"alive={(latest != null && ServerService.IsSessionAlive(latest))}, " +
+                        $"port={stale.Port}, inUse={ServerService.TestPortInUse(stale.Port)}, " +
+                        $"log={string.Join(" | ", stopLog)})");
+                }
             });
             await Test("session: adopts a detached server after its config record is lost", async () =>
             {
                 var config = Config(Fixtures.FreePort()); ConfigService.SaveConfig(config);
                 Check(await ServerService.StartAsync(config), "fake server failed");
                 var session = config.RunningServer!;
+                Exception? primary = null;
                 try
                 {
                     // Simulate the record being lost (crash, cleared or corrupt config)
@@ -851,7 +1011,20 @@ internal static class Program
                     var latest = ConfigService.ReadConfig();
                     Check(latest.RunningServer != null && latest.RunningServer.ProcessId == session.ProcessId, "session not restored");
                 }
-                finally { Check(await ServerService.StopAsync(config), "could not stop adopted server"); }
+                catch (Exception ex) { primary = ex; throw; }
+                finally
+                {
+                    var stopLog = new List<string>();
+                    var stopped = await ServerService.StopAsync(config, stopLog.Add);
+                    var latest = ConfigService.ReadConfig().RunningServer;
+                    // A failure in the try block must not be masked by the cleanup assertion.
+                    if (primary == null) Check(stopped,
+                        "could not stop adopted server (" +
+                        $"recorded={(latest == null ? "null" : latest.ProcessId.ToString())}, " +
+                        $"alive={(latest != null && ServerService.IsSessionAlive(latest))}, " +
+                        $"port={session.Port}, inUse={ServerService.TestPortInUse(session.Port)}, " +
+                        $"log={string.Join(" | ", stopLog)})");
+                }
             });
             await Test("lifecycle: selection and port edits do not change the running identity", async () =>
             {
@@ -878,6 +1051,20 @@ internal static class Program
                 var results = await Task.WhenAll(ServerService.StartAsync(next), ServerService.StartAsync(next));
                 Check(results.All(x => x), "concurrent start failed");
                 Check(await ServerService.StopAsync(next), "stop failed");
+            });
+            await Test("lifecycle: repeated stop and immediate restart reuses the same port", async () =>
+            {
+                var config = Config(Fixtures.FreePort());
+                ConfigService.SaveConfig(config);
+                try
+                {
+                    for (var i = 0; i < 5; i++)
+                    {
+                        Check(await ServerService.StartAsync(config), $"start {i + 1} failed");
+                        Check(await ServerService.StopAsync(config), $"stop {i + 1} failed");
+                    }
+                }
+                finally { await ServerService.StopAsync(ConfigService.ReadConfig()); }
             });
             await Test("embedding: custom model and port use the same lifecycle", async () =>
             {
@@ -935,6 +1122,9 @@ internal static class Program
         {
             await ServerService.StopAsync(ConfigService.ReadConfig());
             await ServerService.StopEmbeddingAsync(ConfigService.ReadConfig());
+            // A failed run must not leave fixture servers behind: they keep ports reserved and
+            // make every later recovery scan slower on this machine.
+            Fixtures.KillStrayServers(_root);
         }
         Console.WriteLine($"Results: {_passed} passed, {_failed} failed");
         if (_failed == 0) Fixtures.Cleanup(_root);

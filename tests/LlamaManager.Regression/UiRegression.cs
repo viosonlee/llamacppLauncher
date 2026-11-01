@@ -166,6 +166,14 @@ internal static class UiRegression
                 typeof(MainWindow).GetField("_loaded", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(window, false);
                 var tabs = (TabControl)window.FindName("ConfigurationTabs");
                 var content = (FrameworkElement)window.Content;
+                var expectedNav = new[] { "模型", "参数", "高级", "嵌入", "日志" };
+                Program.Check(tabs.Items.Count == expectedNav.Length, "navigation labels changed page count");
+                for (var i = 0; i < expectedNav.Length; i++)
+                {
+                    var header = (tabs.Items[i] as TabItem)?.Header as Panel;
+                    Program.Check(header?.Children.OfType<TextBlock>().Any(text => text.Text == expectedNav[i]) == true,
+                        $"navigation label missing: {expectedNav[i]}");
+                }
                 ((TextBlock)window.FindName("SelectedModelText")).Text = "Sakura-Micro-Bonsai-2-GSQ-RCO.gguf";
                 ((TextBlock)window.FindName("LiveSpeedText")).Text = "生成中（思考中）：45.90 tok/s · 115/300 tokens · 4.8 s";
                 ((TextBlock)window.FindName("ActionStatusText")).Text = "ornith-1.5-35b-a3b-apex-mtp-i-mini.gguf · PID 8848";
@@ -223,6 +231,8 @@ internal static class UiRegression
                     {
                         var viewer = (ScrollViewer)window.FindName("LogScrollViewer");
                         Program.Check(viewer.ActualHeight > 200, $"log tab has no room to show logs: {viewer.ActualHeight}");
+                        Program.Check(viewer.ScrollableWidth <= 1,
+                            $"long log lines still scroll horizontally instead of wrapping: {viewer.ScrollableWidth:0}px");
                         // A rendered log page must actually contain the lines it was given: an
                         // empty box is exactly the "log shows nothing" defect users report.
                         var logBox = (TextBox)window.FindName("LogTextBox")!;
@@ -343,6 +353,39 @@ internal static class UiRegression
                 Program.Check(strataBackend.Parameters.Any(p => p.Advanced), "no advanced parameters to fold");
                 Program.Check(strataBackend.Parameters.All(p => !string.IsNullOrWhiteSpace(p.EffectiveHelp)),
                     "a parameter has no help text for its '?' button");
+
+                // Decimal input, whole-panel saving and model presets must all use the same
+                // normalization; a SaveEngineParameters call used to overwrite the per-edit dot.
+                var validate = typeof(MainWindow).GetMethod("ValidateValue", BindingFlags.Static | BindingFlags.NonPublic)!;
+                var savePanel = typeof(MainWindow).GetMethod("SaveEngineParameters", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                var biasSpec = strataBackend.Parameters.Single(p => p.Key == "cacheBias");
+                var before = ConfigService.ReadConfig().Engines.GetValueOrDefault("polystrata") ?? new EngineSettings();
+                var culture = System.Globalization.CultureInfo.CurrentCulture;
+                try
+                {
+                    foreach (var name in new[] { "zh-CN", "de-DE", "en-US" })
+                    {
+                        System.Globalization.CultureInfo.CurrentCulture = new System.Globalization.CultureInfo(name);
+                        var biasBox = ParamText(window, "cacheBias");
+                        biasBox.Text = "0,5";
+                        Program.Check(validate.Invoke(null, [biasSpec, biasBox.Text]) == null, "comma decimal was rejected in " + name);
+                        Program.Equal("0.5", ConfigService.ReadConfig().Engines["polystrata"].Parameters["cacheBias"]);
+                        Program.Check((bool)savePanel.Invoke(window, [strataBackend])!, "valid decimal blocked panel save");
+                        Program.Equal("0.5", ConfigService.ReadConfig().Engines["polystrata"].Parameters["cacheBias"]);
+                        biasBox.Text = "0.3";
+                        Program.Equal("0.3", ConfigService.ReadConfig().Engines["polystrata"].Parameters["cacheBias"]);
+                    }
+                    foreach (var invalid in new[] { "NaN", "Infinity", "auto", "2.5", "0,1,2" })
+                        Program.Check(validate.Invoke(null, [biasSpec, invalid]) != null, "invalid decimal accepted: " + invalid);
+                    ParamText(window, "cacheBias").Text = "2.5";
+                    Program.Check(!(bool)savePanel.Invoke(window, [strataBackend])!, "out-of-range bias did not block panel save");
+                    ParamText(window, "cacheBias").Text = "0";
+                }
+                finally
+                {
+                    System.Globalization.CultureInfo.CurrentCulture = culture;
+                    ConfigService.SaveEngineSettings(ConfigService.ReadConfig(), "polystrata", before);
+                }
                 // Model-dependent fields live on llama.cpp's panel (MoE offload, MTP, draft model);
                 // that is where the VisibleWhen vocabulary has to stay wired to real specs.
                 var llamaBackend = LlamaManager.Engines.BackendRegistry.ServerById("llamacpp")!;
@@ -358,6 +401,42 @@ internal static class UiRegression
                     $"filter did not narrow the panel ({visibleRows}/{paramsPanel.Children.Count})");
                 search.Text = "";
                 window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+
+                // Model search filters without rescanning; helper weights stay out of the primary
+                // list, and an empty result explains itself instead of looking like a broken scan.
+                var uiModelsDir = Path.Combine(ConfigService.GetManagerRoot(), "ui-models");
+                Directory.CreateDirectory(uiModelsDir);
+                foreach (var name in new[] { "Zeta.gguf", "Alpha.gguf", "mmproj-x.gguf", "draft-x.gguf", "mtp-x.gguf" })
+                    File.WriteAllText(Path.Combine(uiModelsDir, name), "fixture");
+                var configField = typeof(MainWindow).GetField("_config", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                var windowConfig = (ManagerConfig)configField.GetValue(window)!;
+                windowConfig.ModelsDirectory = uiModelsDir;
+                var refreshModels = typeof(MainWindow).GetMethod("RefreshModelsAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                var scanTask = (Task)refreshModels.Invoke(window, null)!;
+                for (var i = 0; i < 400 && !scanTask.IsCompleted; i++)
+                    window.Dispatcher.Invoke(() => { }, DispatcherPriority.Background);
+                scanTask.GetAwaiter().GetResult();
+
+                var modelList = (ListBox)window.FindName("ModelListBox");
+                var modelSearch = (Wpf.Ui.Controls.TextBox)window.FindName("ModelSearchBox");
+                var modelSort = (ComboBox)window.FindName("ModelSortBox");
+                var modelCount = (TextBlock)window.FindName("ModelCountText");
+                var emptyHint = (FrameworkElement)window.FindName("EmptyModelsHint");
+                Program.Check(modelList.Items.Count == 2, $"auxiliary weights leaked into the model list: {modelList.Items.Count}");
+                Program.Check(modelCount.Text.Contains("共 2"), "model count did not show the scanned total");
+                modelSearch.Text = "zeta";
+                window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+                Program.Check(modelList.Items.Count == 1 && modelList.Items[0] is ModelInfo { FileName: "Zeta.gguf" },
+                    "name search did not narrow the model list");
+                Program.Check(modelCount.Text.Contains("筛选 1 / 2"), "model filter count missing");
+                modelSearch.Text = "no-such-model";
+                window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+                Program.Check(modelList.Items.Count == 0 && emptyHint.Visibility == Visibility.Visible,
+                    "empty search result did not show the explanation");
+                modelSort.SelectedIndex = 2;
+                modelSearch.Clear();
+                window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+                Program.Check(modelList.Items.Count == 2, "clearing search did not restore all models");
 
                 // Leave the persisted active backend as llama.cpp so later tests start clean.
                 ConfigService.SaveActiveBackend(ConfigService.ReadConfig(), "llamacpp");

@@ -48,7 +48,8 @@ public static class StrataCompatibility
         [0] = "F32", [1] = "F16", [2] = "Q4_0", [3] = "Q4_1", [6] = "Q5_0", [7] = "Q5_1", [8] = "Q8_0",
         [10] = "Q2_K", [11] = "Q3_K", [12] = "Q4_K", [13] = "Q5_K", [14] = "Q6_K",
         [16] = "IQ2_XXS", [17] = "IQ2_XS", [18] = "IQ3_XXS", [20] = "IQ4_NL", [21] = "IQ3_S",
-        [22] = "IQ2_S", [23] = "IQ4_XS", [29] = "IQ1_M", [30] = "BF16", [42] = "Q2_0",
+        [22] = "IQ2_S", [23] = "IQ4_XS", [29] = "IQ1_M", [30] = "BF16",
+        [39] = "MXFP4", [42] = "Q2_0",
     };
 
     public static string TypeName(uint id) => Names.GetValueOrDefault(id, "type" + id);

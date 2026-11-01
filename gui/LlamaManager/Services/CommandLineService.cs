@@ -119,16 +119,19 @@ public static class CommandLineService
                 return bootstrapSteps.Any(s => !s.Ok) ? 1 : 0;
             case "--update":
             {
-                var ids = bootstrapAll ? new[] { "polystrata" } : new[] { backendId };
+                var ids = bootstrapAll ? new[] { "llamacpp", "polystrata" } : new[] { backendId };
                 var failed = false;
                 foreach (var id in ids)
                 {
                     try
                     {
                         var result = await EngineAcquisitionService.UpdateAsync(id, new DelegateLogSink(LogService.Write), ct);
-                        await output.WriteLineAsync(result.Updated
-                            ? $"{id}: 已更新 {result.InstalledVersion} → {result.LatestVersion}"
-                            : $"{id}: 已是最新（{result.LatestVersion ?? result.InstalledVersion}）");
+                        if (result.Updated)
+                            await output.WriteLineAsync($"{id}: 已更新 {result.InstalledVersion} → {result.LatestVersion}");
+                        else if (result.SkippedReason != null)
+                            await output.WriteLineAsync($"{id}: 已跳过 — {result.SkippedReason}");
+                        else
+                            await output.WriteLineAsync($"{id}: 已是最新（{result.LatestVersion ?? result.InstalledVersion}）");
                     }
                     catch (OperationCanceledException) { throw; }
                     catch (Exception ex)

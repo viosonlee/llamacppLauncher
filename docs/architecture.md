@@ -10,7 +10,9 @@
 - 已退役：`strata-upstream`（`strata.exe`）。它唯一独有的 `qwen4exp` 家族（Qwen3.8-Flash-Next）最小也要 29.6 GB 文件 / 32 GB 内存，本机 23.4 GB 跑不动；在共同支持的 qwen35moe 上它比 `polystrata` 慢约 30%，且没有 `--tail-skip`/`--kv`/`--vram-reserve-mib`。相关注册、下载与面板字段已移除（见 `docs/CHANGELOG-DECISIONS.md` 2026-10-18 条）。
 - 插件后端：`ProcessPluginBackend` 由 `plugins/<id>/plugin.json` 清单驱动（`schema:1`），只拉起声明的进程、等待 `/health` 或端口；不加载插件代码，因此崩溃被隔离在子进程。内置 `polystrata` 清单。
 - `BackendRegistry` 是唯一后端清单；`PluginLoader` 在启动时扫描 `AppContext.BaseDirectory/plugins`、`<ManagerRoot>/plugins`、`<LlamaCppRoot>/engines`。
-- `EngineArbiter` 集中 GPU 重负载互斥：启动某后端前若另一后端持有 GPU，走统一确认；不再在各处重复冲突检查。
+- `EngineArbiter` 集中 GPU 重负载互斥：GUI 先问 `ConflictFor` 走统一确认，CLI/自启动则在后端启动方法里
+  被 `EnsureCanStart` 直接拒绝，两条路径都无法绕过。占用判定只看**仍然存活**的进程，
+  崩溃/断电留下的会话记录不再要求用户确认冲突。
 - `BootstrapService` 一键初始化运行环境（Python venv 与依赖、引擎定位）；依赖清单优先读引擎 `requirements.txt`，缺失时回退内置列表。
 
 `EngineSession` 是会话身份（后端 id + PID + 创建时间 + 可执行路径），与 `ServerSession` 双向映射。会话持久化在 `ManagerConfig.Running` 的槽位中；旧版的 `RunningServer`/`RunningEmbedding` 与 PID 提示在读取时折叠进槽位，保存后删除（迁移即删）。
@@ -19,9 +21,19 @@
 
 顶部固定一条控制条：引擎下拉、状态、以及一套启动/停止/打开页面/测速按钮，所有引擎共用，避免多套按钮。标签页按功能分为模型 / 参数 / 高级 / 日志。参数页统一由后端 schema v2 动态生成（分组、默认值、单位、范围校验、`VisibleWhen` 条件显隐、高级折叠、搜索与恢复默认），llama.cpp 也走同一套，它额外保留「原始参数」文本框作为任意 flag 的兜底；嵌入服务等 llama.cpp 专属控件在选中其它引擎时隐藏。llama.cpp 的参数值仍存在原始参数串里，由 `LlamaCppParameters` 在面板与字符串之间双向投射，手写 flag 不会被面板覆盖。会话记录按后端各自的槽位保存，llama.cpp 仍用 `main` 槽。
 
+导航按钮显示图标与标签；模型页的搜索/排序通过 `ICollectionView` 只过滤当前扫描结果，不触发重扫。辅助权重判定集中在 `ModelPairingService.IsAuxiliaryModel`，扫描过滤与配对保持同一口径。窗口放置保存在 `ManagerConfig.Window`，读写时修复无效值；状态轮询仅在日志相关界面可见时读取日志文件。
+
 ## 运行实例
 
 `ManagerConfig` 的 ModelPath/Args/Port 描述下一次启动的选择。
+llama.cpp（含 Prism 路由）与 PolyStrata 的主服务统一默认 8080；配置中的自定义端口优先，
+启动失败不自动换端口。`PortUnavailableReason` 按绑定地址试探端口，区分占用和权限/保留范围；
+`TestPortInUse` 回答“端口上现在是否有人监听”：分别对 IPv4/IPv6 loopback 做绑定探测
+（Windows 监听表对刚绑定的套接字有约 10% 的延迟漏报，也可能在枚举时阻塞数秒）；
+只把 `AddressAlreadyInUse` 算占用，保留段仍不算占用。
+两者共同支撑状态、进程恢复和插件 TCP 就绪判断。
+实测器由系统分配独立临时端口，排除 8080、原始参数中的端口、各引擎配置端口和运行会话端口；
+分配和清理有界且支持取消，交接到子进程前再次检查端口；由于绑定交接有时序窗口，子进程退出仍要报告 stderr。
 `ServerSession` 保存本次启动的引擎、模型、参数、端口、PID 和操作系统创建时间。
 状态查询和停止使用会话身份，不随表单修改变化，也不会按端口搜索并接管外部服务器。
 旧配置只允许迁移记录的 PID，迁移时核对引擎路径、创建时间和实际命令行。

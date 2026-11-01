@@ -56,10 +56,10 @@ public sealed class StrataBackend : IServerBackend
             new("pythonPath", "Python 解释器", "路径", ParamType.FilePath, "",
                 "Python 3.10+ 的 python.exe；留空自动使用一键配置好的专属虚拟环境。",
                 Help: "【Python 解释器】\n• 作用：启动 API 服务端所需的 Python 3.10+ 可执行文件。\n• 建议：留空即可，系统会使用「一键配置环境」准备好的专属虚拟环境。"),
-            new("servePort", "服务端口", "基本", ParamType.Integer, "8091",
-                "Strata HTTP API 监听端口（默认 8091，供 Claude Code / Agent 客户端接入）。", 1, 65535,
-                Help: "【服务端口】\n• 作用：Strata HTTP API 监听端口，外部客户端通过它连接模型。\n• 默认：8091（已避开 llama.cpp 的 8080）。\n• 冲突时改成 1024–65535 内任意空闲端口。",
-                RangeHint: "1–65535，推荐 8091"),
+            new("servePort", "服务端口", "基本", ParamType.Integer, "8080",
+                "Strata HTTP API 监听端口（默认 8080，与 llama.cpp 共用 agent 接入地址）。", 1, 65535,
+                Help: "【服务端口】\n• 作用：Strata HTTP API 监听端口，外部客户端通过它连接模型。\n• 默认：8080，与 llama.cpp 统一，切换引擎不需要修改 agent 配置。\n• 同一端口一次只能有一个服务监听；请先停止旧引擎再启动新引擎。\n• 启动失败时只报告原因，不会自动更换端口。",
+                RangeHint: "1–65535，默认 8080"),
             new("host", "监听地址", "基本", ParamType.Text, "127.0.0.1",
                 "监听 IP 地址。默认 127.0.0.1 仅本机安全访问；设为 0.0.0.0 允许局域网设备访问。",
                 Help: "【监听地址】\n• 作用：HTTP API 监听哪个网络地址。\n• 127.0.0.1（默认）：仅本机访问，最安全。\n• 0.0.0.0：允许局域网内其他设备调用，注意防火墙与鉴权。"),
@@ -253,6 +253,9 @@ public sealed class StrataBackend : IServerBackend
 
     public async Task<EngineSession> StartAsync(EngineStartRequest request, ILogSink log, CancellationToken ct)
     {
+        // Shared gate: CLI/autostart reach this method directly and must not start a second
+        // GPU-heavy engine while another one is alive (REQ-127).
+        EngineArbiter.EnsureCanStart(_profile.Id);
         var model = ResolveModel(request.Config, _profile);
         // The server needs the tokenizer directory (vocab.json etc.); prepare it first so the
         // runconfig can point at the directory the tool actually produced.
@@ -276,8 +279,9 @@ public sealed class StrataBackend : IServerBackend
             await File.WriteAllTextAsync(path, content, ct).ConfigureAwait(false);
         }
         var port = ResolvePort(request);
-        if (ServerService.TestPortInUse(port))
-            throw new InvalidOperationException($"端口 {port} 已被占用。请改用其它端口。");
+        var portProblem = ServerService.PortUnavailableReason(port,
+            Param(request.Config, "host") ?? request.Config.Strata.Host);
+        if (portProblem != null) throw new InvalidOperationException(portProblem);
         var args = string.Join(" ", plan.Arguments.Select(LauncherArguments.Quote));
         log.Write($"启动 {_profile.DisplayName} 服务：{plan.FileName} {args}");
         var process = DetachedProcess.Start(plan.FileName, args,

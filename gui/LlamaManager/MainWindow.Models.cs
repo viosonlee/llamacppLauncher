@@ -1,6 +1,8 @@
+using System.ComponentModel;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
 using LlamaManager.Models;
 using LlamaManager.Services;
 
@@ -17,36 +19,114 @@ public partial class MainWindow
         try
         {
             var directory = string.IsNullOrEmpty(_config.ModelsDirectory) ? Path.Combine(ConfigService.GetRoot(), "models") : _config.ModelsDirectory;
-            var models = await Task.Run(() =>
+            // Snapshot on the dispatcher; the worker never reads or mutates the live preset map.
+            var presetSnapshot = ConfigService.CreatePresetRebindSnapshot(_config);
+            var scan = await Task.Run(() =>
             {
-                if (!Directory.Exists(directory)) return new List<ModelInfo>();
-                var options = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true };
-                var list = Directory.EnumerateFiles(directory, "*.gguf", options)
-                    .Where(f => !Path.GetFileName(f).StartsWith("mmproj", StringComparison.OrdinalIgnoreCase) && !Path.GetFileName(f).StartsWith("mtp-", StringComparison.OrdinalIgnoreCase))
-                    .OrderBy(f => f).Select(f =>
-                    {
-                        _ = GgufService.TryRead(f); // warm metadata cache away from the dispatcher
-                        return new ModelInfo { FullName = Path.GetFullPath(f), FileName = Path.GetFileName(f),
-                            RelativePath = Path.GetRelativePath(directory, f), SizeBytes = new FileInfo(f).Length };
-                    }).ToList();
-                // Preset rebinding samples file signatures, so keep it off the dispatcher too.
-                ConfigService.RebindOrphanPresets(_config, list.Select(m => m.FullName), save: true);
-                return list;
+                var list = new List<ModelInfo>();
+                if (Directory.Exists(directory))
+                {
+                    var options = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true };
+                    list = Directory.EnumerateFiles(directory, "*.gguf", options)
+                        .Where(f => !ModelPairingService.IsAuxiliaryModel(f))
+                        .OrderBy(f => f).Select(f =>
+                        {
+                            _ = GgufService.TryRead(f); // warm metadata cache away from the dispatcher
+                            return new ModelInfo { FullName = Path.GetFullPath(f), FileName = Path.GetFileName(f),
+                                RelativePath = Path.GetRelativePath(directory, f), SizeBytes = new FileInfo(f).Length };
+                        }).ToList();
+                }
+                // Signature sampling and scoring stay on the worker; applying the plan happens below.
+                return (Models: list,
+                    Plan: ConfigService.PlanOrphanPresetRebind(
+                        presetSnapshot, list.Select(m => m.FullName)));
             });
             if (_lifetime.IsCancellationRequested) return;
+            ConfigService.ApplyOrphanPresetRebind(_config, scan.Plan, save: true);
             _selecting = true;
             try
             {
-                _models = models;
-                ModelListBox.ItemsSource = _models;
+                _models = scan.Models;
+                _modelView = CollectionViewSource.GetDefaultView(_models);
+                _modelView.Filter = item => item is ModelInfo model && ModelMatchesQuery(model);
+                ModelListBox.ItemsSource = _modelView;
+                ApplyModelFilter();
                 var selected = SelectedEngineModelPath();
                 ModelListBox.SelectedItem = _models.FirstOrDefault(m => PathIdentity.Equals(m.FullName, selected));
-                ModelCountText.Text = $"共 {_models.Count} 个模型";
-                EmptyModelsHint.Visibility = _models.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+                UpdateModelCountText();
             }
             finally { _selecting = false; }
         }
         finally { _scanning = false; }
+    }
+
+    private void ModelSearchBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (!_loaded) return;
+        _modelQuery = ModelSearchBox.Text.Trim();
+        ApplyModelFilter();
+    }
+
+    private void ModelSortBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_loaded) return;
+        _modelSortMode = Math.Max(0, ModelSortBox.SelectedIndex);
+        ApplyModelFilter();
+    }
+
+    private void ModelSearchClearButton_Click(object sender, RoutedEventArgs e) => ModelSearchBox.Clear();
+
+    private bool ModelMatchesQuery(ModelInfo model)
+    {
+        if (string.IsNullOrWhiteSpace(_modelQuery)) return true;
+        foreach (var term in _modelQuery.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (model.FileName.Contains(term, StringComparison.OrdinalIgnoreCase)
+                || model.RelativePath.Contains(term, StringComparison.OrdinalIgnoreCase)
+                || model.ModelTypeDisplay.Contains(term, StringComparison.OrdinalIgnoreCase)
+                || model.Category.Contains(term, StringComparison.OrdinalIgnoreCase))
+                continue;
+            return false;
+        }
+        return true;
+    }
+
+    private void ApplyModelFilter()
+    {
+        if (_modelView == null) return;
+        using (_modelView.DeferRefresh())
+        {
+            _modelView.SortDescriptions.Clear();
+            var sortProperty = _modelSortMode == 0 ? nameof(ModelInfo.DisplayName) : nameof(ModelInfo.SizeBytes);
+            var sortDirection = _modelSortMode == 2 ? ListSortDirection.Descending : ListSortDirection.Ascending;
+            _modelView.SortDescriptions.Add(new SortDescription(sortProperty, sortDirection));
+        }
+        UpdateModelCountText();
+    }
+
+    private void UpdateModelCountText()
+    {
+        var visible = _modelView?.Cast<object>().Count() ?? _models.Count;
+        ModelCountText.Text = visible == _models.Count
+            ? $"共 {_models.Count} 个模型"
+            : $"筛选 {visible} / {_models.Count}";
+
+        if (_models.Count == 0)
+        {
+            EmptyModelsHintText.Text = "未找到 .gguf 模型。点击“刷新”，或用“选择文件夹…”指定模型目录。";
+            DownloadModelButton.Visibility = Visibility.Visible;
+            EmptyModelsHint.Visibility = Visibility.Visible;
+        }
+        else if (visible == 0)
+        {
+            EmptyModelsHintText.Text = "没有匹配的模型。调整关键词，或点“清空”查看全部。";
+            DownloadModelButton.Visibility = Visibility.Collapsed;
+            EmptyModelsHint.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            EmptyModelsHint.Visibility = Visibility.Collapsed;
+        }
     }
 
     /// <summary>The model the currently selected engine is configured with.</summary>
@@ -150,7 +230,7 @@ public partial class MainWindow
             SaveCurrentConfig(); // commit previous model's edits before changing identity
             var preset = ConfigService.GetModelPreset(_config, path);
             var args = preset?.Args ?? await Task.Run(() => PresetService.GeneratePresetArgs(path, _config.Port));
-            args = EnsureBundledMtp(path, args);
+            args = ModelPairingService.ApplySpeculativeDefaults(path, args);
             args = EnsurePairedMmproj(path, args);
             if (_lifetime.IsCancellationRequested) return;
             _config.ModelPath = path;
@@ -200,7 +280,8 @@ public partial class MainWindow
             SaveCurrentConfig();
             var path = _config.ModelPath;
             var port = _config.Port;
-            var args = EnsureBundledMtp(path, await Task.Run(() => PresetService.GeneratePresetArgs(path, port)));
+            var args = ModelPairingService.ApplySpeculativeDefaults(
+                path, await Task.Run(() => PresetService.GeneratePresetArgs(path, port)));
             if (_lifetime.IsCancellationRequested) return;
             _config.Args = args;
             ApplyConfig();

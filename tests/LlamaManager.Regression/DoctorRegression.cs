@@ -14,6 +14,14 @@ internal static class DoctorRegression
     /// </summary>
     public static void RunVersionComparison()
     {
+        // Real nightly output names the build separately from the semantic version.
+        Equal("b12020", DoctorService.ParseLlamaCppVersion(
+            "version: 0.8.0-dev (build 12020, commit 0ec4027a2)"));
+        Equal("b4242", DoctorService.ParseLlamaCppVersion("version: b4242"));
+        Equal("b11853", DoctorService.ParseLlamaCppVersion("version: 11853"));
+        Equal("b0", DoctorService.ParseLlamaCppVersion("version: b000"));
+        Equal<string?>(null, DoctorService.ParseLlamaCppVersion("version: 0.8.0-dev"));
+
         // llama.cpp build numbers.
         Check(DoctorService.IsOutdated("b11641", "b11671"), "b11641 vs b11671 not outdated");
         Check(!DoctorService.IsOutdated("b11671", "b11671"), "same build reported outdated");
@@ -60,6 +68,22 @@ internal static class DoctorRegression
         var healthy = await DoctorService.RunAsync(checkUpdates: false, CancellationToken.None);
         Equal("ok", healthy.Findings.Single(f => f.Engine == "llamacpp").Status);
         Check(!healthy.Findings.Any(f => f.Status == "outdated"), "offline check reported updates");
+
+        // llama.cpp update checks use the same release seam and report both build numbers.
+        DoctorService.LatestRelease = (_, _) =>
+            Task.FromResult<ReleaseInfo?>(new ReleaseInfo("b12020", []));
+        var llamaCurrent = await DoctorService.RunAsync(checkUpdates: true, CancellationToken.None);
+        var currentLlama = llamaCurrent.Findings.Single(f => f.Engine == "llamacpp");
+        Equal("ok", currentLlama.Status);
+        Check(currentLlama.Detail.Contains("b12020"), "llama.cpp finding omitted the local build");
+
+        DoctorService.LatestRelease = (_, _) =>
+            Task.FromResult<ReleaseInfo?>(new ReleaseInfo("b12021", []));
+        var llamaStale = await DoctorService.RunAsync(checkUpdates: true, CancellationToken.None);
+        var outdatedLlama = llamaStale.Findings.Single(f => f.Engine == "llamacpp");
+        Equal("outdated", outdatedLlama.Status);
+        Check(outdatedLlama.Detail.Contains("b12020") && outdatedLlama.Detail.Contains("b12021"),
+            "llama.cpp outdated detail did not name both builds");
 
         // Update checking through the seam: BUILD.json version newer than the (faked) remote.
         // A healthy strata engine with a BUILD.json: seed the engine folder, a serve tree and a

@@ -66,6 +66,20 @@ public static class BootstrapService
         {
             log.Write("llama.cpp：已找到 llama-server.exe。");
             steps.Add(new StepResult("llama-server", true, engine));
+            try
+            {
+                var update = await EngineAcquisitionService.UpdateAsync("llamacpp", log, ct).ConfigureAwait(false);
+                if (update.Updated)
+                    log.Write($"llama.cpp：已更新到 {update.LatestVersion}。");
+                else if (update.SkippedReason != null)
+                    log.Write(update.SkippedReason);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                // An existing engine is still usable when GitHub is offline.
+                log.Write("检查 llama.cpp 更新失败：" + ex.Message);
+            }
             return steps;
         }
         log.Write("llama.cpp：未找到 llama-server.exe，尝试从官方发布下载…");
@@ -134,7 +148,7 @@ public static class BootstrapService
         if (engine != null)
         {
             log.Write(profile.EngineExeName + "：" + engine);
-            await EnsureCudaDllsAsync(Path.GetDirectoryName(engine)!, log, ct).ConfigureAwait(false);
+            await EnsureCudaDllsAsync(Path.GetDirectoryName(engine)!, backendId, log, ct).ConfigureAwait(false);
         }
 
         steps.Add(server != null
@@ -239,7 +253,7 @@ public static class BootstrapService
         }
     }
 
-    private static async Task EnsureCudaDllsAsync(string engineDir, ILogSink log, CancellationToken ct)
+    private static async Task EnsureCudaDllsAsync(string engineDir, string backendId, ILogSink log, CancellationToken ct)
     {
         var managerRoot = ConfigService.GetManagerRoot();
         var llamaCppRoot = ConfigService.GetLlamaCppRoot();
@@ -272,7 +286,7 @@ public static class BootstrapService
             try
             {
                 log.Write("正在获取 CUDA 运行时库（用于 GPU 计算加速）…");
-                await EngineAcquisitionService.AcquireCudartToAsync(engineDir, log, ct).ConfigureAwait(false);
+                await EngineAcquisitionService.AcquireCudartToAsync(engineDir, log, ct, backendId).ConfigureAwait(false);
             }
             catch (Exception ex)
             {

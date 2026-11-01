@@ -108,22 +108,7 @@ public sealed class ProcessPluginBackend : IServerBackend
     private static async Task<CompatibilityReport> PolyStrataMatrixAsync(string modelPath, CancellationToken ct)
     {
         var md = await Task.Run(() => GgufService.ReadShards(modelPath, ct), ct).ConfigureAwait(false);
-        var notes = new List<string>();
-        var blockers = new List<string>();
-        var supported = new HashSet<uint> { 2, 3, 6, 7, 8, 11, 12, 13, 14, 16, 17, 18, 20, 21, 22, 23, 29, 42 };
-        foreach (var (name, type) in md.TensorFormats)
-        {
-            if (!name.Contains("_exps.weight")) continue;
-            if (!supported.Contains(type))
-                blockers.Add($"{name} 使用 {StrataCompatibility.TypeName(type)}：strata-poly 可能不支持该专家格式。");
-        }
-        if (md.HasMtp) notes.Add("含内置 MTP 草稿块：strata-poly 会启用草稿解码。");
-        else notes.Add("无 MTP 草稿块：strata-poly 仅用重复/lookup 猜测。");
-        notes.Add("strata-poly 使用专家缓存；6GB 卡低于其 8GB 最低要求，速度可能受限。");
-        var summary = blockers.Count == 0
-            ? $"PolyStrata 预检通过：{md.Architecture} / {md.LayerCount} 层。"
-            : $"PolyStrata 预检发现问题（{blockers.Count} 项）。";
-        return new CompatibilityReport(blockers.Count == 0, blockers, notes, summary, null);
+        return PolyStrataCompatibility.Analyze(md);
     }
 
     public Task<EngineStatus> StatusAsync(EngineSession? session, CancellationToken ct)
@@ -169,10 +154,15 @@ public sealed class ProcessPluginBackend : IServerBackend
 
     public async Task<EngineSession> StartAsync(EngineStartRequest request, ILogSink log, CancellationToken ct)
     {
+        // Shared gate: CLI/autostart reach this method directly and must not start a second
+        // GPU-heavy engine while another one is alive (REQ-127).
+        EngineArbiter.EnsureCanStart(_manifest.Id);
         var plan = BuildLaunch(request);
         var port = ResolvePort(request);
-        if (port > 0 && ServerService.TestPortInUse(port))
-            throw new InvalidOperationException($"端口 {port} 已被占用。请改用其它端口。");
+        var portProblem = port > 0
+            ? ServerService.PortUnavailableReason(port, new LauncherArguments(string.Join(" ", plan.Arguments.Select(LauncherArguments.Quote))).Get("--host"))
+            : null;
+        if (portProblem != null) throw new InvalidOperationException(portProblem);
         var args = string.Join(" ", plan.Arguments.Select(LauncherArguments.Quote));
         log.Write($"启动插件引擎 {_manifest.Id}：{plan.FileName} {args}");
         var logName = _manifest.Id;

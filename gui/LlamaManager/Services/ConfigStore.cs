@@ -78,6 +78,9 @@ public sealed class ConfigStore(string path)
 
     private void WriteCore(ManagerConfig config)
     {
+        // Repair hand-edited values (including non-finite doubles, which the JSON writer rejects)
+        // before serialization so a bad placement can never make saving fail.
+        config.Normalize();
         Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
         var temporary = _path + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try

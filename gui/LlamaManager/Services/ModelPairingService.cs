@@ -9,6 +9,18 @@ namespace LlamaManager.Services;
 public static class ModelPairingService
 {
     /// <summary>
+    /// Auxiliary weights are never valid primary models. The list scan and pairing logic share
+    /// this predicate so a renamed helper cannot appear as a selectable model by accident.
+    /// </summary>
+    public static bool IsAuxiliaryModel(string? path)
+    {
+        var name = Path.GetFileName(path ?? "");
+        return name.StartsWith("mmproj", StringComparison.OrdinalIgnoreCase)
+            || name.StartsWith("mtp-", StringComparison.OrdinalIgnoreCase)
+            || name.StartsWith("draft-", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     /// Searches for a matching multimodal projector file (e.g., mmproj-Q8_0.gguf) in the model's directory.
     /// Prefers Q8_0, then BF16, then F16, then the first found.
     /// </summary>
@@ -20,6 +32,7 @@ public static class ModelPairingService
 
         var candidates = Directory.EnumerateFiles(dir, "*.gguf")
             .Where(f => Path.GetFileName(f).StartsWith("mmproj", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(f => Path.GetFileName(f), StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         if (candidates.Count == 0) return null;
@@ -41,10 +54,51 @@ public static class ModelPairingService
         if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) return null;
 
         var candidates = Directory.EnumerateFiles(dir, "*.gguf")
-            .Where(f => Path.GetFileName(f).StartsWith("mtp-", StringComparison.OrdinalIgnoreCase)
-                     || Path.GetFileName(f).StartsWith("draft-", StringComparison.OrdinalIgnoreCase))
+            .Where(IsAuxiliaryModel)
+            .Where(f => !Path.GetFileName(f).StartsWith("mmproj", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(f => Path.GetFileName(f), StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         return candidates.FirstOrDefault();
+    }
+
+    /// <summary>
+    /// Adds speculative defaults only when the GGUF metadata distinguishes an external draft from
+    /// an MTP head. Explicit --spec-type or -md values are left untouched; unreadable weights are
+    /// not guessed, because draft-mtp against an ordinary draft can fail to start the server.
+    /// </summary>
+    public static string ApplySpeculativeDefaults(string modelPath, string args)
+    {
+        var parsed = new LauncherArguments(args);
+        if (parsed.Has("--spec-type")) return args;
+
+        var explicitDraft = parsed.Get("-md");
+        if (!string.IsNullOrWhiteSpace(explicitDraft))
+            return ApplyDraftType(args, parsed, explicitDraft, addDraftPath: false);
+
+        if (GgufService.TryRead(modelPath) is { HasMtp: true })
+            return parsed.Set("--spec-type", "draft-mtp");
+
+        var pairedDraft = FindPairedDraftModel(modelPath);
+        return string.IsNullOrWhiteSpace(pairedDraft)
+            ? args
+            : ApplyDraftType(args, parsed, pairedDraft, addDraftPath: true);
+    }
+
+    private static string ApplyDraftType(
+        string original,
+        LauncherArguments parsed,
+        string draftPath,
+        bool addDraftPath)
+    {
+        var type = GgufService.TryRead(draftPath) switch
+        {
+            { HasMtp: true } => "draft-mtp",
+            { } => "draft-simple",
+            _ => null,
+        };
+        if (type == null) return original;
+        var updated = parsed.Set("--spec-type", type);
+        return addDraftPath ? new LauncherArguments(updated).Set("-md", draftPath) : updated;
     }
 }

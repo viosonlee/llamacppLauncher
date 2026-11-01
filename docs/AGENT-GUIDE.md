@@ -73,7 +73,9 @@
 
 服务就绪后暴露 OpenAI 兼容接口（`serve/server.py` 同时提供 Anthropic 兼容）：
 
-- 基址：`http://127.0.0.1:<主端口>/v1`（默认主端口 8080，嵌入端口 8081）
+- 基址：`http://127.0.0.1:8080/v1`（llama.cpp/Prism 与 PolyStrata 主服务统一默认 8080，嵌入默认 8081）
+- 切换主引擎先停止旧服务，再启动新服务；程序不会因占用/保留范围自动改端口，agent 配置不需要跟着测速变动。
+- 参数实测使用独立临时端口，避开 8080、已配置端口与运行会话端口；临时端口仅供实测器使用。
 - 就绪判定：先 `--status` 报运行中，再 `curl http://127.0.0.1:8080/v1/models`
 
 ## 4. Python 自动安装（REQ-100）
@@ -116,7 +118,9 @@ polystrata 的 HTTP 服务由 Python 提供，`--bootstrap` 检测不到 Python 
 | 找不到分词表 `vocab.json` | 分词输出目录差异 | 已兼容 `--out/` 与 `--out/tokenizer/`；若仍失败，检查 `strata_tokenizer.py` 是否产出 vocab.json |
 | 引擎迟迟不就绪 | 首次冷启动 / Defender 扫描 / 内存不足在换页 | poly 载入约 3–14 s，启动器最多等 180 s；仍未就绪看 `<根>/logs/engine-<id>.log` |
 | doctor 报 prism `missing` | 无公开下载源 | 手动放置到 `<llama.cpp 根>/engines/prism/llama-server.exe` |
-| doctor 报「有更新」 | 引擎有新发布 | `--update`（或重跑对应 `--bootstrap`）就地升级 |
+| doctor 报「有更新」 | 引擎有新发布 | 先停止对应服务，再执行 `--update`（或重跑对应 `--bootstrap`）安全升级；运行中会跳过并提示 |
+| 报端口已被占用 | 旧引擎或其它进程仍监听 | 先核对并停止占用的旧服务，再用 8080 启动目标引擎；不要自动改 agent 地址 |
+| 报端口无法绑定/权限不足/保留端口段 | Windows 保留范围或绑定权限限制，不一定有活动监听器 | 用 `netsh int ipv4 show excludedportrange protocol=tcp` 只读核对；不要停真实服务或擅自改 Windows 网络设置 |
 | `--status` 说未运行但服务在跑 | 会话槽位不匹配 | 已修复：状态按所选后端槽位查询；确认 `--backend` 与服务一致 |
 
 ## 7. Agent 约束（务必遵守）
@@ -146,4 +150,5 @@ polystrata 的 HTTP 服务由 Python 提供，`--bootstrap` 检测不到 Python 
 - `docs/CHANGELOG-DECISIONS.md` — 关键决策与变更
 - `docs/architecture.md` — 组件与数据流
 - `docs/engine-plugins.md` — 引擎 / 插件清单格式
+- `docs/KNOWN-DEFECTS.md` — 已知问题、证据、待核实项与修复状态
 - `docs/ENGINE-UPDATE-GUIDE.md` — 引擎与模型更新维护指南

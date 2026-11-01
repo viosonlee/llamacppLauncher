@@ -172,6 +172,67 @@ internal static class CoreUtilitiesRegression
 
         Equal(mmproj, ModelPairingService.FindPairedMmproj(model));
         Equal(draft, ModelPairingService.FindPairedDraftModel(model));
+
+        // Auxiliary weights must never become selectable primary models. The predicate is shared
+        // by the scan filter and the deterministic pairing order below.
+        Check(ModelPairingService.IsAuxiliaryModel(mmproj), "mmproj was not classified as auxiliary");
+        Check(ModelPairingService.IsAuxiliaryModel(draft), "mtp draft was not classified as auxiliary");
+        Check(ModelPairingService.IsAuxiliaryModel("draft-coder.gguf"), "draft model was not classified as auxiliary");
+        Check(!ModelPairingService.IsAuxiliaryModel(model), "a primary model was classified as auxiliary");
+        Check(!ModelPairingService.IsAuxiliaryModel(null), "null was classified as auxiliary");
+
+        // Directory enumeration order is not guaranteed; pairing must still be reproducible.
+        var deterministicDir = Path.Combine(root, "test-pair-deterministic");
+        Directory.CreateDirectory(deterministicDir);
+        var deterministicModel = Path.Combine(deterministicDir, "Qwen.gguf");
+        File.WriteAllText(deterministicModel, "m");
+        File.WriteAllText(Path.Combine(deterministicDir, "draft-b.gguf"), "b");
+        File.WriteAllText(Path.Combine(deterministicDir, "draft-a.gguf"), "a");
+        Equal(Path.Combine(deterministicDir, "draft-a.gguf"),
+            ModelPairingService.FindPairedDraftModel(deterministicModel));
+
+        // Speculative defaults follow actual GGUF metadata. An ordinary external draft must use
+        // draft-simple; only a file carrying nextn/MTP tensors gets draft-mtp.
+        var builtInDir = Path.Combine(root, "test-pair-built-in-mtp");
+        Directory.CreateDirectory(builtInDir);
+        var builtIn = Path.Combine(builtInDir, "BuiltIn.gguf");
+        File.WriteAllBytes(builtIn, Fixtures.Gguf(moe: false, mtp: true));
+        var builtInArgs = new LauncherArguments(
+            ModelPairingService.ApplySpeculativeDefaults(builtIn, "-c 4096"));
+        Equal("draft-mtp", builtInArgs.Get("--spec-type"));
+        Equal<string?>(null, builtInArgs.Get("-md"));
+        Equal("-c 4096 --spec-type ngram-mod",
+            ModelPairingService.ApplySpeculativeDefaults(builtIn, "-c 4096 --spec-type ngram-mod"));
+
+        var plainDir = Path.Combine(root, "test-pair-plain-draft");
+        Directory.CreateDirectory(plainDir);
+        var plainTarget = Path.Combine(plainDir, "Target.gguf");
+        var plainDraft = Path.Combine(plainDir, "draft-plain.gguf");
+        File.WriteAllBytes(plainTarget, Fixtures.Gguf(moe: false));
+        File.WriteAllBytes(plainDraft, Fixtures.Gguf(moe: false));
+        var plainArgs = new LauncherArguments(
+            ModelPairingService.ApplySpeculativeDefaults(plainTarget, "-c 4096"));
+        Equal("draft-simple", plainArgs.Get("--spec-type"));
+        Equal(plainDraft, plainArgs.Get("-md"));
+
+        var externalMtpDir = Path.Combine(root, "test-pair-external-mtp");
+        Directory.CreateDirectory(externalMtpDir);
+        var externalTarget = Path.Combine(externalMtpDir, "Target.gguf");
+        var externalMtp = Path.Combine(externalMtpDir, "mtp-head.gguf");
+        File.WriteAllBytes(externalTarget, Fixtures.Gguf(moe: false));
+        File.WriteAllBytes(externalMtp, Fixtures.Gguf(moe: false, mtp: true));
+        var externalArgs = new LauncherArguments(
+            ModelPairingService.ApplySpeculativeDefaults(externalTarget, "-c 4096"));
+        Equal("draft-mtp", externalArgs.Get("--spec-type"));
+        Equal(externalMtp, externalArgs.Get("-md"));
+
+        // Unknown auxiliary bytes must not be guessed into either speculative mode.
+        var unknownDir = Path.Combine(root, "test-pair-unknown-draft");
+        Directory.CreateDirectory(unknownDir);
+        var unknownTarget = Path.Combine(unknownDir, "Target.gguf");
+        File.WriteAllBytes(unknownTarget, Fixtures.Gguf(moe: false));
+        File.WriteAllText(Path.Combine(unknownDir, "draft-unknown.gguf"), "not a gguf");
+        Equal("-c 4096", ModelPairingService.ApplySpeculativeDefaults(unknownTarget, "-c 4096"));
     }
 
     public static void RunStrataDiagnostics()
@@ -196,6 +257,22 @@ internal static class CoreUtilitiesRegression
             TensorFormats = new Dictionary<string, uint> { ["blk.0.ffn_gate_exps.weight"] = 2 },
         });
         Check(supported.Runnable, "Q4_0 experts rejected: " + string.Join("; ", supported.Blockers));
+        var q2k = PolyStrataCompatibility.Analyze(new GgufMetadata
+        {
+            Architecture = "kolibri1",
+            LayerCount = 40,
+            TensorFormats = new Dictionary<string, uint> { ["blk.0.ffn_down_exps.weight"] = 10 },
+        });
+        Check(q2k.Runnable, "Q2_K experts rejected: " + string.Join("; ", q2k.Blockers));
+        var mxfp4 = PolyStrataCompatibility.Analyze(new GgufMetadata
+        {
+            Architecture = "qwen35moe",
+            LayerCount = 40,
+            TensorFormats = new Dictionary<string, uint> { ["blk.0.ffn_gate_exps.weight"] = 39 },
+        });
+        Check(mxfp4.Runnable, "MXFP4 experts rejected: " + string.Join("; ", mxfp4.Blockers));
+        Check(!q2k.Notes.Any(n => n.Contains("6GB") || n.Contains("8GB 最低")),
+            "PolyStrata note still hardcodes a card size");
 
         var unsupported = PolyStrataCompatibility.Analyze(new GgufMetadata
         {

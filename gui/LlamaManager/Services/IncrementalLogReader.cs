@@ -6,6 +6,9 @@ namespace LlamaManager.Services;
 
 public sealed class IncrementalLogReader
 {
+    /// <summary>Upper bound for retained lines so a caller cannot grow this without limit.</summary>
+    public const int MaxCapacity = 20000;
+
     private long _position;
     private DateTime _modified;
     private byte[] _prefix = [];
@@ -16,6 +19,7 @@ public sealed class IncrementalLogReader
 
     public IReadOnlyList<string> Read(string path, int capacity = 500, Func<string, bool>? filter = null)
     {
+        capacity = Math.Clamp(capacity, 1, MaxCapacity);
         if (!File.Exists(path)) { Reset(); return []; }
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
         var modified = File.GetLastWriteTimeUtc(path);

@@ -169,8 +169,12 @@ public sealed record ParameterSpec(
 
 ### 5.2 polystrata
 
+> 当前实现：主服务默认 8080，切换引擎保留 agent 接入地址；显式端口配置仍优先。
+> `cacheBias` 的点号/逗号输入在读取控件值时归一化，逐项与整面板保存使用同一口径；拒绝非有限值。
+
 | 分组 | Key | 标签 | 类型 | 默认 | 范围/推荐 | 引擎落点 |
 |---|---|---|---|---|---|---|
+| 基本 | servePort | 服务端口 | Integer | 8080 | 1–65535；统一默认 8080 | `--port` + runconfig `port` |
 | 基本 | vramReserveMib | 显存预留 MiB | Integer | 256 | 0–60000；推荐 256/512 | `--vram-reserve-mib` |
 | 基本 | context | 上下文 | Integer | 4096 | 256–1048576 | `--max-context` |
 | 基本 | kv | KV 缓存格式 | Choice | 空（fp16） | fp16/q8_0/int8/int8k | `--kv` |

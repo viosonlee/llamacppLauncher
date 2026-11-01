@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
@@ -144,10 +145,37 @@ internal static class Fixtures
         Directory.Delete(directory, recursive: true);
     }
 
+    /// <summary>
+    /// Kills fixture servers a failed run left behind. Only processes whose executable lives
+    /// inside <paramref name="root"/> are touched, so a real llama-server on this machine (and
+    /// anything else outside the isolated fixture directory) is never stopped.
+    /// </summary>
+    public static void KillStrayServers(string root)
+    {
+        var prefix = PathIdentity.Normalize(root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        foreach (var process in Process.GetProcessesByName("llama-server"))
+        {
+            using (process)
+            {
+                string? image = null;
+                try { image = process.MainModule?.FileName; }
+                catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException or UnauthorizedAccessException) { }
+                if (image == null || !PathIdentity.Normalize(image).StartsWith(prefix, StringComparison.Ordinal)) continue;
+                try
+                {
+                    if (!process.HasExited) process.Kill(entireProcessTree: true);
+                    process.WaitForExit(5000);
+                }
+                catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception) { }
+            }
+        }
+    }
+
     public static async Task RunFakeServerAsync(string[] args)
     {
         var parsed = new LauncherArguments(string.Join(" ", args.Select(LauncherArguments.Quote)));
         var port = parsed.GetPort();
+        if (parsed.Has("--fake-exit")) { Console.Error.WriteLine("fixture early exit"); return; }
         var delay = int.TryParse(parsed.Get("--fake-delay"), out var milliseconds) ? milliseconds : 0;
         if (delay > 0) await Task.Delay(delay);
         using var listener = new TcpListener(IPAddress.Loopback, port);

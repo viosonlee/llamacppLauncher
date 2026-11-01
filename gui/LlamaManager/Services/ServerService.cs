@@ -1,7 +1,9 @@
 using System.Diagnostics;
 using System.IO;
 using System.Management;
+using System.Net;
 using System.Net.Http;
+using System.Net.Sockets;
 using LlamaManager.Models;
 
 namespace LlamaManager.Services;
@@ -56,7 +58,9 @@ public static class ServerService
         // A detached server can outlive its record (crash, cleared or corrupt config).
         // Adopt it with the same full fingerprint so "start" manages our own server
         // instead of failing with a port conflict.
-        return RecoverByPort(config, embedding);
+        // A recorded session whose identity no longer validates needs immediate recovery;
+        // the 5-second throttle is only for the repeated status polls that have no record.
+        return RecoverByPort(config, embedding, bypassThrottle: session != null);
     }
 
     private static DateTime _lastPortRecoveryUtc = DateTime.MinValue;
@@ -68,12 +72,12 @@ public static class ServerService
     /// WMI is only touched while the port is actually busy and at most every few seconds,
     /// so the two-second status poll stays cheap.
     /// </summary>
-    private static Process? RecoverByPort(ManagerConfig config, bool embedding)
+    private static Process? RecoverByPort(ManagerConfig config, bool embedding, bool bypassThrottle = false)
     {
         var port = embedding ? config.EmbeddingPort : new LauncherArguments(config.Args).GetPort(config.Port);
         if (port <= 0 || !TestPortInUse(port)) return null;
         var now = DateTime.UtcNow;
-        if ((now - _lastPortRecoveryUtc).TotalSeconds < 5) return null;
+        if (!bypassThrottle && (now - _lastPortRecoveryUtc).TotalSeconds < 5) return null;
         _lastPortRecoveryUtc = now;
         var model = embedding ? config.EmbeddingModelPath : config.ModelPath;
         foreach (var candidate in Process.GetProcessesByName("llama-server"))
@@ -238,8 +242,67 @@ public static class ServerService
         return null;
     }
 
-    public static bool TestPortInUse(int port) =>
-        System.Net.NetworkInformation.IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpListeners().Any(l => l.Port == port);
+    /// <summary>
+    /// Whether something already occupies the loopback port. Windows' listener table refreshes
+    /// lazily and was measured missing roughly one in ten sockets bound a moment earlier, which
+    /// made a live detached server look "not running" and made stop report "no managed service".
+    /// Binding both loopback families is authoritative and avoids the listener table, whose
+    /// occasional multi-second enumeration could stall recovery.
+    /// Ports that are merely reserved (bind denied) stay "not in use", preserving the difference
+    /// from <see cref="PortUnavailableReason"/>.
+    /// </summary>
+    public static bool TestPortInUse(int port)
+    {
+        if (port is < 1 or > 65535) return false;
+        if (IsLoopbackListening(IPAddress.Loopback, port)) return true;
+        return Socket.OSSupportsIPv6 && IsLoopbackListening(IPAddress.IPv6Loopback, port);
+    }
+
+    private static bool IsLoopbackListening(IPAddress address, int port)
+    {
+        var probe = new TcpListener(address, port) { ExclusiveAddressUse = true };
+        try
+        {
+            probe.Start();
+            return false;
+        }
+        catch (SocketException ex) when (ex.SocketErrorCode == SocketError.AddressAlreadyInUse)
+        {
+            return true;
+        }
+        catch (SocketException) { /* Reserved or denied: that is not an active listener. */ }
+        finally { try { probe.Stop(); } catch (SocketException) { } }
+        return false;
+    }
+
+    /// <summary>
+    /// Probes the requested bind address without changing the configured port. Listener enumeration
+    /// misses Windows port exclusions. Hostnames are left to the engine's resolver so this check
+    /// never performs blocking DNS/WMI on the UI dispatcher.
+    /// </summary>
+    public static string? PortUnavailableReason(int port, string? host = null)
+    {
+        if (port is < 1 or > 65535) throw new ArgumentOutOfRangeException(nameof(port));
+        if (string.IsNullOrWhiteSpace(host) || host.Equals("localhost", StringComparison.OrdinalIgnoreCase))
+            host = "127.0.0.1";
+        if (!IPAddress.TryParse(host, out var address)) return null;
+        var listener = new TcpListener(address, port) { ExclusiveAddressUse = true };
+        try
+        {
+            listener.Start();
+            return null;
+        }
+        catch (SocketException ex) { return PortBindFailureReason(port, ex.SocketErrorCode); }
+        finally { listener.Stop(); }
+    }
+
+    /// <summary>Pure error mapping, testable without reserving ports or changing Windows networking.</summary>
+    public static string PortBindFailureReason(int port, SocketError error) => error switch
+    {
+        SocketError.AddressAlreadyInUse => $"端口 {port} 已被占用。请先停止占用服务；不会自动切换服务端口。",
+        SocketError.AccessDenied => $"端口 {port} 无法绑定：权限不足或处于 Windows 保留端口段内（常见于 Hyper-V/WSL）。请检查权限或保留范围；不会自动切换服务端口。",
+        _ => $"端口 {port} 无法绑定（{error}）。",
+    };
 
     public static async Task<bool> TestApiReadyAsync(int port, CancellationToken ct = default)
     {
@@ -296,7 +359,8 @@ public static class ServerService
             }
             else
             {
-                if (TestPortInUse(port)) throw new InvalidOperationException($"端口 {port} 已被占用。{DescribePortOccupant(port)}");
+                var portProblem = PortUnavailableReason(port, parsed.Get("--host"));
+                if (portProblem != null) throw new InvalidOperationException(portProblem);
                 log?.Invoke($"启动 {engine} {args}");
                 process = DetachedProcess.Start(engine, args,
                     embedding ? ConfigService.GetEmbeddingStdoutPath() : ConfigService.GetMainStdoutPath(),
@@ -348,10 +412,19 @@ public static class ServerService
     {
         using (await LockLifecycle(embedding, CancellationToken.None).ConfigureAwait(false))
         {
+            var slot = embedding ? ManagerConfig.SlotEmbedding : ManagerConfig.SlotMain;
+            var recorded = ConfigService.ReadConfig().GetRunning(slot);
             using var process = GetProcess(config, embedding);
             if (process == null)
             {
                 ConfigService.SaveSession(config, null, embedding);
+                if (recorded != null)
+                {
+                    // The desired end state (stopped) is already true. Report success and clean the
+                    // stale record instead of making the UI say "no service is managed for this slot".
+                    log?.Invoke("记录中的服务已退出，已清理运行记录。");
+                    return true;
+                }
                 log?.Invoke("当前没有由本工具管理的服务。");
                 return false;
             }

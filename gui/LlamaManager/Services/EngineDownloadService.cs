@@ -27,7 +27,10 @@ public static class EngineDownloadService
         Action<string> log, CancellationToken ct, Action<long, long?>? progress = null)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(destination))!);
-        var temp = destination + ".part";
+        // A unique temp name per attempt: the GUI, a second window and the CLI can download the
+        // same asset at once, and a shared ".part" made them fight over one FileShare.None handle
+        // (and let a failing attempt delete the other attempt's work). The final move stays atomic.
+        var temp = $"{destination}.{Environment.ProcessId}.{Guid.NewGuid():N}.part";
         try
         {
             log($"下载：{url}");
@@ -57,13 +60,30 @@ public static class EngineDownloadService
                 }
                 log("校验通过。");
             }
-            File.Move(temp, destination, overwrite: true);
+            await PublishAsync(temp, destination, ct).ConfigureAwait(false);
             return destination;
         }
         catch
         {
             try { if (File.Exists(temp)) File.Delete(temp); } catch { }
             throw;
+        }
+    }
+
+    /// <summary>
+    /// Publishes a verified download. Two sessions can finish the same asset at once, and Windows'
+    /// replace-existing move refuses the loser with a sharing/access-denied error even though both
+    /// payloads are identical and verified, so retry briefly instead of failing the download.
+    /// </summary>
+    private static async Task PublishAsync(string temp, string destination, CancellationToken ct)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try { File.Move(temp, destination, overwrite: true); return; }
+            catch (Exception ex) when (attempt < 8 && ex is IOException or UnauthorizedAccessException)
+            {
+                await Task.Delay(40 * (attempt + 1), ct).ConfigureAwait(false);
+            }
         }
     }
 
@@ -97,6 +117,85 @@ public static class EngineDownloadService
             count++;
         }
         return count;
+    }
+
+    /// <summary>
+    /// Publishes extracted files with same-volume renames. Existing targets are moved into the
+    /// caller-owned backup directory first; any failure restores every file already published.
+    /// This keeps an engine update from leaving a mixed old/new installation behind.
+    /// </summary>
+    public static int PublishStagedDirectories(
+        IReadOnlyList<(string StagingRoot, string DestinationRoot)> roots,
+        string backupRoot)
+    {
+        if (roots.Count == 0) return 0;
+        var files = new List<(string Staged, string Target, string Backup)>();
+        var targets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (var rootIndex = 0; rootIndex < roots.Count; rootIndex++)
+        {
+            var staging = Path.GetFullPath(roots[rootIndex].StagingRoot);
+            var destination = Path.GetFullPath(roots[rootIndex].DestinationRoot);
+            if (!Directory.Exists(staging)) continue;
+            foreach (var staged in Directory.EnumerateFiles(staging, "*", SearchOption.AllDirectories)
+                         .OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+            {
+                var relative = Path.GetRelativePath(staging, staged);
+                if (relative == ".." || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) ||
+                    Path.IsPathRooted(relative))
+                    throw new IOException("暂存文件越界：" + staged);
+                var target = Path.GetFullPath(Path.Combine(destination, relative));
+                if (!target.StartsWith(destination + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                    throw new IOException("安装目标越界：" + target);
+                if (Directory.Exists(target))
+                    throw new IOException("安装目标与本应替换的文件同名：" + target);
+                if (!targets.Add(target))
+                    throw new IOException("安装包包含重复目标：" + target);
+                var backup = Path.Combine(backupRoot, rootIndex.ToString(), relative);
+                files.Add((Path.GetFullPath(staged), target, Path.GetFullPath(backup)));
+            }
+        }
+
+        var published = new List<(string Target, string? Backup)>();
+        try
+        {
+            foreach (var file in files)
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(file.Target)!);
+                string? backup = null;
+                if (File.Exists(file.Target))
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(file.Backup)!);
+                    File.Move(file.Target, file.Backup);
+                    backup = file.Backup;
+                }
+                published.Add((file.Target, backup));
+                File.Move(file.Staged, file.Target);
+            }
+        }
+        catch (Exception failure)
+        {
+            var rollbackErrors = new List<Exception>();
+            for (var i = published.Count - 1; i >= 0; i--)
+            {
+                var (target, backup) = published[i];
+                try
+                {
+                    if (File.Exists(target)) File.Delete(target);
+                    if (backup != null && File.Exists(backup))
+                    {
+                        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                        File.Move(backup, target);
+                    }
+                }
+                catch (Exception rollback) { rollbackErrors.Add(rollback); }
+            }
+            if (rollbackErrors.Count > 0)
+                throw new IOException(
+                    "引擎文件替换失败，且自动回滚未能完整恢复；请重新运行初始化环境。",
+                    new AggregateException([failure, .. rollbackErrors]));
+            throw;
+        }
+        return published.Count;
     }
 
     /// <summary>Human-readable byte size for log lines.</summary>

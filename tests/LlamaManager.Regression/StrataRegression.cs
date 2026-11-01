@@ -193,6 +193,19 @@ internal static class StrataRegression
         File.Copy(Environment.ProcessPath!, Path.Combine(tokenizer, "llama-tokenize.exe"), true);
         var qwen35 = Path.Combine(root, "qwen35 model.gguf");
         File.WriteAllBytes(qwen35, Fixtures.StrataGguf());
+        var missingPackage = new ManagerConfig
+        {
+            Strata = new StrataConfig { PackageRoot = "", ModelPath = qwen35, Prompt = "hello" }
+        };
+        try
+        {
+            await StrataService.RunAsync(missingPackage);
+            throw new Exception("empty Strata package accepted");
+        }
+        catch (DirectoryNotFoundException ex)
+        {
+            Program.Check(ex.Message.Contains("Strata 包目录"), "empty package did not produce the friendly error");
+        }
         var config = new ManagerConfig { Strata = new StrataConfig { PackageRoot = package, ModelPath = qwen35, Prompt = "hello" } };
         ConfigService.SaveStrata(config);
 
