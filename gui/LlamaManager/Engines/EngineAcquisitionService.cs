@@ -42,12 +42,38 @@ public static class EngineAcquisitionService
     };
 
     /// <summary>Builds the install plan for a backend from a release, or null when unsupported.</summary>
-    public static EngineInstallPlan? PlanFor(string backendId, ReleaseInfo release, string managerRoot) => backendId switch
+    public static EngineInstallPlan? PlanFor(
+        string backendId,
+        ReleaseInfo release,
+        string managerRoot,
+        double? computeCapability = null) => backendId switch
     {
-        "llamacpp" => EngineCatalog.LlamaCppPlan(release, managerRoot, DetectComputeCapability()),
+        "llamacpp" => EngineCatalog.LlamaCppPlan(
+            release, managerRoot, computeCapability ?? DetectComputeCapability()),
         "polystrata" => EngineCatalog.PolyStrataPlan(release, managerRoot),
         _ => null,
     };
+
+    /// <summary>
+    /// Selects the newest release with an install plan for this machine. GPU capability is probed
+    /// once per check, not once per release, and the same selected plan is reused for installation.
+    /// </summary>
+    public static (ReleaseInfo Release, EngineInstallPlan Plan)? SelectLatestPlan(
+        string backendId,
+        JsonArray? releases,
+        string managerRoot)
+    {
+        if (releases == null) return null;
+        double? capability = backendId == "llamacpp" ? DetectComputeCapability() : null;
+        foreach (var node in releases)
+        {
+            if (node == null) continue;
+            var release = EngineCatalog.ParseRelease(node);
+            var plan = PlanFor(backendId, release, managerRoot, capability);
+            if (plan != null) return (release, plan);
+        }
+        return null;
+    }
 
     /// <summary>
     /// The GPU's compute capability (e.g. 7.5 for Turing), via nvidia-smi; 0 when unknown.
@@ -94,22 +120,12 @@ public static class EngineAcquisitionService
             ?? throw new InvalidOperationException($"无法获取 {repo} 的发布信息（网络或仓库不可用）。");
         // The newest release is not always the one with binaries (llama.cpp ships nightlies as
         // prereleases), so take the first release that actually yields a usable plan.
-        EngineInstallPlan? plan = null;
-        ReleaseInfo? chosen = null;
-        foreach (var node in releases)
-        {
-            if (node == null) continue;
-            var release = EngineCatalog.ParseRelease(node);
-            var candidate = PlanFor(backendId, release, ConfigService.GetManagerRoot());
-            if (candidate == null) continue;
-            plan = candidate;
-            chosen = release;
-            break;
-        }
-        if (plan == null || chosen == null)
+        var selected = SelectLatestPlan(backendId, releases, ConfigService.GetManagerRoot());
+        if (selected == null)
             throw new InvalidOperationException($"{repo} 的近期发布没有适用于本机的下载文件。");
-        log.Write($"选用版本：{chosen.Tag}");
-        return await InstallPlanAsync(plan, chosen.Tag, log, ct).ConfigureAwait(false);
+        log.Write($"选用版本：{selected.Value.Release.Tag}");
+        return await InstallPlanAsync(
+            selected.Value.Plan, selected.Value.Release.Tag, log, ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -234,17 +250,10 @@ public static class EngineAcquisitionService
 
         var releases = await ReleasesFetcher(repo, ct).ConfigureAwait(false)
             ?? throw new InvalidOperationException($"无法获取 {repo} 的发布信息（网络或仓库不可用）。");
-        string? latest = null;
-        foreach (var node in releases)
-        {
-            if (node == null) continue;
-            var release = EngineCatalog.ParseRelease(node);
-            if (PlanFor(backendId, release, ConfigService.GetManagerRoot()) == null) continue;
-            latest = release.Tag;
-            break;
-        }
-        if (latest == null)
+        var selected = SelectLatestPlan(backendId, releases, ConfigService.GetManagerRoot());
+        if (selected == null)
             throw new InvalidOperationException($"{repo} 的近期发布没有适用于本机的下载文件。");
+        var latest = selected.Value.Release.Tag;
 
         if (!DoctorService.IsOutdated(installed, latest))
         {
@@ -259,7 +268,7 @@ public static class EngineAcquisitionService
         }
 
         log.Write($"{backendId}：发现新版本 {latest}（本机 {installed}），开始更新…");
-        var engineDir = await AcquireAsync(backendId, log, ct).ConfigureAwait(false);
+        var engineDir = await InstallPlanAsync(selected.Value.Plan, latest, log, ct).ConfigureAwait(false);
         return new EngineUpdateResult(true, installed, latest, engineDir);
     }
 

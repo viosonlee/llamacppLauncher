@@ -35,16 +35,9 @@ public static class DoctorService
                 _ => "",
             };
             var releases = await EngineAcquisitionService.ReleasesFetcher(repo, ct).ConfigureAwait(false);
-            if (releases == null) return null;
-            foreach (var node in releases)
-            {
-                if (node == null) continue;
-                var release = EngineCatalog.ParseRelease(node);
-                if (backendId.Length > 0 &&
-                    EngineAcquisitionService.PlanFor(backendId, release, ConfigService.GetManagerRoot()) != null)
-                    return release;
-            }
-            return null;
+            if (backendId.Length == 0 || releases == null) return null;
+            return EngineAcquisitionService
+                .SelectLatestPlan(backendId, releases, ConfigService.GetManagerRoot())?.Release;
         };
 
     /// <summary>Runs every check. Network failures degrade that engine to "unavailable", not a crash.</summary>

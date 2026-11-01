@@ -104,9 +104,18 @@ internal static class DownloadRegression
         var oldConfig = ConfigService.ReadConfig();
         try
         {
-            EngineAcquisitionService.DetectComputeCapability = () => 8.6;
+            var capabilityProbes = 0;
+            EngineAcquisitionService.DetectComputeCapability = () =>
+            {
+                capabilityProbes++;
+                return 8.6;
+            };
             EngineAcquisitionService.ReleasesFetcher = (_, _) => Task.FromResult<JsonArray?>(JsonNode.Parse("""
             [
+              {
+                "tag_name": "b12021",
+                "assets": []
+              },
               {
                 "tag_name": "b12020",
                 "assets": [
@@ -123,6 +132,7 @@ internal static class DownloadRegression
             Equal("b12020", current.InstalledVersion);
             Equal("b12020", current.LatestVersion);
             Equal<string?>(null, current.SkippedReason);
+            Equal(1, capabilityProbes);
 
             File.WriteAllText(marker, "");
             var releaseRequested = false;
