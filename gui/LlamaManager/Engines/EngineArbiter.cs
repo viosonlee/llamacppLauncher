@@ -41,7 +41,12 @@ public static class EngineArbiter
         try
         {
             using var process = Process.GetProcessById(session.ProcessId);
-            return !process.HasExited;
+            if (process.HasExited) return false;
+            // A PID can be reused after a crash. Compare the OS creation time when the record has
+            // one, but deliberately skip the engine path: users may move an installation while
+            // the already-started process is still using it.
+            return session.StartTimeUtcTicks <= 0
+                || process.StartTime.ToUniversalTime().Ticks == session.StartTimeUtcTicks;
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
         {

@@ -171,6 +171,19 @@ internal static class EnginesRegression
             Equal("llamacpp", EngineArbiter.ActiveGpuBackend(config));
             Check(EngineArbiter.ConflictFor(config, "llamacpp") == null, "llamacpp conflicts with itself");
             Check(EngineArbiter.ConflictFor(config, "polystrata") == "llamacpp", "live llama.cpp did not conflict with polystrata");
+
+            // Once creation time is recorded, a recycled PID must not inherit the old session.
+            var reused = new ManagerConfig();
+            reused.SetRunning(ManagerConfig.SlotMain, new ServerSession
+            {
+                ProcessId = self.Id,
+                StartTimeUtcTicks = self.StartTime.ToUniversalTime().Ticks + 1,
+                EnginePath = "llama-server.exe",
+                ModelPath = "m.gguf",
+                Port = 8080,
+            });
+            Check(EngineArbiter.ActiveGpuBackend(reused) == null, "a mismatched process creation time still claims the GPU");
+            EngineArbiter.EnsureCanStart(reused, "polystrata"); // must not throw
         }
 
         // A record left by a crash, power loss or manual kill must not claim the card (DEF-10).
