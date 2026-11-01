@@ -1,98 +1,135 @@
-# 会话交接文档（PROGRESS-HANDOFF）
+# LlamaManager 阶段交接（PROGRESS-HANDOFF）
 
-> 更新时间：2026-10-18 21:25（Asia/Tokyo）· 会话由 goal_round 驱动，本文件是下一轮会话的入口。
-> 目标状态：**已暂停**（见文末）。恢复时先读本文件与 `git log --oneline -10`。
+> 更新时间：2026-11-01 18:20（Asia/Tokyo）
+> 本阶段目标已完成并按用户要求暂停。恢复时先读本文件，再执行 `git log --oneline -10`。
 
-## 一、项目当前状态（截至 HEAD `89ef56f`）
-
-仓库：`C:\llama-b9822-bin-win-cuda-13.3-x64\llamacppLauncher`，主分支 == origin/main，工作树干净。
+## 一、当前版本与工作区
 
 | 项 | 状态 |
 |---|---|
-| 构建 | `dotnet build LlamaManager.sln -c Release` 0 警告 0 错误 |
-| 回归 | **75 passed, 0 failed**（console runner，非 dotnet-test）|
-| docs-gate | 56 条需求通过（`pwsh -File tools\docs-gate.ps1`）|
-| dist | 已发布（含全部本轮功能），`--check-published` PASS |
-| 运行服务 | polystrata 在 8080（Ornith-1.5-35B · threads 8 · tail-skip 6 · context 131072）|
+| 工作树 | `/home/vioson/.codex/worktrees/launcher-polish-iteration/llamacppLauncher` |
+| Windows 路径 | `\\wsl.localhost\Debian\home\vioson\.codex\worktrees\launcher-polish-iteration\llamacppLauncher` |
+| 分支 | `codex/launcher-polish-iteration` |
+| HEAD | `4f32071`（已与 origin 同步） |
+| 基线 | `d57ad11`（origin/main） |
+| 本阶段提交 | **功能/修复 5 笔**；加本交接文档共 **6 笔** |
+| 正式安装 | `C:\llama-b9822-bin-win-cuda-13.3-x64\llamacppLauncher\dist` |
 
-## 二、本阶段（第 1–6 轮）完成的工作
+主工作区 `C:\llama-b9822-bin-win-cuda-13.3-x64\llamacppLauncher` 仍停在 `d57ad11`，
+并且在会话开始前就有未提交的源码/文档改动。本阶段没有回退、覆盖或清理这些既有改动；
+部署只更新了根目录 `llama-manager.ps1` 以及 `dist` 中的 EXE/PDB。下次合入前必须先审阅这些
+主工作区改动，不能直接 `reset` 或强拉正式分支。
 
-按提交倒序，每项都有回归测试与文档记录：
+## 二、本阶段完成的工作
 
-1. **`89ef56f` 参数实测对比（REQ-117）**：参数页「实测对比…」按钮。计划格式 `标签|参数`（每行一组），
-   每组独占端口（8095 起）启动独立 llama-server，同提示测 TTFT/tok/s，结果写日志页（均值/最差/★）。
-   报告带显存快照（实测验证时发现：poly 占 5 GB 显存时数字低一半且不可比）。MoE 模型预填
-   `--n-cpu-moe 26/30/34` 梯度。CLI：`--benchmark <model> <runs> <plan文件>`。
-   真实验证：moe 26 = 11.76 vs moe 30 = 15.79 tok/s（方向与历史校准一致）。
-2. **`a8f051d` 模型一键下载（REQ-116）**：空模型列表 →「下载推荐模型…」→ 内置目录 5 个单文件
-   GGUF（显存升序）。**所有链接经 HTTP 200 验证、字节数取自 CDN 头**（第一版有个 404 被实测抓住）。
-   防护：磁盘预检（2 GiB 余量）、下载后 GGUF 头校验、同名同大小跳过/不同大小重下。
-   目标遵循用户 ModelsDirectory。CLI：`--download-model <名称|序号>`。真实下载验证过（806 MB）。
-3. **`1e63a26` MoE 预设按专家字节规划（REQ-115）**：旧逻辑把整个文件当显存需求砍 `-ngl`（13 GiB A3B
-   在 6 GiB 卡上得到近纯 CPU 起点）。新逻辑 `-ngl 999 --n-cpu-moe N`：显存减计算预留（768 MiB）与
-   KV 缓存后装专家（文件 91%），N=装不下的层数。校准锚点：本机实测边界 26、最快 30，公式给 28。
-   顺带修遥测边界：`generating` 且 `generated=0` 不再误报 idle。
-4. **`5da92ca` 修复两个指名缺陷（REQ-114）**：
-   - 界面看不到速度：根因①顶部条 StackPanel 裁剪溢出（速度被挤出窗口外，所有引擎）→ 改三行布局，
-     速度徽章独占 Grid 列，UI 回归断言徽章不超卡片；根因②poly `/slots` 无 token 计数 → 新增
-     `PolyMetricsService` 读 `/metrics`（live 状态机 + 窗口化 tok/s + 完成请求环 + 专家缓存 + 硬件）。
-   - poly 日志不更新：引擎不写逐请求日志 → 启动器按 `requests[].time` 去重写「请求完成」行
-     （含草稿接受率），poly 启停写持久日志。
-   - 加固：日志读取失败不再拖垮状态轮询、日志页轮询开头刷新、清空后可重新填充、
-     消失的进程不再显示为运行中（`ServerService.IsSessionAlive`）。
-   - 修复发布级 bug：3 个 ps1 丢 UTF-8 BOM 导致 PowerShell 5.1 解析失败（`--check-published` 抓住）。
-5. **`8056b7a` 测试补全 + 文档纠错**（前一会话）：回归 61→68，9 处文档事实错误修正。
+按提交顺序：
 
-## 三、验证命令（全绿才算一轮完成）
+1. **`18ef9dc feat: harden launcher workflows and polish daily use`**
+   - 界面与日常操作：左侧导航增加中文标签；模型搜索/排序/空结果提示；窗口大小、位置和
+     最大化状态持久化；常用快捷键；日志长行自动换行。
+   - 服务与安全：主服务端口统一为 8080；实测使用隔离临时端口；GPU 重负载互斥下沉到共享
+     启动入口，GUI、CLI 和自启动不能绕过。
+   - 更新与一致性：引擎更新改为运行中拒绝、同卷暂存、逐文件事务发布和失败回滚；llama.cpp
+     更新检查读取真实 nightly build 号。
+   - 数据稳定性：孤儿预设重绑定不再从后台线程修改共享配置；并发下载各写独立临时文件；
+     日志 reader、签名缓存和 CUDA 探测缓存有界；mmproj/draft 多候选选择确定化并避免错配。
+   - 文档与测试：同步扩充需求、架构、决策和 `KNOWN-DEFECTS`；回归扩展到 **87 项**。
+
+2. **`b25d703 fix: prevent recycled PIDs from claiming the GPU`**
+   - GPU 会话在记录含创建时间时校验 PID + 创建时间，避免崩溃后 PID 被其它进程复用而误占显卡。
+   - 保留“不比较引擎路径”的既有决策，用户移动安装目录后仍在运行的会话不会被误判退出。
+   - 更新 REQ-127、决策记录、缺陷文档和针对性回归。
+
+3. **`83bd1ce perf: reuse engine capability and selected release plans`**
+   - 整批 release 选择只探测一次本机 GPU 计算能力，不再为每个候选重复启动 `nvidia-smi`。
+   - 落后引擎更新直接复用比较阶段已选中的发布计划，避免二次查询 GitHub 和版本漂移。
+   - 更新 REQ-133/REQ-136、决策记录和 update/doctor 回归。
+
+4. **`7431a5f ui: show why start is blocked during model scanning`**
+   - 模型扫描开始时立即禁用主启动按钮，并通过提示明确原因；扫描结束后按真实状态恢复。
+   - 更新 REQ-138、决策记录和 WPF 回归。
+
+5. **`4f32071 fix: make PowerShell wrapper wait for WinExe CLI`**
+   - 实测发现 Windows PowerShell 5.1 不允许把 GUI 子系统的 `LlamaManager.exe` 放入管道，
+     原包装脚本的 `-Start/-Status/-Stop` 会直接报“无法在管道中间运行文档”。
+   - 改为 `Start-Process -PassThru` + 临时 stdout/stderr 文件 + 进程对象 `WaitForExit()`；
+     只等待启动器本身，不会让 `--start` 连带等待常驻模型服务；保留 UTF-8 输出、退出码和
+     含空格模型路径，并按 Windows 命令行规则转义参数。
+   - 更新 REQ-104、决策记录、DEF-26 和发布冒烟。
+
+每笔功能/修复提交都同步更新了需求、决策和缺陷记录，并执行了对应测试后再提交、推送。
+
+## 三、验证证据
+
+| 验证 | 结果 |
+|---|---|
+| Release 构建 | `0` 警告，`0` 错误 |
+| 完整回归（功能代码 `7431a5f`） | **87 passed / 0 failed，连续两次** |
+| 文档门禁 | **78 条需求通过** |
+| 暂存发布包 `--check-published` | PASS |
+| 正式 `dist` 发布包 `--check-published` | PASS |
+| 包装脚本 PowerShell 5.1 语法检查 | PASS |
+| 测试后残留 LlamaManager/llama-server/strata-poly/Python 服务 | 0 |
+
+发布冒烟实际覆盖：发布 EXE 的 help/service/status/stop，以及 PowerShell 包装的
+`-Start/-Status/-Stop`，模型路径包含空格。最终输出：
+
+```text
+PASS published EXE help/service/status/stop and PowerShell wrapper with spaces
+```
+
+`4f32071` 只改 PowerShell 包装器和文档，没有改 C# 二进制；因此完整 C# 回归保留
+`7431a5f` 的连续两次 87/0 证据，新增包装行为由发布冒烟直接验证。
+
+## 四、正式部署记录
+
+- 新 EXE SHA-256：`b474cdb46249299cacefb9e5bdb3aae3e5bbcf6849b78f2594f80f82e2669671`
+- 新 PDB SHA-256：`a4d05d3b67d2170ca23c69d4a1855d9c7f56b8da4e2387dbd1ee152daadce5b7`
+- 新包装脚本 SHA-256：`c0baf8ae0039450d2d5d153041baea090355cdd0d91e7bcbbdc376f95d2de1f0`
+- 备份目录：`dist\.backup-20261101-181818-4f32071`
+- 备份内容：旧 `LlamaManager.exe`、`LlamaManager.pdb`、`llama-manager.ps1`
+
+部署只替换上述文件；用户配置、运行会话、日志、模型、引擎、插件和 `dist` 下的数据目录
+均未改写。部署前确认没有 LlamaManager、llama-server、strata-poly 或 Python 服务进程运行。
+正式包冒烟使用隔离 `LLAMA_MANAGER_ROOT` 和 fake server，没有占用或停止用户的 8080 服务。
+
+## 五、验证命令
+
+在 Windows NTFS 路径运行；回归不能把测试输出复制到回归 `run/` 目录，否则会递归复制。
 
 ```powershell
 dotnet build LlamaManager.sln -c Release
 dotnet run --project tests/LlamaManager.Regression -c Release
 pwsh -File tools/docs-gate.ps1
-dotnet publish gui/LlamaManager/LlamaManager.csproj -c Release -r win-x64 --self-contained true -o dist
-dotnet run --project tests/LlamaManager.Regression -c Release --no-build -- --check-published "<绝对路径>\dist\LlamaManager.exe"
+dotnet publish gui/LlamaManager/LlamaManager.csproj -c Release -r win-x64 --self-contained true -o <临时发布目录>
+dotnet run --project tests/LlamaManager.Regression -c Release --no-build -- --check-published "<绝对路径>\LlamaManager.exe"
 ```
 
-约定：文档/行为改动必须过 docs-gate 再提交；PowerShell 脚本 UTF-8 **BOM**；
-不提交 config/logs/engines/models/dist；**不要停用户的 8080 服务**；回归用隔离 root，安全。
+约定：行为或文档改动先通过对应回归与 docs-gate，再提交、推送；PowerShell 文件保持 UTF-8 BOM；
+不提交 config/logs/models/engines/dist；普通回归不得停止用户真实服务。
 
-## 四、诊断 CLI（本阶段新增，调试用）
+## 六、已知边界与风险
 
-```
---read-live-speed <backendId>   # 打印状态行 + 遥测（对真实服务）
---probe-logs <backendId>        # 打印日志页将渲染的全部内容
---download-model <名称|序号>    # 真实下载目录里的模型（注意磁盘占用，用完删）
---benchmark <model> <runs> <plan文件>  # 真实 A/B 实测（独占 8095+，注意显存）
---invoke-cli <...>              # 透传 CommandLineService
-```
+- 主工作区原有未提交改动尚未审阅/合入；这是恢复工作时最优先处理的版本管理事项。
+- 正式发布冒烟使用 fake server，不等同于三个真实引擎的完整人工对话验收；REQ-071 仍为部分完成。
+- 引擎更新能对普通失败回滚，但不宣称断电级原子性；进程在提交阶段被强杀仍可能留下暂存/备份目录。
+- 端口探测已避免 Windows 监听表延迟，但异常安全软件/驱动行为仍需真实机器观察。
+- GUI 美观度、低配机器线程默认值、不同 GPU/模型组合仍应以真实使用数据继续调优。
 
-## 五、下一阶段候选（按价值排序）
+## 七、下一阶段候选
 
-1. **实测对比接入遥测过程数据**：现在每组只有完成后的 tok/s；`/metrics` 的 live 窗口速率、
-   显存峰值、草稿接受率可以进报告，做成小表格（对 MoE 调优直接有用）。
-2. **poly 的实测对比**：REQ-117 只支持 llama.cpp。poly 改参数要经 runconfig + 重启，可以
-   复用 `StrataBackend.StartAsync`，但先要想清楚端口/显存独占策略。
-3. **实测对比预设化**：把测出来的最优参数一键写回当前模型预设（现在要手动抄）。
-4. **`AutostartService` 抽接口补单测**：最后一个无单测的服务（注册表/schtasks）。
-5. **嵌入服务模型下载**：模型目录里没有 bge-m3 时嵌入页是死路，可挂进 ModelCatalog。
-6. **待确认的小疑点**：`SpeedTestService` 的 `chat_template_kwargs.enable_thinking` 对不支持
-   该模板的模型是否报错（Gemma 4 无思考模板）——实测对比对这类模型可能全失败。
+1. 先审阅并提交主工作区原有改动，再将 `codex/launcher-polish-iteration` 合并回 `main`；
+   合并后重新跑构建、87 项回归、docs-gate 和正式发布冒烟。
+2. 用真实 GUI 对三个内置引擎做一轮日常操作验收：搜索模型、开始/停止、日志、快捷键、
+   窗口恢复、嵌入服务和错误提示。
+3. 实测对比接入过程遥测（live tok/s、显存峰值、草稿接受率），并把最优参数一键写回预设。
+4. 为 PolyStrata 做独立实测对比，明确端口、显存独占和重启清理策略。
+5. 给 `AutostartService` 抽接口并补单元测试，覆盖注册表/计划任务不可用的失败路径。
+6. 清理过旧 `dist/.backup-*` 前先确认当前版本稳定；不要删除最近一次
+   `.backup-20261101-181818-4f32071`。
 
-## 六、已知边界（非 bug，但要知道）
+## 八、目标状态
 
-- 实测对比会受显存共享影响：报告已带显存快照，但要给出干净数字，先停其它引擎。
-- 默认模型目录 = llama-server.exe 旁的 `models/`（自 10 月 3 日即如此，四处一致，**有意为之**，
-  上轮疑点已解除）。用户配置了 ModelsDirectory 则完全遵循配置。
-- polystrata 引擎本身不写逐请求日志（无 verbose 选项），日志页的「请求完成」行是启动器
-  从 `/metrics` 合成的——这是设计，不是缺陷。
-- `EngineCatalog` 仍保留 Prism 相关代码（Prism 模型识别/服务器路径），是活代码不是遗留。
-
-## 七、目标暂停
-
-goal_round 目标：自我迭代（易用/好调试/多机型适配）+ 修复速度显示与 poly 日志。
-两项指名缺陷已在 `5da92ca` 修复并验证；目标整体**未宣告完成**（界面打磨与多机型调优
-是无终点项），按用户指示暂停。恢复时：
-1. 读本文档 + `git log --oneline -10`；
-2. 跑一遍「三、验证命令」确认基线仍绿；
-3. 从「五、下一阶段候选」按序取任务；
-4. 循环：改 → 测 → docs-gate → 提交 → 推送。
+用户要求“完成这个阶段后暂停目标”。本阶段已完成代码迭代、测试、5 笔功能/修复提交推送、正式本机部署
+和交接文件；交接文档作为第 6 笔提交推送。恢复时从「下一阶段候选」第 1 项开始，
+不自动继续新功能。
