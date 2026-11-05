@@ -1,7 +1,9 @@
 using System.Diagnostics;
 using System.IO;
 using System.Management;
+using System.Net;
 using System.Net.Http;
+using System.Net.Sockets;
 using LlamaManager.Models;
 
 namespace LlamaManager.Services;
@@ -241,6 +243,35 @@ public static class ServerService
     public static bool TestPortInUse(int port) =>
         System.Net.NetworkInformation.IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpListeners().Any(l => l.Port == port);
 
+    /// <summary>
+    /// Probes the requested bind address without changing the configured port. Listener enumeration
+    /// misses Windows port exclusions. Hostnames are left to the engine's resolver so this check
+    /// never performs blocking DNS/WMI on the UI dispatcher.
+    /// </summary>
+    public static string? PortUnavailableReason(int port, string? host = null)
+    {
+        if (port is < 1 or > 65535) throw new ArgumentOutOfRangeException(nameof(port));
+        if (string.IsNullOrWhiteSpace(host) || host.Equals("localhost", StringComparison.OrdinalIgnoreCase))
+            host = "127.0.0.1";
+        if (!IPAddress.TryParse(host, out var address)) return null;
+        var listener = new TcpListener(address, port) { ExclusiveAddressUse = true };
+        try
+        {
+            listener.Start();
+            return null;
+        }
+        catch (SocketException ex) { return PortBindFailureReason(port, ex.SocketErrorCode); }
+        finally { listener.Stop(); }
+    }
+
+    /// <summary>Pure error mapping, testable without reserving ports or changing Windows networking.</summary>
+    public static string PortBindFailureReason(int port, SocketError error) => error switch
+    {
+        SocketError.AddressAlreadyInUse => $"端口 {port} 已被占用。请先停止占用服务；不会自动切换服务端口。",
+        SocketError.AccessDenied => $"端口 {port} 无法绑定：权限不足或处于 Windows 保留端口段内（常见于 Hyper-V/WSL）。请检查权限或保留范围；不会自动切换服务端口。",
+        _ => $"端口 {port} 无法绑定（{error}）。",
+    };
+
     public static async Task<bool> TestApiReadyAsync(int port, CancellationToken ct = default)
     {
         try
@@ -296,7 +327,8 @@ public static class ServerService
             }
             else
             {
-                if (TestPortInUse(port)) throw new InvalidOperationException($"端口 {port} 已被占用。{DescribePortOccupant(port)}");
+                var portProblem = PortUnavailableReason(port, parsed.Get("--host"));
+                if (portProblem != null) throw new InvalidOperationException(portProblem);
                 log?.Invoke($"启动 {engine} {args}");
                 process = DetachedProcess.Start(engine, args,
                     embedding ? ConfigService.GetEmbeddingStdoutPath() : ConfigService.GetMainStdoutPath(),

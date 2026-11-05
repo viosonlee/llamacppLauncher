@@ -457,6 +457,8 @@ public partial class MainWindow
     private void ApplyEngineParameter(IEngineBackend backend, ParameterSpec spec, Control control, string? explicitValue = null)
     {
         var value = explicitValue ?? ReadControlValue(control, spec);
+        // ReadControlValue normalizes Decimal values for both per-edit and whole-panel saves.
+        if (spec.Type == ParamType.Decimal) value = value.Trim().Replace(',', '.');
         var settings = _config.Engines.GetValueOrDefault(backend.Descriptor.Id) ?? new EngineSettings();
         settings.Parameters[spec.Key] = value;
         var model = EngineModelFor(backend);
@@ -641,12 +643,14 @@ public partial class MainWindow
         if (string.IsNullOrWhiteSpace(value)) return null;
         var text = value.Trim();
         // -ngl also accepts "all" / "auto", which are not numbers at all.
-        if (text is "all" or "auto") return null;
+        if (text is "all" or "auto" && spec.Choices?.Any(c => c.Value == text) == true) return null;
         var allowFraction = spec.Type == ParamType.Decimal;
         if (allowFraction)
         {
-            if (!double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var real))
-                return "需要一个数字";
+            // Match the input filter, which accepts a comma decimal: compare on the normalized form.
+            if (!double.TryParse(text.Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out var real)
+                || !double.IsFinite(real))
+                return "需要一个有限数字（小数可用 . 或 ,）";
             if (spec.Min != null && real < spec.Min) return $"不能小于 {spec.Min}";
             if (spec.Max != null && real > spec.Max) return $"不能大于 {spec.Max}";
             return null;
@@ -681,8 +685,8 @@ public partial class MainWindow
             "servePort" =>
                 "【服务端口 (servePort)】\n" +
                 "• 作用：Strata HTTP API 监听的端口。外部客户端（如 Claude Code、Codex、沉浸式翻译等）通过此端口连接模型。\n" +
-                "• 默认建议：8091（已自动避开 llama.cpp 默认的 8080 端口）。\n" +
-                "• 调优说明：若与其他软件冲突，可修改为 1024–65535 范围内的任意空闲端口。",
+                "• 默认建议：8080（与 llama.cpp 统一，切换引擎无需修改 agent 配置）。\n" +
+                "• 同一端口不能双开服务，请先停止旧引擎；程序不会自动更换端口。",
 
             "host" =>
                 "【监听地址 (host)】\n" +
@@ -823,7 +827,7 @@ public partial class MainWindow
     /// <summary>Reads the engine-facing value out of whichever control a spec produced.</summary>
     private static string ReadControlValue(Control control, ParameterSpec spec) => control switch
     {
-        TextBox textBox => textBox.Text,
+        TextBox textBox => spec.Type == ParamType.Decimal ? textBox.Text.Trim().Replace(',', '.') : textBox.Text,
         ComboBox combo => ChoiceValue(combo, spec.Default ?? ""),
         ToggleButton toggle => toggle.IsChecked == true ? "1" : "0",
         _ => spec.Default ?? "",

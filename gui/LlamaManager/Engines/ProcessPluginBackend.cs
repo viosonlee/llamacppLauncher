@@ -171,8 +171,10 @@ public sealed class ProcessPluginBackend : IServerBackend
     {
         var plan = BuildLaunch(request);
         var port = ResolvePort(request);
-        if (port > 0 && ServerService.TestPortInUse(port))
-            throw new InvalidOperationException($"端口 {port} 已被占用。请改用其它端口。");
+        var portProblem = port > 0
+            ? ServerService.PortUnavailableReason(port, new LauncherArguments(string.Join(" ", plan.Arguments.Select(LauncherArguments.Quote))).Get("--host"))
+            : null;
+        if (portProblem != null) throw new InvalidOperationException(portProblem);
         var args = string.Join(" ", plan.Arguments.Select(LauncherArguments.Quote));
         log.Write($"启动插件引擎 {_manifest.Id}：{plan.FileName} {args}");
         var logName = _manifest.Id;

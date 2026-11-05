@@ -294,6 +294,8 @@ internal static class Program
                 EnginesRegression.RunEmbeddingAsync(_root, _model));
             await Test("engines: registry resolution and GPU arbitration", () =>
                 Run(EnginesRegression.RunRegistryAndArbiter));
+            await Test("engines: port probe distinguishes busy, free and service ports", () =>
+                Run(EnginesRegression.RunPortProbe));
             await Test("strata backend: launches serve.server with a generated runconfig", () =>
                 StrataBackendRegression.RunLaunchAsync(_root, _model));
             await Test("strata backend: resolvers report honest problems", () =>
@@ -777,6 +779,8 @@ internal static class Program
                 Check(rendered.Contains("预填 210 tok/s") && rendered.Contains("草稿 78%") &&
                     rendered.Contains("显存峰 5,900 MiB"), "telemetry not rendered: " + rendered);
             });
+            await Test("benchmark: failure and cancellation preserve the existing service", () =>
+                BenchmarkRegression.RunFailureAndCancellationAsync(_model));
             await Test("lifecycle: server start truncates the shared stderr log", async () =>
             {
                 var log = ConfigService.GetMainStderrPath();

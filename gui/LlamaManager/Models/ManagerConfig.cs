@@ -167,7 +167,7 @@ public class StrataConfig
 
     /// <summary>服务端口（HTTP API 端口）。</summary>
     [JsonPropertyName("ServePort")]
-    public int ServePort { get; set; } = 8091;
+    public int ServePort { get; set; } = 8080;
 
     /// <summary>reasoning 预算（0 = 不限制）。</summary>
     [JsonPropertyName("ReasoningBudgetTokens")]

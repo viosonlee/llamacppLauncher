@@ -343,6 +343,39 @@ internal static class UiRegression
                 Program.Check(strataBackend.Parameters.Any(p => p.Advanced), "no advanced parameters to fold");
                 Program.Check(strataBackend.Parameters.All(p => !string.IsNullOrWhiteSpace(p.EffectiveHelp)),
                     "a parameter has no help text for its '?' button");
+
+                // Decimal input, whole-panel saving and model presets must all use the same
+                // normalization; a SaveEngineParameters call used to overwrite the per-edit dot.
+                var validate = typeof(MainWindow).GetMethod("ValidateValue", BindingFlags.Static | BindingFlags.NonPublic)!;
+                var savePanel = typeof(MainWindow).GetMethod("SaveEngineParameters", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                var biasSpec = strataBackend.Parameters.Single(p => p.Key == "cacheBias");
+                var before = ConfigService.ReadConfig().Engines.GetValueOrDefault("polystrata") ?? new EngineSettings();
+                var culture = System.Globalization.CultureInfo.CurrentCulture;
+                try
+                {
+                    foreach (var name in new[] { "zh-CN", "de-DE", "en-US" })
+                    {
+                        System.Globalization.CultureInfo.CurrentCulture = new System.Globalization.CultureInfo(name);
+                        var biasBox = ParamText(window, "cacheBias");
+                        biasBox.Text = "0,5";
+                        Program.Check(validate.Invoke(null, [biasSpec, biasBox.Text]) == null, "comma decimal was rejected in " + name);
+                        Program.Equal("0.5", ConfigService.ReadConfig().Engines["polystrata"].Parameters["cacheBias"]);
+                        Program.Check((bool)savePanel.Invoke(window, [strataBackend])!, "valid decimal blocked panel save");
+                        Program.Equal("0.5", ConfigService.ReadConfig().Engines["polystrata"].Parameters["cacheBias"]);
+                        biasBox.Text = "0.3";
+                        Program.Equal("0.3", ConfigService.ReadConfig().Engines["polystrata"].Parameters["cacheBias"]);
+                    }
+                    foreach (var invalid in new[] { "NaN", "Infinity", "auto", "2.5", "0,1,2" })
+                        Program.Check(validate.Invoke(null, [biasSpec, invalid]) != null, "invalid decimal accepted: " + invalid);
+                    ParamText(window, "cacheBias").Text = "2.5";
+                    Program.Check(!(bool)savePanel.Invoke(window, [strataBackend])!, "out-of-range bias did not block panel save");
+                    ParamText(window, "cacheBias").Text = "0";
+                }
+                finally
+                {
+                    System.Globalization.CultureInfo.CurrentCulture = culture;
+                    ConfigService.SaveEngineSettings(ConfigService.ReadConfig(), "polystrata", before);
+                }
                 // Model-dependent fields live on llama.cpp's panel (MoE offload, MTP, draft model);
                 // that is where the VisibleWhen vocabulary has to stay wired to real specs.
                 var llamaBackend = LlamaManager.Engines.BackendRegistry.ServerById("llamacpp")!;

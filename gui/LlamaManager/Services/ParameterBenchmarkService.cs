@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.IO;
-using System.Net.Http;
+using System.Net;
+using System.Net.Sockets;
+using LlamaManager.Models;
 
 namespace LlamaManager.Services;
 
@@ -79,9 +81,6 @@ public sealed record BenchmarkReport(
 /// </summary>
 public static class ParameterBenchmarkService
 {
-    /// <summary>The port range the sweep uses; deliberately outside the configured service ports.</summary>
-    public const int BasePort = 8095;
-
     /// <summary>Parses the sweep plan out of a raw multi-line benchmark description.</summary>
     public static IReadOnlyList<(string Label, string Args)> ParsePlan(string? description)
     {
@@ -115,10 +114,11 @@ public static class ParameterBenchmarkService
         var engine = ConfigService.GetLlamaServerPath(modelPath);
         if (!File.Exists(engine)) throw new FileNotFoundException("未找到 llama-server.exe。", engine);
 
-        // A foreign listener on our ports would poison the measurements or fail to bind.
-        for (var i = 0; i < plan.Count; i++)
-            if (ServerService.TestPortInUse(BasePort + i))
-                throw new InvalidOperationException($"端口 {BasePort + i} 已被占用，实测需要独占它。");
+        // Ports come from the OS instead of a fixed base: a fixed 8095 sits inside Hyper-V/WSL
+        // reserved ranges on some machines, where no listener shows yet every bind is refused.
+        // The configured service ports (the 8080 the agents point at) are never borrowed.
+        var config = ConfigService.ReadConfig();
+        var ports = AllocatePorts(plan.Count, ServicePorts(config), ct);
 
         // VRAM shared with another engine changes every number: record it so a result set that
         // was measured next to a busy GPU is not mistaken for a clean one.
@@ -135,7 +135,7 @@ public static class ParameterBenchmarkService
         {
             ct.ThrowIfCancellationRequested();
             var (label, args) = plan[index];
-            var port = BasePort + index;
+            var port = ports[index];
             var parsed = new LauncherArguments(args);
             var fullArgs = parsed.Set("-m", modelPath);
             fullArgs = new LauncherArguments(fullArgs).Set("--port", port.ToString());
@@ -154,6 +154,9 @@ public static class ParameterBenchmarkService
             Task<int>? sampler = null;
             try
             {
+                ct.ThrowIfCancellationRequested();
+                var portProblem = ServerService.PortUnavailableReason(port);
+                if (portProblem != null) throw new InvalidOperationException(portProblem);
                 process = DetachedProcess.Start(engine, fullArgs, stdout, stderr);
                 await WaitReadyAsync(process, index, port, label, log, ct).ConfigureAwait(false);
                 // Sample VRAM in the background while the variant answers, so the report shows how
@@ -186,8 +189,17 @@ public static class ParameterBenchmarkService
                 if (sampler != null) peakVram = await sampler.ConfigureAwait(false);
                 if (process != null)
                 {
-                    try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch { }
-                    process.Dispose();
+                    try
+                    {
+                        if (!process.HasExited) process.Kill(entireProcessTree: true);
+                        using var stopDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                        await process.WaitForExitAsync(stopDeadline.Token).ConfigureAwait(false);
+                    }
+                    catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or OperationCanceledException)
+                    {
+                        log($"[{label}] 清理进程失败：{ex.Message}");
+                    }
+                    finally { process.Dispose(); }
                 }
             }
             measured.Add(new BenchmarkVariant(label, args, decode, ttft)
@@ -196,6 +208,53 @@ public static class ParameterBenchmarkService
             });
         }
         return new BenchmarkReport(measured, errors, vramNote);
+    }
+
+    /// <summary>
+    /// Distinct free loopback ports handed out by the OS, skipping the user's configured service
+    /// ports and reserving the whole list before release. A bounded retry count and cancellation
+    /// prevent allocator loops on an exhausted machine. The pre-launch check narrows, but cannot
+    /// eliminate, the handoff race between releasing the listener and binding in the engine.
+    /// </summary>
+    public static IReadOnlyList<int> AllocatePorts(int count, IReadOnlySet<int> avoid, CancellationToken ct = default)
+    {
+        if (count is < 0 or > 65535) throw new ArgumentOutOfRangeException(nameof(count));
+        var ports = new HashSet<int>();
+        var listeners = new List<TcpListener>();
+        try
+        {
+            var attempts = 0;
+            var maxAttempts = (long)count * 16 + 64;
+            while (ports.Count < count)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (++attempts > maxAttempts) throw new IOException("无法分配足够的独立测速端口，请检查可用端口范围。");
+                var listener = new TcpListener(IPAddress.Loopback, 0) { ExclusiveAddressUse = true };
+                listeners.Add(listener);
+                listener.Start();
+                var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+                if (!avoid.Contains(port)) ports.Add(port);
+            }
+            return ports.ToList();
+        }
+        finally { foreach (var listener in listeners) listener.Stop(); }
+    }
+
+    /// <summary>Service endpoints, including raw-argument overrides and live sessions, are never borrowed.</summary>
+    public static IReadOnlySet<int> ServicePorts(ManagerConfig config)
+    {
+        var ports = new HashSet<int> { 8080, config.Port, config.EmbeddingPort, config.Strata.ServePort };
+        try { ports.Add(new LauncherArguments(config.Args).GetPort(config.Port)); }
+        catch (ArgumentException) { /* Keep the configured fallback even if the editable args are incomplete. */ }
+        foreach (var session in config.Running.Values) ports.Add(session.Port);
+        foreach (var settings in config.Engines.Values)
+        {
+            ports.Add(settings.Port);
+            foreach (var key in new[] { "port", "servePort" })
+                if (settings.Parameters.TryGetValue(key, out var text) && int.TryParse(text, out var port)) ports.Add(port);
+        }
+        ports.RemoveWhere(p => p is < 1 or > 65535);
+        return ports;
     }
 
     /// <summary>Polls the GPU's used VRAM until cancelled and returns the highest value seen.</summary>
@@ -236,7 +295,13 @@ public static class ParameterBenchmarkService
             {
                 var tail = LogService.ReadFileTail(
                     Path.Combine(ConfigService.GetManagerRoot(), "logs", $"benchmark-{index}.stderr.log"), 8);
-                throw new InvalidOperationException($"变体进程提前退出（{process.ExitCode}）。{string.Join("\n", tail)}");
+                // Detached processes are attached by PID, not Process.Start; .NET may be unable
+                // to retrieve their exit code once the native handle has closed. Keep the real
+                // stderr diagnosis even then, rather than replacing it with an ExitCode exception.
+                var exitCode = "未知";
+                try { exitCode = process.ExitCode.ToString(); }
+                catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception) { }
+                throw new InvalidOperationException($"变体进程提前退出（{exitCode}）。{string.Join("\n", tail)}");
             }
             if (await ServerService.TestApiReadyAsync(port, ct).ConfigureAwait(false)) return;
             await Task.Delay(500, ct).ConfigureAwait(false);

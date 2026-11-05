@@ -148,6 +148,7 @@ internal static class Fixtures
     {
         var parsed = new LauncherArguments(string.Join(" ", args.Select(LauncherArguments.Quote)));
         var port = parsed.GetPort();
+        if (parsed.Has("--fake-exit")) { Console.Error.WriteLine("fixture early exit"); return; }
         var delay = int.TryParse(parsed.Get("--fake-delay"), out var milliseconds) ? milliseconds : 0;
         if (delay > 0) await Task.Delay(delay);
         using var listener = new TcpListener(IPAddress.Loopback, port);
