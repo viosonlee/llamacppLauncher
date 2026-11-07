@@ -134,6 +134,36 @@ public sealed class StrataBackend : IServerBackend
             "外部草稿或 MTP 模型文件（--draft-model，如 mtp-*.gguf）。当主模型未内置草稿头时使用。",
             Help: "【草稿 / MTP 模型】\n• 作用：为 strata-poly 指定外部草稿权重文件（--draft-model）。\n• 适用：模型本身未内置 MTP 块、但附带独立的 mtp-*.gguf 文件时。\n• 留空：使用内置草稿块或不使用外部草稿。",
             Advanced: true));
+
+        // KVMem virtualized KV cache parameters (REQ-124)
+        list.Add(new("kvmem", "启用 KVMem 虚拟显存", "超长上下文 (KVMem)", ParamType.Boolean, "0",
+            "开启基于内存/SSD 分层的块稀疏 KV 缓存，允许在有限显存下运行 256K+ 超长文本（--kvmem）。",
+            Help: "【启用 KVMem 虚拟显存】\n• 作用：启用基于内存/SSD 分层的块稀疏注意力缓存（--kvmem）。\n• 原理：显存中仅维护固定槽位池（Budget + Reserve），全量原生历史常驻系统内存与 SSD。\n• 收益：让 6GB/8GB/16GB 显卡稳定运行 32K~256K+ 上下文，彻底避免显存 OOM。\n• 提示：开启后展开详细槽位与内存配额选项。"));
+        list.Add(new("kvmemBudget", "显存活跃预算", "超长上下文 (KVMem)", ParamType.Integer, "32768",
+            "显卡中固定分配的活跃上下文槽位上限（--kvmem-budget）。推荐 32768。", 1024, 131072,
+            Help: "【显存活跃预算】\n• 作用：显存中固定分配给当前活跃上下文的槽位数量（--kvmem-budget）。\n• 默认：32768（32K Tokens）。\n• 显存：该数值决定显存中 KV 的固定占用，不再随会话长度无限制增加。",
+            VisibleWhen: "param.kvmem", Unit: "tokens", RangeHint: "1,024–131,072，推荐 32768"));
+        list.Add(new("kvmemGenReserve", "生成缓冲余量", "超长上下文 (KVMem)", ParamType.Integer, "2048",
+            "显存中为单次生成预留的缓冲余量（--kvmem-gen-reserve）。推荐 2048。", 512, 16384,
+            Help: "【生成缓冲余量】\n• 作用：为单次生成及思考链预留的独立显存槽位（--kvmem-gen-reserve）。\n• 默认：2048。高思考预算（xhigh reasoning）或长回复时建议 2048~4096。",
+            VisibleWhen: "param.kvmem", Unit: "tokens", RangeHint: "512–16,384，推荐 2048"));
+        list.Add(new("kvmemHostMib", "系统内存配额", "超长上下文 (KVMem)", ParamType.Integer, "16384",
+            "系统内存（RAM）中用于缓存全量原生 KV 的大小（--kvmem-host-mib）。推荐 16384 MiB 以上。", 1024, 131072,
+            Help: "【系统内存配额】\n• 作用：Host RAM 中用于保存百万级上下文历史原生 KV 的内存配额（--kvmem-host-mib）。\n• 建议：分配 16384 (16 GiB) 以上；内存充足可设为 32768 (32 GiB)。",
+            VisibleWhen: "param.kvmem", Unit: "MiB", RangeHint: "1,024–131,072，推荐 16384"));
+        list.Add(new("kvmemDiskMib", "SSD 冷缓存上限", "超长上下文 (KVMem)", ParamType.Integer, "0",
+            "NVMe SSD 二级冷存储上限（--kvmem-disk-mib）。设为 0 表示仅使用系统内存。", 0, 524288,
+            Help: "【SSD 冷缓存上限】\n• 作用：当全量历史超过系统内存配额时，自动分层置换到 NVMe SSD 的容量（--kvmem-disk-mib）。\n• 0（默认）：不使用磁盘分层，纯内存缓存。\n• 正数：开启 SSD 溢出，必须同时配置“SSD 存储目录”。",
+            VisibleWhen: "param.kvmem", Unit: "MiB", RangeHint: "0–524,288，0 表示关闭"));
+        list.Add(new("kvmemDiskPath", "SSD 存储目录", "超长上下文 (KVMem)", ParamType.FolderPath, "",
+            "SSD 二级缓存存放路径（--kvmem-disk-path）。必须为高速固态硬盘路径。",
+            Help: "【SSD 存储目录】\n• 作用：KVMem 将冷数据溢出到固态硬盘的目录路径（--kvmem-disk-path）。\n• 仅在“SSD 冷缓存上限”大于 0 时生效，建议选择读写速度较快的 NVMe 固态硬盘。",
+            VisibleWhen: "param.kvmem && param.kvmemDiskMib > 0"));
+        list.Add(new("kvmemSessions", "多会话复用池", "超长上下文 (KVMem)", ParamType.Integer, "4",
+            "内存中同时驻留的对话会话数（--kvmem-sessions）。默认 4。", 1, 16,
+            Help: "【多会话复用池】\n• 作用：在系统内存中同时保留多少个不同对话的 KV 状态（--kvmem-sessions）。\n• 多个 Agent 工具并发或轮流调用时，切回历史对话无需重新 Prefill。\n• 默认：4。",
+            VisibleWhen: "param.kvmem", RangeHint: "1–16，默认 4"));
+
         Parameters = list;
     }
 
@@ -402,6 +432,26 @@ public sealed class StrataBackend : IServerBackend
         {
             args.Add("--conversation-cache-mib");
             args.Add(conversationCache);
+        }
+        var kvmem = Param(config, "kvmem");
+        if (kvmem is "1" or "true" or "True")
+        {
+            args.Add("--kvmem");
+            var kvBudget = ParamInt(config, "kvmemBudget", 0);
+            if (kvBudget > 0) { args.Add("--kvmem-budget"); args.Add(kvBudget.ToString()); }
+            var kvReserve = ParamInt(config, "kvmemGenReserve", 0);
+            if (kvReserve > 0) { args.Add("--kvmem-gen-reserve"); args.Add(kvReserve.ToString()); }
+            var kvHost = ParamInt(config, "kvmemHostMib", 0);
+            if (kvHost > 0) { args.Add("--kvmem-host-mib"); args.Add(kvHost.ToString()); }
+            var kvDiskMib = ParamInt(config, "kvmemDiskMib", 0);
+            var kvDiskPath = Param(config, "kvmemDiskPath");
+            if (kvDiskMib > 0 && !string.IsNullOrWhiteSpace(kvDiskPath))
+            {
+                args.Add("--kvmem-disk-mib"); args.Add(kvDiskMib.ToString());
+                args.Add("--kvmem-disk-path"); args.Add(kvDiskPath);
+            }
+            var kvSessions = ParamInt(config, "kvmemSessions", 0);
+            if (kvSessions > 0) { args.Add("--kvmem-sessions"); args.Add(kvSessions.ToString()); }
         }
         var cfg = new Dictionary<string, object>
         {

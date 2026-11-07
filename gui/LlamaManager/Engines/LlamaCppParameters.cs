@@ -34,6 +34,12 @@ public static class LlamaCppParameters
         ["draftModel"] = "-md",
         ["mmproj"] = "--mmproj",
         ["verbose"] = "-v",
+        ["kvmemBudget"] = "--kvmem-budget",
+        ["kvmemGenReserve"] = "--kvmem-gen-reserve",
+        ["kvmemHostMib"] = "--kvmem-host-mib",
+        ["kvmemDiskMib"] = "--kvmem-disk-mib",
+        ["kvmemDiskPath"] = "--kvmem-disk-path",
+        ["kvmemSessions"] = "--kvmem-sessions",
     };
 
     public static IReadOnlyList<ParameterSpec> Specs => LazySpecs.Value;
@@ -175,6 +181,40 @@ public static class LlamaCppParameters
 
             new("verbose", "详细日志", "基本", ParamType.Boolean, "0", "输出详细运行日志（-v）。",
                 Help: "【详细日志】\n• 作用：打开引擎的详细日志（-v），排查问题时有帮助，日常可关闭。"),
+
+            new("kvmem", "启用 KVMem 虚拟显存", "超长上下文 (KVMem)", ParamType.Boolean, "0",
+                "开启基于内存/SSD 分层的块稀疏 KV 缓存，允许在有限显存下运行 256K+ 超长文本（--kvmem）。",
+                Help: "【启用 KVMem 虚拟显存】\n• 作用：启用基于内存/SSD 分层的块稀疏注意力缓存（--kvmem）。\n• 原理：显存中仅维护固定槽位池（Budget + Reserve），全量原生历史常驻系统内存与 SSD。\n• 收益：让 6GB/8GB/16GB 显卡稳定运行 32K~256K+ 上下文，彻底避免显存 OOM。\n• 提示：开启后展开详细槽位与内存配额选项。"),
+
+            new("kvmemBudget", "显存活跃预算", "超长上下文 (KVMem)", ParamType.Integer, "32768",
+                "显卡中固定分配的活跃上下文槽位上限（--kvmem-budget）。推荐 32768。", 1024, 131072,
+                Help: "【显存活跃预算】\n• 作用：显存中固定分配给当前活跃上下文的槽位数量（--kvmem-budget）。\n• 默认：32768（32K Tokens）。\n• 显存：该数值决定显存中 KV 的固定占用，不再随会话长度无限制增加。",
+                VisibleWhen: "param.kvmem", Unit: "tokens", RangeHint: "1,024–131,072，推荐 32768"),
+
+            new("kvmemGenReserve", "生成缓冲余量", "超长上下文 (KVMem)", ParamType.Integer, "2048",
+                "显存中为单次生成预留的缓冲余量（--kvmem-gen-reserve）。推荐 2048。", 512, 16384,
+                Help: "【生成缓冲余量】\n• 作用：为单次生成及思考链预留的独立显存槽位（--kvmem-gen-reserve）。\n• 默认：2048。高思考预算（xhigh reasoning）或长回复时建议 2048~4096。",
+                VisibleWhen: "param.kvmem", Unit: "tokens", RangeHint: "512–16,384，推荐 2048"),
+
+            new("kvmemHostMib", "系统内存配额", "超长上下文 (KVMem)", ParamType.Integer, "16384",
+                "系统内存（RAM）中用于缓存全量原生 KV 的大小（--kvmem-host-mib）。推荐 16384 MiB 以上。", 1024, 131072,
+                Help: "【系统内存配额】\n• 作用：Host RAM 中用于保存百万级上下文历史原生 KV 的内存配额（--kvmem-host-mib）。\n• 建议：分配 16384 (16 GiB) 以上；内存充足可设为 32768 (32 GiB)。",
+                VisibleWhen: "param.kvmem", Unit: "MiB", RangeHint: "1,024–131,072，推荐 16384"),
+
+            new("kvmemDiskMib", "SSD 冷缓存上限", "超长上下文 (KVMem)", ParamType.Integer, "0",
+                "NVMe SSD 二级冷存储上限（--kvmem-disk-mib）。设为 0 表示仅使用系统内存。", 0, 524288,
+                Help: "【SSD 冷缓存上限】\n• 作用：当全量历史超过系统内存配额时，自动分层置换到 NVMe SSD 的容量（--kvmem-disk-mib）。\n• 0（默认）：不使用磁盘分层，纯内存缓存。\n• 正数：开启 SSD 溢出，必须同时配置“SSD 存储目录”。",
+                VisibleWhen: "param.kvmem", Unit: "MiB", RangeHint: "0–524,288，0 表示关闭"),
+
+            new("kvmemDiskPath", "SSD 存储目录", "超长上下文 (KVMem)", ParamType.FolderPath, "",
+                "SSD 二级缓存存放路径（--kvmem-disk-path）。必须为高速固态硬盘路径。",
+                Help: "【SSD 存储目录】\n• 作用：KVMem 将冷数据溢出到固态硬盘的目录路径（--kvmem-disk-path）。\n• 仅在“SSD 冷缓存上限”大于 0 时生效，建议选择读写速度较快的 NVMe 固态硬盘。",
+                VisibleWhen: "param.kvmem && param.kvmemDiskMib > 0"),
+
+            new("kvmemSessions", "多会话复用池", "超长上下文 (KVMem)", ParamType.Integer, "4",
+                "内存中同时驻留的对话会话数（--kvmem-sessions）。默认 4。", 1, 16,
+                Help: "【多会话复用池】\n• 作用：在系统内存中同时保留多少个不同对话的 KV 状态（--kvmem-sessions）。\n• 多个 Agent 工具并发或轮流调用时，切回历史对话无需重新 Prefill。\n• 默认：4。",
+                VisibleWhen: "param.kvmem", RangeHint: "1–16，默认 4"),
         ];
     }
 
@@ -190,6 +230,7 @@ public static class LlamaCppParameters
                 // A boolean flag exists or it does not.
                 "cpuMoe" => parsed.Has("--cpu-moe") ? "1" : "0",
                 "verbose" => parsed.Has("-v") ? "1" : "0",
+                "kvmem" => parsed.Has("--kvmem") ? "1" : "0",
                 // MTP is expressed through --spec-type, so only that exact value counts.
                 "mtp" => parsed.Get("--spec-type") == "draft-mtp" ? "1" : "0",
                 _ when FlagOf.TryGetValue(spec.Key, out var flag) => parsed.Get(flag) ?? "",
@@ -212,6 +253,7 @@ public static class LlamaCppParameters
         {
             case "cpuMoe": return parsed.SetFlag("--cpu-moe", text == "1");
             case "verbose": return parsed.SetFlag("-v", text == "1");
+            case "kvmem": return parsed.SetFlag("--kvmem", text == "1");
             case "mtp":
                 if (text == "1") return parsed.Set("--spec-type", "draft-mtp");
                 // Turning MTP off must not discard a different speculative type the user chose.

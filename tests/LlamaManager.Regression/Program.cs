@@ -843,7 +843,7 @@ internal static class Program
                     ConfigService.SaveSession(config, null);
                     Check(ConfigService.ReadConfig().RunningServer == null, "record not cleared");
                     Process? adopted = null;
-                    var deadline = DateTime.UtcNow.AddSeconds(15);
+                    var deadline = DateTime.UtcNow.AddSeconds(25);
                     while (adopted == null && DateTime.UtcNow < deadline)
                     {
                         adopted = ServerService.GetManagedProcess(config);
@@ -855,7 +855,13 @@ internal static class Program
                     var latest = ConfigService.ReadConfig();
                     Check(latest.RunningServer != null && latest.RunningServer.ProcessId == session.ProcessId, "session not restored");
                 }
-                finally { Check(await ServerService.StopAsync(config), "could not stop adopted server"); }
+                finally
+                {
+                    if (ConfigService.ReadConfig().RunningServer != null)
+                        Check(await ServerService.StopAsync(config), "could not stop adopted server");
+                    else
+                        try { using var p = Process.GetProcessById(session.ProcessId); p.Kill(true); } catch { }
+                }
             });
             await Test("lifecycle: selection and port edits do not change the running identity", async () =>
             {

@@ -187,6 +187,14 @@ public sealed record ParameterSpec(
 `expertSlots`、`mtpDrafts` 在 poly 上通过 `VisibleWhen="profile==upstream"` 隐藏；
 `vramReserveMib` 用 `profile==poly` 隐藏 upstream。
 
+| 超长上下文 (KVMem) | kvmem | 启用虚拟显存 (KVMem) | Boolean | 0 | 0/1 开关 | `--kvmem` |
+| 超长上下文 (KVMem) | kvmemBudget | 上下文 Token 预算 | Integer | 32768 | 4096–1048576；`VisibleWhen="param.kvmem"` | `--kvmem-budget` |
+| 超长上下文 (KVMem) | kvmemGenReserve | 生成保留 Token | Integer | 2048 | 256–65536；`VisibleWhen="param.kvmem"` | `--kvmem-gen-reserve` |
+| 超长上下文 (KVMem) | kvmemHostMib | 主机内存上限 MiB | Integer | 16384 | 1024–262144；`VisibleWhen="param.kvmem"` | `--kvmem-host-mib` |
+| 超长上下文 (KVMem) | kvmemDiskMib | 磁盘存储空间 MiB | Integer | 0 | 0–1048576；0=关闭；`VisibleWhen="param.kvmem"` | `--kvmem-disk-mib` |
+| 超长上下文 (KVMem) | kvmemDiskPath | 磁盘存储目录 | Folder | 空 | 路径；`VisibleWhen="param.kvmem && param.kvmemDiskMib > 0"` | `--kvmem-disk-path` |
+| 超长上下文 (KVMem) | kvmemSessions | 并发会话数 | Integer | 4 | 1–64；`VisibleWhen="param.kvmem"` | `--kvmem-sessions` |
+
 ### 5.3 llama.cpp（迁移后）
 
 字段与现有 16 个控件一一对应，控件的精选下拉改为 `Choices` + `Editable`：

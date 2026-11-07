@@ -3,6 +3,22 @@
 按时间倒序记录影响需求或架构的变更。每条引用需求编号（见 docs/REQUIREMENTS.md）。
 普通修复不记；**改变行为、需求或取舍的**才记。
 
+## 2026-11-07
+
+- **超长上下文虚拟显存技术（KVMem）集成与联动折叠**（REQ-124）：
+  - 架构决策（方案 A）：保留现有 `llamacpp` 与 `polystrata` 引擎生态，通过统一参数模型与动态联动 UI 接入 KVMem 超长上下文特性。
+  - 参数面板与命令行映射：
+    - 在 `LlamaCppParameters` 与 `StrataBackend` 中新增「超长上下文 (KVMem)」参数组；
+    - 主开关 `kvmem`（映射 `--kvmem`）；
+    - 联动二级参数：`kvmemBudget`（`--kvmem-budget`，默认 32768）、`kvmemGenReserve`（`--kvmem-gen-reserve`，默认 2048）、`kvmemHostMib`（`--kvmem-host-mib`，默认 16384）、`kvmemDiskMib`（`--kvmem-disk-mib`，默认 0）、`kvmemDiskPath`（`--kvmem-disk-path`，路径）、`kvmemSessions`（`--kvmem-sessions`，默认 4）；
+    - 动态折叠联动：二级参数配置 `VisibleWhen: "param.kvmem"`，在主开关关闭时不占用视觉空间且不向后端注入命令行或 runconfig 选项；当 `kvmemDiskMib > 0` 时额外展开磁盘持久化路径选择器（`param.kvmem && param.kvmemDiskMib > 0`）；
+    - 隔离与独立性：开关关闭时不产生多余启动参数，各模型间通过 `ModelPresets` 独立记忆 KVMem 配置。
+  - 验证：
+    - `CoreUtilitiesRegression` 覆盖 `--kvmem` 启闭往返投影与 CLI 参数构建；
+    - `ParameterVisibilityRegression` 覆盖 `param.kvmem` 布尔与数值复合条件动态可见性计算；
+    - `StrataBackendRegression` 覆盖 `BuildRunConfig` 在 KVMem 启闭下的参数组注入；
+    - 回归测试 **80 项全部通过**；文档门禁验证通过（63 条需求）。
+
 ## 2026-11-01
 
 - **固定 agent 接入 8080 与测速端口隔离**（REQ-123）：PolyStrata schema 默认与 StrataConfig 回退默认

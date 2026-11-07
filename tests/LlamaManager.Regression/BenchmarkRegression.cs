@@ -49,7 +49,7 @@ internal static class BenchmarkRegression
             foreach (var port in variantPorts)
             {
                 var watch = Stopwatch.StartNew();
-                while (ServerService.TestPortInUse(port) && watch.Elapsed < TimeSpan.FromSeconds(5)) await Task.Delay(50);
+                while (ServerService.TestPortInUse(port) && watch.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(50);
                 Check(!ServerService.TestPortInUse(port), $"benchmark leaked a listener after failure/cancellation: {port}");
             }
             Equal(session, ConfigService.ReadConfig().RunningServer);

@@ -157,6 +157,26 @@ internal static class CoreUtilitiesRegression
         var withDraft = LlamaCppParameters.Apply("-c 4096", "draftModel", @"C:\AIModel\draft.gguf");
         Check(withDraft.Contains("-md"), "-md was not added");
         Equal(@"C:\AIModel\draft.gguf", LlamaCppParameters.ReadFromArgs(withDraft)["draftModel"]);
+
+        // KVMem flags (REQ-124): master boolean flag and options
+        var withKvmem = LlamaCppParameters.Apply("-c 4096", "kvmem", "1");
+        Check(withKvmem.Contains("--kvmem"), "--kvmem was not added");
+        Equal("1", LlamaCppParameters.ReadFromArgs(withKvmem)["kvmem"]);
+        var withoutKvmem = LlamaCppParameters.Apply(withKvmem, "kvmem", "0");
+        Check(!withoutKvmem.Contains("--kvmem"), "--kvmem was not removed");
+
+        var kvArgs = LlamaCppParameters.Apply(
+            LlamaCppParameters.Apply(
+                LlamaCppParameters.Apply(
+                    LlamaCppParameters.Apply("-c 4096 --kvmem", "kvmemBudget", "32768"),
+                    "kvmemHostMib", "16384"),
+                "kvmemGenReserve", "2048"),
+            "kvmemSessions", "4");
+        var readKv = LlamaCppParameters.ReadFromArgs(kvArgs);
+        Equal("32768", readKv["kvmemBudget"]);
+        Equal("16384", readKv["kvmemHostMib"]);
+        Equal("2048", readKv["kvmemGenReserve"]);
+        Equal("4", readKv["kvmemSessions"]);
     }
 
     public static void RunModelPairing(string root)

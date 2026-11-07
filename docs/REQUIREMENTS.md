@@ -252,3 +252,8 @@
   实测器使用系统分配临时端口，排除 8080、配置端口、原始参数中的端口与运行会话端口；
   分配有界、可取消，变体启动前再次预检，失败/取消清理仅针对变体进程，保留正式服务身份与配置。
   新增端口分类/分配与失败/取消回归；既有 benchmark 遥测用例不再依赖固定 8095。
+- REQ-124 已实现（2026-11-07）：方案A集成 KVMem 虚拟显存超长上下文参数组与联动折叠。
+  在 llama.cpp（LlamaCppParameters）与 PolyStrata（StrataBackend）参数面板中新增「超长上下文 (KVMem)」参数组：
+  主开关 kvmem（--kvmem）与二级参数（kvmemBudget --kvmem-budget 默认 32768、kvmemGenReserve --kvmem-gen-reserve 默认 2048、kvmemHostMib --kvmem-host-mib 默认 16384、kvmemDiskMib --kvmem-disk-mib 默认 0、kvmemDiskPath --kvmem-disk-path、kvmemSessions --kvmem-sessions 默认 4）。
+  二级参数使用 VisibleWhen: param.kvmem 动态折叠联动（其中 kvmemDiskPath 需满足 param.kvmem && param.kvmemDiskMib > 0）；关闭时不向引擎注入参数，开启时正确映射至命令行或 runconfig args。
+  包含参数往返投影、表达式计算与预设隔离回归测试。
