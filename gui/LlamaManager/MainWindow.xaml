@@ -57,7 +57,10 @@
                                    ToolTip="一键体检：检查所有引擎是否缺失、是否有更新（联网查询发布版本），结果见「日志」页。"/>
                         <ui:Button x:Name="EngineTopBootstrapButton" Content="配置环境"
                                    Click="EngineTopBootstrapButton_Click" Margin="4,0,0,0" Padding="8,3" FontSize="11"
-                                   ToolTip="一键配置当前引擎所需的环境（下载引擎二进制文件、自动安装 Python 3.12 及依赖 venv），结果见「日志」页。"/>
+                                   ToolTip="配置当前引擎及其匹配运行库；KVMem 使用完整包内 Python/CUDA，结果见「日志」页。"/>
+                         <ui:Button x:Name="EngineUpdateAllButton" Content="一键更新"
+                                    Click="EngineUpdateAllButton_Click" Margin="4,0,0,0" Padding="8,3" FontSize="11"
+                                    ToolTip="更新所有内置引擎及匹配运行库；新版本独立安装，仅保留当前版与最近一版旧版。手工目录及运行中的版本不会删除。再次点击取消。"/>
                     </StackPanel>
 
                     <!-- Wraps instead of clipping: the window can be as narrow as 640px. -->

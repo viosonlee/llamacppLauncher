@@ -48,7 +48,7 @@ internal static class EnginesRegression
         {
             if (session != null) await backend.StopAsync(session, sink);
         }
-        await AssertPortReleasedAsync(port, "backend stop");
+        await AssertPortReleasedAsync(session, "backend stop");
         Check(!logs.Any(l => l.Contains("错误")), "unexpected error logged: " + string.Join(" | ", logs));
 
         // Inspect must be honest about an unreadable model rather than silently pass.
@@ -128,19 +128,19 @@ internal static class EnginesRegression
             Check(await backend.ReadyAsync(session, CancellationToken.None), "embedding backend not ready");
         }
         finally { await backend.StopAsync(session, sink); }
-        await AssertPortReleasedAsync(port, "embedding backend stop");
+        await AssertPortReleasedAsync(session, "embedding backend stop");
     }
 
-    private static async Task AssertPortReleasedAsync(int port, string operation)
+    private static async Task AssertPortReleasedAsync(EngineSession session, string operation)
     {
-        // Process exit and removal from Windows' TCP table need not be visible on the same tick.
-        // Keep a bounded wait (as in the external-restart regression), never a retry of start/stop.
-        var watch = System.Diagnostics.Stopwatch.StartNew();
-        while (ServerService.TestPortInUse(port) && watch.Elapsed < TimeSpan.FromSeconds(5))
-            await Task.Delay(50);
-        if (watch.ElapsedMilliseconds >= 50)
-            Console.WriteLine($"TCP release after {operation}: {watch.ElapsedMilliseconds} ms");
-        Check(!ServerService.TestPortInUse(port), $"{operation} left port {port} busy after 5 s");
+        // The Windows listener snapshot was observed to both miss a live API and retain exited
+        // listeners. Assert the actual stop contract: full-identity process exit + exclusive bind.
+        using var owned = ServerService.ValidateProcess(new ServerSession
+        {
+            ProcessId = session.ProcessId, StartTimeUtcTicks = session.StartTimeUtcTicks, EnginePath = session.ExecutablePath
+        });
+        Check(owned == null, operation + " left the recorded process alive");
+        await Fixtures.AssertListenerReleasedAsync(session.Port, TimeSpan.FromSeconds(5), operation);
     }
 
     /// <summary>Registry resolution and GPU arbitration over the canonical session store.</summary>

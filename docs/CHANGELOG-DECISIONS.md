@@ -5,7 +5,28 @@
 
 ## 2026-11-07
 
-- **超长上下文虚拟显存技术（KVMem）集成与联动折叠**（REQ-124）：
+- **规格、用例与提交整理**（REQ-124 / REQ-125 / REQ-126）：新增 [变更规格](KVMEM-CHANGE-SPEC.md) 与 [测试用例矩阵](KVMEM-TEST-CASES.md)，区分108组自动回归、显式GPU验收和本机忽略的运行证据。仅提交必要源码、测试、工具源码与文档；不提交模型、引擎、用户配置、日志或构建产物。
+
+- **全部内置引擎与匹配运行库一键更新、限制旧版数量**（REQ-126）：
+  - GUI 全局「一键更新」与 CLI `--update --all` 共用 `EngineAcquisitionService.UpdateAllAsync`，包含 llama.cpp、PolyStrata、KVMem；失败逐项报告，可取消，不停止模型服务。
+  - llama.cpp 读取真实 build（包括新 semver/build 输出），按 driver 的 CUDA/UMD 能力选择同一 release 的 binary+cudart 完整配对；不再每次返回未知版本而全量重下，也不硬编码一个过时 CUDA minor。
+  - PolyStrata 对应 tag 的原生包、服务源码、exact NVIDIA wheel pins 和私有 Python 运行环境一起验证；不混拷其它引擎 CUDA DLL，不伪写上游 BUILD 版本。
+  - 新目录先校验后提交；引擎级公共安装路径优先于模型预设陈旧路径，仅同步仍引用同一旧公共路径的预设，不改模型调优参数或独立手工路径。
+  - 启动器 ownership manifest 与下载 receipt 驱动清理；每个 backend/架构保留当前版+最近旧版。运行/手工/用户数据保护优先，无法安全清理只报告，不回滚已提交安装。
+  - 随发行包提供的历史 `.log` 仅在安装时有独立 SHA/长度记录且未改动时可随旧包清理；新建或改动的用户日志依然保护。
+  - 更新后的本机验证与最终通过数见 `docs/ENGINE-UPDATE-GUIDE.md`；之前 KVMem 32K/64K 证据仍保留，不把更新回归等同于所有模型性能验证。
+
+- **真实 KVMem 独立后端与协议纠正**（REQ-124 / REQ-125）：
+  - 保留原提交和原版引擎，新增 `kvmem` profile。上游 v0.19.1 PolyStrata 只支持 qwen35moe，不能覆盖原版后再声称支持其它 GGUF 家族。
+  - 本机 RTX 3060 sm86 完整包已按官方 SHA-256 校验后部署；保留 workers/backends/runtime/provenance 全布局。
+  - 去掉原版引擎上的误导参数组；新后端以 `--kvmem-budget` 正数启用，禁止裸 `--kvmem`，同时设置 window=1/no-draft/lookup=0 与 history-reuse。
+  - RAM 配额默认从错误的 16 GiB 下调为 1 GiB（本机总 RAM 约 24 GiB，模型另占十余 GiB）；KV B/R、预填充和专家搬运工作区均有保守默认。
+  - Python/CUDA 使用完整包内运行时，native 环境通过 serve runconfig 的 `env/lib_dirs` 真正传入，不依赖未传到 DetachedProcess 的 LaunchPlan 环境。
+  - tokenizer 使用上游 assets.py 的同模型、导出器哈希及五件套缓存，不为纯导出安装 gguf/venv；CPU 视觉、MTP 不默认启用。
+  - 就绪检查要求模型已加载与 `/props` 的真实 KV 能力/预算；启动失败/取消仅清理本次完整身份匹配的进程，不把 health HTTP 200 当推理成功。
+  - 验证明细与不承诺消除所有 OOM 的限制见 docs/KVMEM-INTEGRATION.md。旧参数测试通过不构成 GPU 端到端证据。
+
+- **原始参数层尝试（历史记录，已由上述纠正）**（REQ-124）：
   - 架构决策（方案 A）：保留现有 `llamacpp` 与 `polystrata` 引擎生态，通过统一参数模型与动态联动 UI 接入 KVMem 超长上下文特性。
   - 参数面板与命令行映射：
     - 在 `LlamaCppParameters` 与 `StrataBackend` 中新增「超长上下文 (KVMem)」参数组；

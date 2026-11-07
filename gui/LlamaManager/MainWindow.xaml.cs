@@ -60,6 +60,13 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
 
     private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
+        if (_engineMaintenanceCancellation != null)
+        {
+            _engineMaintenanceCancellation.Cancel();
+            e.Cancel = true;
+            LogService.Write("正在取消引擎更新并保留已提交版本，请等任务结束后再关闭窗口。");
+            return; // Never persist the pre-update engine path snapshot while installation commits.
+        }
         if (_loaded)
         {
             try

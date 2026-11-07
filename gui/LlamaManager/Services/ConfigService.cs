@@ -60,13 +60,27 @@ public static class ConfigService
         return System.Text.RegularExpressions.Regex.IsMatch(name, @"bonsai|ptq|ternary", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
     }
 
-    public static string GetLlamaServerPath(string? modelPath = null)
+    /// <summary>
+    /// Reads the committed executable selection on every launch/probe. The legacy root remains
+    /// stable for models, Prism and plugin discovery, but an update in this same process takes
+    /// effect immediately rather than launching the statically discovered old executable.
+    /// </summary>
+    public static string GetLlamaServerPath(string? modelPath = null) => GetLlamaServerPathFor(ReadConfig(), modelPath);
+
+    public static string GetLlamaServerPathFor(ManagerConfig config, string? modelPath = null)
     {
         if (IsPrismModel(modelPath))
         {
             var prismPath = GetPrismServerPath();
-            if (File.Exists(prismPath))
-                return prismPath;
+            if (File.Exists(prismPath)) return prismPath;
+        }
+        if (config.Engines.TryGetValue("llamacpp", out var settings))
+        {
+            // An explicit broken path must be reported/repaired, not silently fall back to an old
+            // engine. ExecutablePath and packageRoot are committed together by the installer.
+            if (!string.IsNullOrWhiteSpace(settings.ExecutablePath)) return Path.GetFullPath(settings.ExecutablePath);
+            if (settings.Parameters.TryGetValue("packageRoot", out var root) && !string.IsNullOrWhiteSpace(root))
+                return Path.Combine(Path.GetFullPath(root), "llama-server.exe");
         }
         return Path.Combine(LlamaCppRoot, "llama-server.exe");
     }
@@ -109,6 +123,22 @@ public static class ConfigService
     {
         Store.Update(target => target.SetRunning(slot, session));
         config.SetRunning(slot, session);
+    }
+
+    /// <summary>Clears only the recorded process identity observed by the caller, never a newer session.</summary>
+    public static bool ClearSessionSlotIfMatches(string slot, ServerSession expected)
+    {
+        var cleared = false;
+        Store.Update(latest =>
+        {
+            var current = latest.GetRunning(slot);
+            if (current == null || current.ProcessId != expected.ProcessId ||
+                current.StartTimeUtcTicks != expected.StartTimeUtcTicks ||
+                !PathIdentity.Equals(current.EnginePath, expected.EnginePath)) return;
+            latest.SetRunning(slot, null);
+            cleared = true;
+        });
+        return cleared;
     }
 
     public static bool MigrateSession(ManagerConfig config, ServerSession session)
@@ -166,6 +196,71 @@ public static class ConfigService
             Touch(latest);
         });
         config.Engines[backendId] = settings;
+    }
+
+    /// <summary>
+    /// Changes only specified engine parameters in the latest config transaction. Install/update
+    /// paths must not replace model presets or concurrent UI edits to the rest of EngineSettings.
+    /// </summary>
+    public static void SaveEngineParameters(string backendId, IReadOnlyDictionary<string, string> parameters, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        Store.Update(latest =>
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!latest.Engines.TryGetValue(backendId, out var settings))
+            {
+                settings = new EngineSettings();
+                latest.Engines[backendId] = settings;
+            }
+            foreach (var (key, value) in parameters) settings.Parameters[key] = value;
+            Touch(latest);
+        });
+    }
+
+    /// <summary>
+    /// Atomically commits only a verified installation's executable and path parameters. Optional
+    /// selection compare-and-swap rejects concurrent path edits without touching sessions, models,
+    /// presets or unrelated engine parameters. The installer can discard its uncommitted sibling.
+    /// </summary>
+    public static void SaveEngineInstallation(string backendId, string executablePath,
+        IReadOnlyDictionary<string, string> parameters, CancellationToken ct = default, EngineSettings? expectedSelection = null)
+    {
+        ct.ThrowIfCancellationRequested();
+        Store.Update(latest =>
+        {
+            ct.ThrowIfCancellationRequested();
+            var existing = latest.Engines.GetValueOrDefault(backendId);
+            if (expectedSelection != null)
+            {
+                if (!string.Equals(existing?.ExecutablePath ?? "", expectedSelection.ExecutablePath, StringComparison.OrdinalIgnoreCase))
+                    throw new IOException("安装期间引擎可执行路径已由另一个窗口/命令修改；保留新的用户选择，不提交本次下载。");
+                foreach (var key in new[] { "packageRoot", "serveRoot", "pythonPath" })
+                {
+                    var current = existing?.Parameters.GetValueOrDefault(key) ?? "";
+                    var expected = expectedSelection.Parameters.GetValueOrDefault(key) ?? "";
+                    if (!string.Equals(current, expected, StringComparison.OrdinalIgnoreCase))
+                        throw new IOException("安装期间引擎路径设置已修改（" + key + "）；不覆盖并发用户编辑。");
+                }
+            }
+            var settings = existing ?? new EngineSettings();
+            var previousPaths = new Dictionary<string, string>(settings.Parameters);
+            settings.ExecutablePath = executablePath;
+            foreach (var (key, value) in parameters) settings.Parameters[key] = value;
+            // Installation paths are engine-wide, not model tuning. Migrate only presets that
+            // shared the previous global selection; distinct per-model manual paths stay protected.
+            foreach (var preset in settings.ModelPresets.Values)
+                foreach (var key in new[] { "packageRoot", "serveRoot", "pythonPath", "bundlePython" })
+                {
+                    if (!parameters.TryGetValue(key, out var replacement) || !preset.TryGetValue(key, out var presetPath)) continue;
+                    var previousPath = previousPaths.GetValueOrDefault(key) ?? "";
+                    var same = string.IsNullOrWhiteSpace(previousPath) && string.IsNullOrWhiteSpace(presetPath) ||
+                        PathIdentity.Equals(previousPath, presetPath);
+                    if (same) preset[key] = replacement;
+                }
+            latest.Engines[backendId] = settings;
+            Touch(latest);
+        });
     }
 
     public static void SaveStrata(ManagerConfig config)

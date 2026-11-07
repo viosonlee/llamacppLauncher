@@ -67,13 +67,16 @@ public static class ServerService
     /// Last-resort recovery for a server whose config record is gone. It only matches a
     /// live llama-server started from this install's engine for the configured model on
     /// the configured port - never an arbitrary process that merely shares the port.
-    /// WMI is only touched while the port is actually busy and at most every few seconds,
+    /// WMI is touched only for matching process-name candidates and at most every few seconds,
     /// so the two-second status poll stays cheap.
     /// </summary>
     private static Process? RecoverByPort(ManagerConfig config, bool embedding)
     {
         var port = embedding ? config.EmbeddingPort : new LauncherArguments(config.Args).GetPort(config.Port);
-        if (port <= 0 || !TestPortInUse(port)) return null;
+        // Windows' listener enumeration can lag both appearance and removal. A false table
+        // result must not permanently block identity recovery of an HTTP-ready detached server.
+        // Keep the bounded scan interval and every process/command-line identity check below.
+        if (port <= 0) return null;
         var now = DateTime.UtcNow;
         if ((now - _lastPortRecoveryUtc).TotalSeconds < 5) return null;
         _lastPortRecoveryUtc = now;
@@ -190,6 +193,7 @@ public static class ServerService
     private static string? GetCommandLine(int processId)
     {
         using var search = new ManagementObjectSearcher($"SELECT CommandLine FROM Win32_Process WHERE ProcessId = {processId}");
+        search.Options.Timeout = TimeSpan.FromSeconds(2);
         using var rows = search.Get();
         foreach (ManagementObject row in rows)
         {

@@ -4,6 +4,10 @@ namespace LlamaManager.Models;
 
 public class ManagerConfig
 {
+    /// <summary>Keep forward-compatible user metadata (for example Window) during narrow settings transactions.</summary>
+    [JsonExtensionData]
+    public Dictionary<string, System.Text.Json.JsonElement> AdditionalProperties { get; set; } = new();
+
     /// <summary>
     /// Canonical session store, keyed by slot ("main", "embedding"). This is the only
     /// session structure written to disk. The pre-plugin keys (RunningServer /

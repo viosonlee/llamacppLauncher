@@ -147,34 +147,38 @@ internal static class StrataBackendRegression
         config.Engines["polystrata"].Parameters.Remove("cacheBias");
         config.Engines["polystrata"].Parameters.Remove("conversationCache");
 
-        // KVMem virtualized KV cache (REQ-124):
-        // Unset must not emit --kvmem; when enabled, budget/reserve/host/sessions reach runconfig.
-        Check(!runArgs.Contains("--kvmem"), "unset kvmem must not reach runconfig");
-        config.Engines["polystrata"].Parameters["kvmem"] = "1";
-        config.Engines["polystrata"].Parameters["kvmemBudget"] = "32768";
-        config.Engines["polystrata"].Parameters["kvmemGenReserve"] = "2048";
-        config.Engines["polystrata"].Parameters["kvmemHostMib"] = "16384";
-        config.Engines["polystrata"].Parameters["kvmemDiskMib"] = "4096";
-        config.Engines["polystrata"].Parameters["kvmemDiskPath"] = @"C:\ssd-tier";
-        config.Engines["polystrata"].Parameters["kvmemSessions"] = "4";
-        var kvmemPlan = backend.BuildLaunch(new EngineStartRequest { Config = config });
-        var kvmemArgs = kvmemPlan.Arguments.ToList();
-        var kvmemRunconfig = JsonNode.Parse(kvmemPlan.GeneratedFiles[kvmemArgs[kvmemArgs.IndexOf("--config") + 1]])!.AsObject();
-        var kvmemRunArgs = kvmemRunconfig["args"]!.AsArray().Select(n => n!.GetValue<string>()).ToList();
-        Check(kvmemRunArgs.Contains("--kvmem"), "--kvmem must reach runconfig");
-        Check(kvmemRunArgs.Contains("--kvmem-budget") && kvmemRunArgs.Contains("32768"), "--kvmem-budget 32768 must reach runconfig");
-        Check(kvmemRunArgs.Contains("--kvmem-gen-reserve") && kvmemRunArgs.Contains("2048"), "--kvmem-gen-reserve 2048 must reach runconfig");
-        Check(kvmemRunArgs.Contains("--kvmem-host-mib") && kvmemRunArgs.Contains("16384"), "--kvmem-host-mib 16384 must reach runconfig");
-        Check(kvmemRunArgs.Contains("--kvmem-disk-mib") && kvmemRunArgs.Contains("4096"), "--kvmem-disk-mib 4096 must reach runconfig");
-        Check(kvmemRunArgs.Contains("--kvmem-disk-path") && kvmemRunArgs.Contains(@"C:\ssd-tier"), "--kvmem-disk-path must reach runconfig");
-        Check(kvmemRunArgs.Contains("--kvmem-sessions") && kvmemRunArgs.Contains("4"), "--kvmem-sessions 4 must reach runconfig");
-        config.Engines["polystrata"].Parameters.Remove("kvmem");
-        config.Engines["polystrata"].Parameters.Remove("kvmemBudget");
-        config.Engines["polystrata"].Parameters.Remove("kvmemGenReserve");
-        config.Engines["polystrata"].Parameters.Remove("kvmemHostMib");
-        config.Engines["polystrata"].Parameters.Remove("kvmemDiskMib");
-        config.Engines["polystrata"].Parameters.Remove("kvmemDiskPath");
-        config.Engines["polystrata"].Parameters.Remove("kvmemSessions");
+        // Stock PolyStrata has no KVMem paging kernel. Old seven-field presets must not
+        // advertise a working integration or pass unknown flags to the official worker.
+        Check(!backend.Parameters.Any(p => p.Key.StartsWith("kvmem", StringComparison.OrdinalIgnoreCase)),
+            "stock PolyStrata must not expose the KVMem parameter group");
+        Check(!runArgs.Any(a => a == "--kvmem" || a.StartsWith("--kvmem-", StringComparison.Ordinal)),
+            "unset KVMem flags must not reach the stock PolyStrata runconfig");
+        var staleKeys = new[] { "kvmem", "kvmemBudget", "kvmemGenReserve", "kvmemHostMib", "kvmemDiskMib", "kvmemDiskPath", "kvmemSessions" };
+        var stale = config.Engines["polystrata"].Parameters;
+        stale["kvmemBudget"] = "32768";
+        stale["kvmemGenReserve"] = "2048";
+        stale["kvmemHostMib"] = "16384";
+        stale["kvmemDiskMib"] = "4096";
+        stale["kvmemDiskPath"] = Path.Combine(root, "old SSD tier");
+        stale["kvmemSessions"] = "4";
+        try
+        {
+            foreach (var enabled in new[] { "1", "true", "True" })
+            {
+                stale["kvmem"] = enabled;
+                Throws<NotSupportedException>(() => backend.BuildLaunch(new EngineStartRequest { Config = config }));
+            }
+            stale["kvmem"] = "0";
+            var disabledPlan = backend.BuildLaunch(new EngineStartRequest { Config = config });
+            var disabledArgs = disabledPlan.Arguments.ToList();
+            var disabledConfig = JsonNode.Parse(disabledPlan.GeneratedFiles[disabledArgs[disabledArgs.IndexOf("--config") + 1]])!.AsObject();
+            var disabledRunArgs = disabledConfig["args"]!.AsArray().Select(n => n!.GetValue<string>()).ToList();
+            Check(runArgs.SequenceEqual(disabledRunArgs), "disabled stale KVMem settings polluted the stock PolyStrata command");
+        }
+        finally
+        {
+            foreach (var key in staleKeys) stale.Remove(key);
+        }
 
         // mmproj and strata-vision integration
         File.WriteAllText(Path.Combine(engineDir, "strata-vision.exe"), "# fake vision");

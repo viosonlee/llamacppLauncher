@@ -93,13 +93,23 @@ public sealed class LlamaCppBackend : IServerBackend
         var config = request.Config;
         var model = request.Embedding ? config.EmbeddingModelPath : config.ModelPath;
         var engine = ConfigService.GetLlamaServerPath(model);
+        RejectKvmemArguments(config.Args);
         var args = new LauncherArguments(config.Args).Values.ToArray();
         return new LaunchPlan(engine, args, Path.GetDirectoryName(engine) ?? "",
             new Dictionary<string, string>(), new Dictionary<string, string>());
     }
 
+    internal static void RejectKvmemArguments(string? args)
+    {
+        var parsed = new LauncherArguments(args ?? "");
+        if (parsed.Values.Select(a => a.Split('=')[0]).Any(a =>
+            (a == "--kvmem" || a.StartsWith("--kvmem-", StringComparison.Ordinal)) && parsed.Has(a)))
+            throw new NotSupportedException("原版 llama.cpp / Prism 不支持这些 KVMem 参数；请移除旧 --kvmem-* 并选择独立 KVMem 后端。");
+    }
+
     public async Task<EngineSession> StartAsync(EngineStartRequest request, ILogSink log, CancellationToken ct)
     {
+        RejectKvmemArguments(request.Config.Args);
         if (request.Embedding)
             await ServerService.StartEmbeddingAsync(request.Config, log.Write, ct).ConfigureAwait(false);
         else

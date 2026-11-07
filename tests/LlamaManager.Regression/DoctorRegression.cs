@@ -44,6 +44,22 @@ internal static class DoctorRegression
     /// </summary>
     public static async Task RunLocalChecksAsync(string root)
     {
+        var savedNativeProbe = BuiltInInstallation.NativeProbe;
+        BuiltInInstallation.NativeProbe = (start, timeout, ct) =>
+        {
+            ct.ThrowIfCancellationRequested();
+            var local = Path.GetFullPath(start.FileName).StartsWith(Path.GetFullPath(root) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+            var name = Path.GetFileName(start.FileName);
+            if (local && name.Equals("llama-server.exe", StringComparison.OrdinalIgnoreCase))
+                return Task.FromResult(new BuiltInInstallation.ProbeOutput(0, "version: 0.9.0-fixture (build 11671, commit fixture)"));
+            if (local && name.Equals("strata-poly.exe", StringComparison.OrdinalIgnoreCase))
+                return Task.FromResult(new BuiltInInstallation.ProbeOutput(2, "usage: strata-poly --model FILE.gguf (--serve | --tokens ID) --max-context N"));
+            if (local && name.StartsWith("fake-python", StringComparison.OrdinalIgnoreCase))
+                return Task.FromResult(new BuiltInInstallation.ProbeOutput(0, "PolyStrata imports OK"));
+            return savedNativeProbe(start, timeout, ct);
+        };
+        try
+        {
         var report = await DoctorService.RunAsync(checkUpdates: false, CancellationToken.None);
         // The harness pre-seeds engines/prism with a runtime copy, so Prism is present and
         // reported as "manual" (no public download source); its finding must name the path.
@@ -104,5 +120,50 @@ internal static class DoctorRegression
         DoctorService.LatestRelease = (_, _) => throw new IOException("network down");
         var offline = await DoctorService.RunAsync(checkUpdates: true, CancellationToken.None);
         Check(offline.Findings.Count > 0, "network failure produced no report");
+        AssertInstallationPathPresetUpgrade(root);
+        }
+        finally { BuiltInInstallation.NativeProbe = savedNativeProbe; }
+    }
+
+    private static void AssertInstallationPathPresetUpgrade(string root)
+    {
+        Check(PathIdentity.Equals(root, ConfigService.GetManagerRoot()) && Path.GetFileName(root).StartsWith("regression-", StringComparison.Ordinal),
+            "installation transaction fixture must use the isolated regression root");
+        var config = ConfigService.ReadConfig();
+        var original = config.Engines["polystrata"];
+        var settings = System.Text.Json.JsonSerializer.Deserialize<LlamaManager.Models.EngineSettings>(System.Text.Json.JsonSerializer.Serialize(original))!;
+        var oldRoot = Path.Combine(root, "engines", "polystrata");
+        var newRoot = Path.Combine(oldRoot, "v0.1.45-poly.8-cuda-13.0");
+        var manualRoot = Path.Combine(root, "manual model-specific engine");
+        var sharedKey = PathIdentity.Normalize(Path.Combine(root, "models", "shared preset.gguf"));
+        var manualKey = PathIdentity.Normalize(Path.Combine(root, "models", "manual preset.gguf"));
+        settings.Parameters["packageRoot"] = oldRoot;
+        settings.Parameters["serveRoot"] = oldRoot;
+        settings.Parameters["pythonPath"] = "";
+        settings.ModelPresets[sharedKey] = new() { ["packageRoot"] = oldRoot, ["serveRoot"] = oldRoot, ["pythonPath"] = "", ["context"] = "32768", ["kv"] = "q8_0" };
+        settings.ModelPresets[manualKey] = new() { ["packageRoot"] = manualRoot, ["serveRoot"] = manualRoot, ["pythonPath"] = Path.Combine(manualRoot, "python.exe"), ["context"] = "65536" };
+        ConfigService.SaveEngineSettings(config, "polystrata", settings);
+        var before = ConfigService.ReadConfig();
+        try
+        {
+            ConfigService.SaveEngineInstallation("polystrata", Path.Combine(newRoot, "engine-poly", "strata-poly.exe"),
+                new Dictionary<string, string> { ["packageRoot"] = newRoot, ["serveRoot"] = newRoot, ["pythonPath"] = Path.Combine(newRoot, "runtime", "venv", "Scripts", "python.exe") },
+                expectedSelection: before.Engines["polystrata"]);
+            var after = ConfigService.ReadConfig();
+            var shared = after.Engines["polystrata"].ModelPresets[sharedKey];
+            Equal(newRoot, shared["packageRoot"]);
+            Equal(newRoot, shared["serveRoot"]);
+            Equal(Path.Combine(newRoot, "runtime", "venv", "Scripts", "python.exe"), shared["pythonPath"]);
+            Equal("32768", shared["context"]);
+            Equal("q8_0", shared["kv"]);
+            var manual = after.Engines["polystrata"].ModelPresets[manualKey];
+            Equal(manualRoot, manual["packageRoot"]);
+            Equal(Path.Combine(manualRoot, "python.exe"), manual["pythonPath"]);
+            Equal("65536", manual["context"]);
+            Equal(before.ActiveBackendId, after.ActiveBackendId);
+            Equal(System.Text.Json.JsonSerializer.Serialize(before.Running), System.Text.Json.JsonSerializer.Serialize(after.Running));
+            Equal(System.Text.Json.JsonSerializer.Serialize(before.ModelPresets), System.Text.Json.JsonSerializer.Serialize(after.ModelPresets));
+        }
+        finally { ConfigService.SaveEngineSettings(ConfigService.ReadConfig(), "polystrata", original); }
     }
 }

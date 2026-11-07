@@ -111,8 +111,8 @@ public partial class MainWindow
                     settings.Parameters = new Dictionary<string, string>(existingPreset, StringComparer.OrdinalIgnoreCase);
                     foreach (var (k, v) in enginePaths)
                     {
-                        if (!settings.Parameters.ContainsKey(k) || string.IsNullOrWhiteSpace(settings.Parameters[k]))
-                            settings.Parameters[k] = v;
+                        // Keep current engine-wide installation/endpoint settings across model switches.
+                        if (!string.IsNullOrWhiteSpace(v)) settings.Parameters[k] = v;
                     }
                 }
                 else
@@ -121,7 +121,7 @@ public partial class MainWindow
                     var pairedMmproj = ModelPairingService.FindPairedMmproj(path);
                     if (!string.IsNullOrEmpty(pairedMmproj)) newParams["mmproj"] = pairedMmproj;
                     var pairedDraft = ModelPairingService.FindPairedDraftModel(path);
-                    if (!string.IsNullOrEmpty(pairedDraft)) newParams["draftModel"] = pairedDraft;
+                    if (backendId != "kvmem" && !string.IsNullOrEmpty(pairedDraft)) newParams["draftModel"] = pairedDraft;
 
                     settings.Parameters = newParams;
                     settings.ModelPresets[newKey] = new Dictionary<string, string>(newParams, StringComparer.OrdinalIgnoreCase);

@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.IO;
 using LlamaManager.Engines;
 using LlamaManager.Models;
@@ -6,200 +5,160 @@ using LlamaManager.Models;
 namespace LlamaManager.Services;
 
 /// <summary>
-/// One-click engine setup. Small, licence-compatible resources ship with the launcher; anything
-/// large or version-bound (engine binaries, Python packages) is fetched here. Every step is
-/// idempotent: an engine that already probes as available is left alone, and a failure only marks
-/// that backend unavailable.
+/// One-click setup over the same verified, versioned acquisition path used by updates. Existing
+/// usable engines survive a failed update check; no runtime is copied into a user's live engine
+/// directory and no old/global venv is pip-upgraded in place.
 /// </summary>
 public static class BootstrapService
 {
     private static readonly SemaphoreSlim Gate = new(1, 1);
-
     public sealed record StepResult(string Name, bool Ok, string Detail);
 
-    /// <summary>Runs the bootstrap for one backend id and returns the steps it performed.</summary>
     public static async Task<IReadOnlyList<StepResult>> RunAsync(string backendId, ILogSink log, CancellationToken ct = default)
     {
-        if (!await Gate.WaitAsync(0, ct).ConfigureAwait(false))
-            throw new InvalidOperationException("已有一个初始化任务在运行。");
+        if (!await Gate.WaitAsync(0, ct).ConfigureAwait(false)) throw new InvalidOperationException("已有一个初始化任务在运行。");
         try
         {
             return backendId switch
             {
-                "llamacpp" => await BootstrapLlamaCppAsync(log, ct).ConfigureAwait(false),
-                "polystrata" => await BootstrapStrataAsync(backendId, log, ct).ConfigureAwait(false),
+                "llamacpp" or "polystrata" => await BootstrapBuiltInAsync(backendId, log, ct).ConfigureAwait(false),
+                "kvmem" => await BootstrapKvmemAsync(log, ct).ConfigureAwait(false),
                 _ => await BootstrapPluginAsync(backendId, log, ct).ConfigureAwait(false),
             };
         }
         finally { Gate.Release(); }
     }
 
-    /// <summary>Bootstraps all downloadable engines sequentially.</summary>
     public static async Task<IReadOnlyDictionary<string, IReadOnlyList<StepResult>>> RunAllAsync(ILogSink log, CancellationToken ct = default)
     {
         var results = new Dictionary<string, IReadOnlyList<StepResult>>();
-        foreach (var id in new[] { "llamacpp", "polystrata" })
+        foreach (var backend in BackendRegistry.All().Where(b => b.Descriptor.BuiltIn && CanDownload(b.Descriptor.Id)))
         {
-            log.Write($"\n=== 开始配置引擎环境：{id} ===");
-            try
-            {
-                var steps = await RunAsync(id, log, ct).ConfigureAwait(false);
-                results[id] = steps;
-            }
-            catch (Exception ex)
-            {
-                log.Write($"[{id}] 配置失败: {ex.Message}");
-                results[id] = [new StepResult(id, false, ex.Message)];
-            }
+            var id = backend.Descriptor.Id;
+            log.Write("\n=== 配置引擎与匹配运行库：" + id + " ===");
+            try { results[id] = await RunAsync(id, log, ct).ConfigureAwait(false); }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex) { log.Write(id + " 配置失败：" + ex.Message); results[id] = [new StepResult(id, false, ex.Message)]; }
         }
         return results;
     }
 
-    /// <summary>Whether the bootstrap can fetch this backend's engine automatically.</summary>
     public static bool CanDownload(string backendId) => EngineAcquisitionService.CanAcquire(backendId);
 
-    private static async Task<IReadOnlyList<StepResult>> BootstrapLlamaCppAsync(ILogSink log, CancellationToken ct)
+    private static async Task<IReadOnlyList<StepResult>> BootstrapBuiltInAsync(string backendId, ILogSink log, CancellationToken ct)
     {
         var steps = new List<StepResult>();
-        var engine = ConfigService.GetLlamaServerPath();
-        if (File.Exists(engine))
+        BuiltInInstallation.ProbeResult existing;
+        try { existing = await EngineAcquisitionService.ProbeInstalledAsync(backendId, ct).ConfigureAwait(false); }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
         {
-            log.Write("llama.cpp：已找到 llama-server.exe。");
-            steps.Add(new StepResult("llama-server", true, engine));
+            steps.Add(new StepResult("identity", false, "现有引擎探测失败；没有盲目覆盖：" + ex.Message));
             return steps;
         }
-        log.Write("llama.cpp：未找到 llama-server.exe，尝试从官方发布下载…");
+        if (existing.Variant)
+        {
+            steps.Add(new StepResult("manual-variant", false, existing.Detail));
+            return steps;
+        }
+        if (existing.Exists && !BuiltInInstallation.IsComparableVersion(backendId, existing.Version))
+        {
+            // A functional manual engine can still be used, but setup cannot pretend to know its
+            // release or download over it. Unusable/unidentified executables require an explicit repair.
+            steps.Add(new StepResult("manual-version", existing.Available, existing.Detail + " 版本不可可靠比较，初始化保留现有目录；没有自动覆盖。"));
+            return steps;
+        }
+        var current = existing;
         try
         {
-            var dir = await EngineAcquisitionService.AcquireAsync("llamacpp", log, ct).ConfigureAwait(false);
-            steps.Add(new StepResult("llama-server", true, dir));
+            var update = await EngineAcquisitionService.UpdateAsync(backendId, log, ct).ConfigureAwait(false);
+            steps.Add(new StepResult("release-update", true, update.Detail ?? $"本机 {update.InstalledVersion}，远端 {update.LatestVersion}。"));
+            if (update.Updated) current = await EngineAcquisitionService.ProbeInstalledAsync(backendId, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
-            log.Write("llama.cpp 下载失败：" + ex.Message);
-            log.Write("请手动把 llama-server.exe 放到安装目录，或在设置中指定。");
-            steps.Add(new StepResult("llama-server", false, "下载失败；请手动放置或指定引擎目录。"));
+            var usable = existing.Exists && existing.Available;
+            log.Write(backendId + " 更新/修复未完成，保留原安装：" + ex.Message);
+            steps.Add(new StepResult("release-update", usable, usable
+                ? "更新检查/下载未完成；已验证的原安装保留：" + ex.Message
+                : "安装/修复失败；旧路径不变：" + ex.Message));
+            if (!usable) return steps;
         }
+        steps.Add(new StepResult("native-runtime", current.Available, current.Detail));
+        if (current.PackageRoot != null) steps.Add(new StepResult("package-root", current.Available, current.PackageRoot));
+        log.Write("环境检查未加载模型、未停止服务；新安装的引擎/DLL/私有 Python 已在最终版本目录验证。");
         return steps;
     }
 
-    /// <summary>
-    /// Strata family (polystrata): find the engine + source tree, download them
-    /// when missing, then create a venv and install the pinned packages the HTTP service needs.
-    /// The dependency list is read from the engine's own requirements.txt.
-    /// </summary>
-    private static async Task<IReadOnlyList<StepResult>> BootstrapStrataAsync(string backendId, ILogSink log, CancellationToken ct)
+    /// <summary>KVMem remains self-contained; never create a venv, run pip or fetch CUDA separately.</summary>
+    private static async Task<IReadOnlyList<StepResult>> BootstrapKvmemAsync(ILogSink log, CancellationToken ct)
     {
         var steps = new List<StepResult>();
-        var profile = StrataBackend.PolyProfile;
-        var config = ConfigService.ReadConfig();
-
-        var engine = StrataBackend.ResolveEngine(config, profile);
-        var server = StrataBackend.ResolveServer(config, profile);
-        if (engine == null || server == null)
+        var capability = await EngineAcquisitionService.DetectComputeCapabilityAsync(ct).ConfigureAwait(false);
+        var architecture = EngineCatalog.KvmemArchitecture(capability);
+        if (architecture == null)
         {
-            log.Write($"{profile.DisplayName}：引擎或服务源码缺失，尝试从官方发布下载…");
+            var detail = "无法确定受支持的精确 GPU 架构；KVMem 不猜测 RTX50，不将 sm80/sm90 映射到 RTX 包。";
+            log.Write(detail);
+            steps.Add(new StepResult("kvmem-architecture", false, detail));
+            return steps;
+        }
+        steps.Add(new StepResult("kvmem-architecture", true, $"sm{architecture} / nvidia-{EngineCatalog.KvmemGpuFamily(architecture.Value)}"));
+        var root = KvmemInstallation.ResolvePackageRoot(ConfigService.ReadConfig());
+        var layout = root == null ? null : KvmemInstallation.Validate(root, architecture);
+        KvmemInstallation.ValidationResult? runtime = layout?.Ok == true
+            ? await KvmemInstallation.ValidateRuntimeAsync(root!, ct).ConfigureAwait(false) : null;
+        if (root == null || layout?.Ok != true || runtime?.Ok != true)
+        {
+            log.Write("KVMem：需要安装/修复完整 unified 包；原 PolyStrata、活动后端和模型不变。");
+            if (layout?.Ok == false) log.Write(layout.Detail);
+            if (runtime?.Ok == false) log.Write(runtime.Detail);
             try
             {
-                await EngineAcquisitionService.AcquireAsync(backendId, log, ct).ConfigureAwait(false);
-                config = ConfigService.ReadConfig();
-                engine = StrataBackend.ResolveEngine(config, profile);
-                server = StrataBackend.ResolveServer(config, profile);
+                root = await EngineAcquisitionService.AcquireAsync("kvmem", log, ct).ConfigureAwait(false);
+                runtime = new KvmemInstallation.ValidationResult(true, "完整安装提交前已验证最终目录的包内 Python imports/native help/capabilities。",
+                    KvmemInstallation.ReadVersion(root), architecture);
             }
             catch (OperationCanceledException) { throw; }
-            catch (Exception ex) { log.Write("下载失败：" + ex.Message); }
+            catch (Exception ex) { log.Write("KVMem 安装/修复失败：" + ex.Message); steps.Add(new StepResult("kvmem-unified", false, ex.Message)); return steps; }
         }
         else
         {
-            // Installed, but possibly behind the published release: the doctor reports that as
-            // "outdated", so bootstrap has to act on it instead of silently doing nothing.
             try
             {
-                var update = await EngineAcquisitionService.UpdateAsync(backendId, log, ct).ConfigureAwait(false);
+                var update = await EngineAcquisitionService.UpdateAsync("kvmem", log, ct).ConfigureAwait(false);
                 if (update.Updated)
                 {
-                    config = ConfigService.ReadConfig();
-                    engine = StrataBackend.ResolveEngine(config, profile);
-                    server = StrataBackend.ResolveServer(config, profile);
-                    log.Write($"{profile.DisplayName}：已更新到 {update.LatestVersion}。");
+                    root = update.PackageRoot ?? KvmemInstallation.ResolvePackageRoot(ConfigService.ReadConfig());
+                    runtime = new KvmemInstallation.ValidationResult(true, "新版本提交前已验证最终目录的包内 Python imports/native help/capabilities。", update.LatestVersion, architecture);
                 }
             }
             catch (OperationCanceledException) { throw; }
-            catch (Exception ex) { log.Write("检查更新失败：" + ex.Message); }
+            catch (Exception ex) { log.Write("KVMem 检查更新未完成，保留已验证安装：" + ex.Message); steps.Add(new StepResult("kvmem-update-check", true, "更新检查未完成；未更改已安装路径。")); }
         }
-        steps.Add(engine != null
-            ? new StepResult(profile.EngineExeName, true, engine)
-            : new StepResult(profile.EngineExeName, false, "未找到；请选择引擎包目录或手动放置。"));
-        if (engine != null)
-        {
-            log.Write(profile.EngineExeName + "：" + engine);
-            await EnsureCudaDllsAsync(Path.GetDirectoryName(engine)!, log, ct).ConfigureAwait(false);
-        }
-
-        steps.Add(server != null
-            ? new StepResult("serve/server.py", true, server)
-            : new StepResult("serve/server.py", false, "未找到；请设置服务源码根目录。"));
-        if (server != null) log.Write("serve/server.py：" + server);
-        if (server == null || engine == null) return steps;
-
-        // Python 3.10+ is required. Install it when absent so a fresh machine needs no manual step.
-        var python = StrataBackend.ResolvePython(config, profile);
-        if (python == null)
-        {
-            log.Write("未找到 Python 3.10+，尝试自动安装…");
-            var install = await PythonInstaller.EnsureAsync(log, ct).ConfigureAwait(false);
-            steps.Add(new StepResult("python", install.Ok,
-                install.Ok ? install.PythonPath! : install.Detail));
-            if (!install.Ok)
-            {
-                log.Write("请安装 Windows x64 Python 3.10+（勾选 PATH），或在面板中选择 python.exe。");
-                return steps;
-            }
-            python = install.PythonPath!;
-        }
-        else steps.Add(new StepResult("python", true, python));
-        log.Write("Python：" + python);
-
-        var serveRoot = Path.GetDirectoryName(Path.GetDirectoryName(server))!;
-        var venv = Path.Combine(ConfigService.GetManagerRoot(), "venvs", backendId);
-        var venvPython = Path.Combine(venv, "Scripts", "python.exe");
-        if (!File.Exists(venvPython))
-        {
-            log.Write("创建虚拟环境：" + venv);
-            var create = await RunAsync(python, ["-m", "venv", venv], log, ct).ConfigureAwait(false);
-            steps.Add(new StepResult("venv", create == 0, venv));
-            if (create != 0) return steps;
-        }
-        else steps.Add(new StepResult("venv", true, venv));
-
-        var requirements = ReadRequirements(serveRoot);
-        log.Write($"安装依赖（{requirements.Count} 项）：{string.Join(", ", requirements)}");
-        var pipArgs = new List<string> { "-m", "pip", "install", "--quiet", "--disable-pip-version-check" };
-        pipArgs.AddRange(requirements);
-        var pip = await RunAsync(venvPython, pipArgs, log, ct).ConfigureAwait(false);
-        steps.Add(new StepResult("pip", pip == 0, pip == 0 ? "依赖安装完成。" : "依赖安装失败，请查看日志。"));
+        if (root == null) { steps.Add(new StepResult("kvmem-unified", false, "未找到完整的 KVMem 版本/显卡目录。")); return steps; }
+        layout = KvmemInstallation.Validate(root, architecture);
+        steps.Add(new StepResult("kvmem-unified", layout.Ok, layout.Detail + " " + root));
+        if (!layout.Ok) return steps;
+        steps.Add(new StepResult("bundle-python", true, Path.Combine(root, KvmemInstallation.PythonRelativePath)));
+        runtime ??= await KvmemInstallation.ValidateRuntimeAsync(root, ct).ConfigureAwait(false);
+        steps.Add(new StepResult("kvmem-runtime", runtime.Ok, runtime.Detail));
+        log.Write(runtime.Detail);
+        log.Write("KVMem 使用包内 Python/CUDA：无 pip、无 venv、无 CUDA 重下载；此检查不加载模型。");
         return steps;
     }
 
     private static async Task<IReadOnlyList<StepResult>> BootstrapPluginAsync(string backendId, ILogSink log, CancellationToken ct)
     {
-        var steps = new List<StepResult>();
         var backend = BackendRegistry.ById(backendId);
-        if (backend == null)
-        {
-            steps.Add(new StepResult(backendId, false, "未注册的引擎。"));
-            return steps;
-        }
+        if (backend == null) return [new StepResult(backendId, false, "未注册的引擎。")];
         var status = await backend.ProbeAsync(ct).ConfigureAwait(false);
-        log.Write(status.Available
-            ? $"{backend.Descriptor.DisplayName}：已找到引擎可执行文件。"
-            : $"{backend.Descriptor.DisplayName}：{status.Problem}");
-        steps.Add(new StepResult(backend.Descriptor.Id, status.Available, status.Available ? status.ExecutablePath! : status.Problem!));
-        return steps;
+        log.Write(status.Available ? backend.Descriptor.DisplayName + "：已找到引擎。" : backend.Descriptor.DisplayName + "：" + status.Problem);
+        return [new StepResult(backendId, status.Available, status.Available ? status.ExecutablePath! : status.Problem!)];
     }
 
-    /// <summary>Reads the pinned requirement lines from the engine source; falls back to a built-in list.</summary>
+    /// <summary>Legacy public requirement reader; newly acquired packages require their own pinned file, not this fallback.</summary>
     public static IReadOnlyList<string> ReadRequirements(string serveRoot)
     {
         var path = Path.Combine(serveRoot, "requirements.txt");
@@ -207,77 +166,11 @@ public static class BootstrapService
         {
             try
             {
-                var lines = File.ReadAllLines(path)
-                    .Select(l => l.Trim())
-                    .Where(l => l.Length > 0 && !l.StartsWith('#'))
-                    .ToArray();
+                var lines = File.ReadAllLines(path).Select(l => l.Trim()).Where(l => l.Length > 0 && !l.StartsWith('#')).ToArray();
                 if (lines.Length > 0) return lines;
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         }
-        // Fallback (only when the source tree is absent): the packages the HTTP service needs.
         return ["numpy", "jinja2", "regex", "pyyaml", "tqdm", "requests", "pillow", "psutil"];
-    }
-
-    private static async Task<int> RunAsync(string exe, IReadOnlyList<string> arguments, ILogSink log, CancellationToken ct)
-    {
-        try
-        {
-            var start = StrataService.CaptureStart(exe);
-            foreach (var arg in arguments) start.ArgumentList.Add(arg);
-            using var process = Process.Start(start);
-            if (process == null) return -1;
-            await process.WaitForExitAsync(ct).ConfigureAwait(false);
-            if (process.ExitCode != 0)
-                log.Write($"命令失败（退出码 {process.ExitCode}）：{exe} {string.Join(" ", arguments)}");
-            return process.ExitCode;
-        }
-        catch (Exception ex) when (ex is IOException or System.ComponentModel.Win32Exception or InvalidOperationException)
-        {
-            log.Write("执行失败：" + ex.Message);
-            return -1;
-        }
-    }
-
-    private static async Task EnsureCudaDllsAsync(string engineDir, ILogSink log, CancellationToken ct)
-    {
-        var managerRoot = ConfigService.GetManagerRoot();
-        var llamaCppRoot = ConfigService.GetLlamaCppRoot();
-        var candidateDirs = new[] { managerRoot, llamaCppRoot }.Distinct(StringComparer.OrdinalIgnoreCase);
-
-        var hasCublas = Directory.Exists(engineDir) && Directory.GetFiles(engineDir, "cublas64_*.dll").Length > 0;
-        if (!hasCublas)
-        {
-            var copied = false;
-            foreach (var dir in candidateDirs)
-            {
-                if (string.IsNullOrWhiteSpace(dir) || !Directory.Exists(dir)) continue;
-                var sourceFiles = Directory.GetFiles(dir, "cublas*.dll").Concat(Directory.GetFiles(dir, "cudart*.dll"));
-                foreach (var dll in sourceFiles)
-                {
-                    var dest = Path.Combine(engineDir, Path.GetFileName(dll));
-                    if (!File.Exists(dest))
-                    {
-                        try { File.Copy(dll, dest, true); copied = true; }
-                        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
-                    }
-                }
-            }
-            if (copied)
-            {
-                log.Write("已复制 CUDA 运行时库到引擎目录。");
-                return;
-            }
-
-            try
-            {
-                log.Write("正在获取 CUDA 运行时库（用于 GPU 计算加速）…");
-                await EngineAcquisitionService.AcquireCudartToAsync(engineDir, log, ct).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                log.Write("获取 CUDA 运行时库提示（非阻塞）：" + ex.Message);
-            }
-        }
     }
 }

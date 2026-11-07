@@ -20,6 +20,7 @@ public static class StrataPackService
     private static readonly string[] Tools = ["iq_pack.py", "make_profile.py", "gguf_reader.py", "strata_tokenizer.py", "_paths.py"];
     private const string BaseProbe = "import sys,json; assert sys.version_info >= (3,10), 'Python 3.10+ required'; print(json.dumps({'executable':sys.executable}))";
     private const string DependencyProbe = "import sys,os,json,pathlib; p=os.environ.get('STRATA_GGUF_PY'); sys.path.insert(0,p) if p else None; import numpy,regex,gguf; from gguf import quants,GGMLQuantizationType; print(json.dumps({'executable':sys.executable,'ggufRoot':str(pathlib.Path(gguf.__file__).resolve().parent.parent)}))";
+    private const string TokenizerDependencyProbe = "import sys,json,numpy,regex; print(json.dumps({'executable':sys.executable,'ggufRoot':''}))";
     private const string ExportVocab = "import sys,pathlib; sys.path.insert(0,sys.argv[1]); from strata_tokenizer import Tokenizer; tk=Tokenizer.from_gguf(sys.argv[2]); f=open(sys.argv[3],'w',encoding='utf-8',newline='\\n'); f.writelines(str(i)+'\\t'+tk.token_bytes(i).hex()+'\\n' for i in range(len(tk.tokens))); f.close(); print('model vocab_bytes.tsv exported')";
 
     public static string DefaultCacheDirectory => Path.Combine(ConfigService.GetManagerRoot(), "data", "strata-packs");
@@ -69,7 +70,7 @@ public static class StrataPackService
         if (!File.Exists(tool)) throw new FileNotFoundException("Strata 源码缺少 tools/strata_tokenizer.py，无法准备分词表。", tool);
         var logPath = Path.Combine(ConfigService.GetManagerRoot(), "logs", "strata-tokenizer-" + Guid.NewGuid().ToString("N") + ".log");
         var options = new Options(serveRoot, model, pythonPath, DefaultCacheDirectory);
-        var python = await EnsurePythonAsync(options, tools, DefaultCacheDirectory, logPath, progress ?? (_ => { }), ct).ConfigureAwait(false);
+        var python = await EnsurePythonAsync(options, tools, DefaultCacheDirectory, logPath, progress ?? (_ => { }), ct, tokenizerOnly: true).ConfigureAwait(false);
         Directory.CreateDirectory(tokenizerDir);
         await RunCheckedAsync(PythonStart(python.Executable, ["-u", tool, "--gguf", model, "--out", tokenizerDir], python.GgufRoot),
             logPath, "tokenizer", progress ?? (_ => { }), ct).ConfigureAwait(false);
@@ -228,7 +229,7 @@ public static class StrataPackService
     }
 
     private static async Task<PythonInfo> EnsurePythonAsync(Options options, string tools, string cache, string log,
-        Action<string> progress, CancellationToken ct)
+        Action<string> progress, CancellationToken ct, bool tokenizerOnly = false)
     {
         var venv = Path.Combine(cache, "python-env");
         var venvPython = Path.Combine(venv, "Scripts", "python.exe");
@@ -254,12 +255,16 @@ public static class StrataPackService
         if (python == null) throw new FileNotFoundException("未找到 Python 3.10+。请安装 Windows x64 Python（勾选 PATH），或在面板中选择 python.exe。已有 pack 的推理不需要 Python。");
         async Task<PythonInfo> Dependencies(string executable)
         {
-            var result = await RunCheckedAsync(PythonStart(executable, ["-c", DependencyProbe], ggufRoot), log, "dependencies",
+            var result = await RunCheckedAsync(PythonStart(executable, ["-c", tokenizerOnly ? TokenizerDependencyProbe : DependencyProbe], ggufRoot), log, "dependencies",
                 _ => { }, ct, 20).ConfigureAwait(false);
             using var info = JsonDocument.Parse(result.Stdout.Trim());
             return new PythonInfo(info.RootElement.GetProperty("executable").GetString()!, info.RootElement.GetProperty("ggufRoot").GetString()!);
         }
         try { return await Dependencies(python).ConfigureAwait(false); }
+        catch (IOException ex) when (tokenizerOnly)
+        {
+            throw new IOException("分词表仅需要发布包配套的 numpy/regex 与自带 gguf_reader；请先配置当前引擎运行环境，不会为分词表另建打包 venv 或安装 gguf。", ex);
+        }
         catch (IOException) { progress("缺少打包依赖：在独立 python-env 中安装 numpy / regex / gguf（首次需要网络）…"); }
         if (!PathIdentity.Equals(python, venvPython))
             await RunCheckedAsync(PythonStart(python, ["-m", "venv", venv]), log, "venv", progress, ct, 120).ConfigureAwait(false);

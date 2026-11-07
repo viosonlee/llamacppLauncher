@@ -392,6 +392,39 @@ internal static class UiRegression
                 search.Text = "";
                 window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
 
+                // One-click maintenance is global; cancelling/closing must not write stale paths or start network work.
+                Program.Check(window.FindName("EngineUpdateAllButton") is Button, "global one-click update button missing");
+                var updateButton = (Button)window.FindName("EngineUpdateAllButton");
+                var maintenanceField = typeof(MainWindow).GetField("_engineMaintenanceCancellation", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                using (var cancellation = new CancellationTokenSource())
+                {
+                    maintenanceField.SetValue(window, cancellation);
+                    var click = typeof(MainWindow).GetMethod("EngineUpdateAllButton_Click", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                    click.Invoke(window, [updateButton, new RoutedEventArgs()]);
+                    Program.Check(cancellation.IsCancellationRequested, "second update click did not cancel the running operation");
+                    var closing = new System.ComponentModel.CancelEventArgs();
+                    typeof(MainWindow).GetMethod("MainWindow_Closing", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, [window, closing]);
+                    Program.Check(closing.Cancel, "close during update could save the pre-update path snapshot");
+                    maintenanceField.SetValue(window, null);
+                }
+                var windowConfig = (ManagerConfig)typeof(MainWindow).GetField("_config", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+                var currentSettings = windowConfig.Engines["polystrata"];
+                var savedSettings = System.Text.Json.JsonSerializer.Serialize(currentSettings);
+                try
+                {
+                    currentSettings.ModelPath = Path.Combine(ConfigService.GetManagerRoot(), "model with spaces.gguf");
+                    currentSettings.Parameters["packageRoot"] = Path.Combine(ConfigService.GetManagerRoot(), "new-version");
+                    currentSettings.ModelPresets[PathIdentity.Normalize(currentSettings.ModelPath)] = new()
+                    {
+                        ["packageRoot"] = Path.Combine(ConfigService.GetManagerRoot(), "old-version"), ["context"] = "32768"
+                    };
+                    var settingsFor = typeof(MainWindow).GetMethod("SettingsFor", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                    var effective = (EngineSettings)settingsFor.Invoke(window, [strataBackend])!;
+                    Program.Equal(Path.Combine(ConfigService.GetManagerRoot(), "new-version"), effective.Parameters["packageRoot"]);
+                    Program.Equal("32768", effective.Parameters["context"]);
+                }
+                finally { windowConfig.Engines["polystrata"] = System.Text.Json.JsonSerializer.Deserialize<EngineSettings>(savedSettings)!; }
+
                 // Leave the persisted active backend as llama.cpp so later tests start clean.
                 ConfigService.SaveActiveBackend(ConfigService.ReadConfig(), "llamacpp");
 

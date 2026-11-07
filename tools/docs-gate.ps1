@@ -17,7 +17,8 @@ function Fail($m) { $script:failures.Add($m) }
 # 1. Required documents.
 foreach ($doc in 'README.md', 'docs/REQUIREMENTS.md', 'docs/CHANGELOG-DECISIONS.md',
                  'docs/architecture.md', 'docs/engine-plugins.md',
-                 'docs/AGENT-GUIDE.md', 'THIRD-PARTY-NOTICES.md') {
+                 'docs/AGENT-GUIDE.md', 'docs/KVMEM-INTEGRATION.md', 'docs/KVMEM-CHANGE-SPEC.md',
+                 'docs/KVMEM-TEST-CASES.md', 'THIRD-PARTY-NOTICES.md') {
     if (-not (Test-Path (Join-Path $root $doc))) { Fail "缺少文档：$doc" }
 }
 
@@ -42,7 +43,7 @@ foreach ($line in $definitionLines) {
 }
 
 # 3. Cross-references resolve.
-foreach ($doc in 'docs/CHANGELOG-DECISIONS.md', 'AGENTS.md', 'docs/engine-plugins.md', 'docs/AGENT-GUIDE.md', 'README.md') {
+foreach ($doc in 'docs/CHANGELOG-DECISIONS.md', 'AGENTS.md', 'docs/engine-plugins.md', 'docs/AGENT-GUIDE.md', 'README.md', 'docs/KVMEM-CHANGE-SPEC.md', 'docs/KVMEM-TEST-CASES.md') {
     $path = Join-Path $root $doc
     if (-not (Test-Path $path)) { continue }
     $text = Get-Content $path -Raw -Encoding UTF8
@@ -52,9 +53,9 @@ foreach ($doc in 'docs/CHANGELOG-DECISIONS.md', 'AGENTS.md', 'docs/engine-plugin
 }
 
 # 5. README engine ids match the registry ids in code.
-# The registry (gui/LlamaManager/Engines/BackendRegistry.cs) registers exactly these two.
+# Built-ins include the optional, separately installed KVMem profile.
 $readme = Get-Content (Join-Path $root 'README.md') -Raw -Encoding UTF8
-foreach ($id in 'llamacpp', 'polystrata') {
+foreach ($id in 'llamacpp', 'polystrata', 'kvmem') {
     if ($readme -notmatch [regex]::Escape($id)) { Fail "README 未描述引擎 $id" }
 }
 

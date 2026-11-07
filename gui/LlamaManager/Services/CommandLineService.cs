@@ -21,6 +21,8 @@ public static class CommandLineService
         if (command == "--help")
         {
             await output.WriteLineAsync("LlamaManager --start|--service|--stop|--status|--open|--print-preset|--bootstrap [--all]|--update [--all]|--doctor [--offline]|--enable-autostart|--disable-autostart [--model PATH] [--port N] [--backend ID] [--auto-bootstrap]");
+            await output.WriteLineAsync("--update --all：全部注册内置 llamacpp / polystrata / kvmem 及匹配运行库；版本目录验证后原子切换，旧版本只保留最近可回退版本（运行/手工/专用路径受保护）。");
+            await output.WriteLineAsync("独立 KVMem：--bootstrap --backend kvmem / --update --backend kvmem；使用完整版本/显卡专用 unified 包，保留原 polystrata；Prism 是手工可选变体。");
             return 0;
         }
         if (command == null || !supported.Contains(command)) throw new ArgumentException("未知命令；使用 --help 查看。");
@@ -38,7 +40,7 @@ public static class CommandLineService
                 case "--port": overridePort = new LauncherArguments("--port " + TakeValue(args, ref i)).GetPort(); break;
                 case "--backend": overrideBackend = TakeValue(args, ref i); break;
                 case "--offline": break; // value-less; only meaningful for --doctor
-                case "--all": bootstrapAll = true; break; // value-less; for --bootstrap
+                case "--all": bootstrapAll = true; break; // value-less; for --bootstrap / --update
                 case "--bootstrap":
                 case "--auto-bootstrap": autoBootstrap = true; break; // value-less; for --start / --service
                 default: throw new ArgumentException("未知命令选项：" + args[i]);
@@ -79,13 +81,24 @@ public static class CommandLineService
             case "--start":
                 if (autoBootstrap)
                 {
-                    await BootstrapService.RunAsync(backendId, new DelegateLogSink(LogService.Write), ct);
+                    var setup = await BootstrapService.RunAsync(backendId, new DelegateLogSink(LogService.Write), ct);
+                    foreach (var step in setup)
+                        await output.WriteLineAsync($"[{(step.Ok ? "ok" : "failed")}] {backendId}/{step.Name}: {step.Detail}");
+                    if (setup.Any(step => !step.Ok)) return 1;
+                    // Bootstrap commits only installation paths; launch from those newly recorded
+                    // settings while keeping command-only model/port overrides and the active backend.
+                    var latest = ConfigService.ReadConfig();
+                    if (latest.Engines.TryGetValue(backendId, out var installedSettings))
+                    {
+                        if (overrideModel) installedSettings.ModelPath = config.ModelPath;
+                        config.Engines[backendId] = installedSettings;
+                    }
                 }
                 var session = await backend.StartAsync(new EngineStartRequest { Config = config, Port = overridePort },
                     new DelegateLogSink(LogService.Write), ct);
                 return session.ProcessId > 0 ? 0 : 2;
             case "--stop":
-                var stopSession = recorded is { } stop ? LlamaCppBackend.ToEngineSession(stop) : null;
+                var stopSession = recorded is { } stop ? LlamaCppBackend.ToEngineSession(stop) with { BackendId = backendId } : null;
                 await backend.StopAsync(stopSession ?? new EngineSession { BackendId = backendId }, new DelegateLogSink(LogService.Write));
                 return 0;
             case "--status":
@@ -95,7 +108,7 @@ public static class CommandLineService
                     await output.WriteLineAsync(JsonSerializer.Serialize(new
                     {
                         running,
-                        ready = running && await ServerService.TestApiReadyAsync(recorded!.Port, ct),
+                        ready = running && await backend.ReadyAsync(LlamaCppBackend.ToEngineSession(recorded!) with { BackendId = backendId }, ct),
                         backend = backendId,
                         session = running ? recorded : null
                     }));
@@ -105,39 +118,48 @@ public static class CommandLineService
                 using (var process = recorded is { } open ? ServerService.ValidateProcess(open) : null)
                 {
                     if (process == null) throw new InvalidOperationException("服务尚未启动。");
-                    backend.OpenWebUi(LlamaCppBackend.ToEngineSession(recorded!));
+                    backend.OpenWebUi(LlamaCppBackend.ToEngineSession(recorded!) with { BackendId = backendId });
                 }
                 return 0;
             case "--bootstrap":
                 if (bootstrapAll)
                 {
                     var allResults = await BootstrapService.RunAllAsync(new DelegateLogSink(LogService.Write), ct);
+                    foreach (var (id, steps) in allResults)
+                        foreach (var step in steps)
+                            await output.WriteLineAsync($"[{(step.Ok ? "ok" : "failed")}] {id}/{step.Name}: {step.Detail}");
                     var anyFailed = allResults.Values.Any(steps => steps.Any(s => !s.Ok));
                     return anyFailed ? 1 : 0;
                 }
                 var bootstrapSteps = await BootstrapService.RunAsync(backendId, new DelegateLogSink(LogService.Write), ct);
+                foreach (var step in bootstrapSteps)
+                    await output.WriteLineAsync($"[{(step.Ok ? "ok" : "failed")}] {backendId}/{step.Name}: {step.Detail}");
                 return bootstrapSteps.Any(s => !s.Ok) ? 1 : 0;
             case "--update":
             {
-                var ids = bootstrapAll ? new[] { "polystrata" } : new[] { backendId };
-                var failed = false;
-                foreach (var id in ids)
+                var log = new DelegateLogSink(LogService.Write);
+                IReadOnlyList<EngineAcquisitionService.EngineMaintenanceResult> results;
+                if (bootstrapAll) results = await EngineAcquisitionService.UpdateAllAsync(log, ct).ConfigureAwait(false);
+                else
                 {
-                    try
-                    {
-                        var result = await EngineAcquisitionService.UpdateAsync(id, new DelegateLogSink(LogService.Write), ct);
-                        await output.WriteLineAsync(result.Updated
-                            ? $"{id}: 已更新 {result.InstalledVersion} → {result.LatestVersion}"
-                            : $"{id}: 已是最新（{result.LatestVersion ?? result.InstalledVersion}）");
-                    }
+                    try { results = [new(backendId, await EngineAcquisitionService.UpdateAsync(backendId, log, ct).ConfigureAwait(false), null)]; }
                     catch (OperationCanceledException) { throw; }
-                    catch (Exception ex)
-                    {
-                        failed = true;
-                        await output.WriteLineAsync($"{id}: 更新失败 — {ex.Message}");
-                    }
+                    catch (Exception ex) { results = [new(backendId, null, ex.Message)]; }
                 }
-                return failed ? 1 : 0;
+                foreach (var item in results)
+                {
+                    if (!item.Ok || item.Update == null)
+                    {
+                        await output.WriteLineAsync($"{item.BackendId}: 更新未完成 — {item.Error ?? "没有可验证结果"}");
+                        continue;
+                    }
+                    var result = item.Update;
+                    await output.WriteLineAsync(result.Updated
+                        ? $"{item.BackendId}: 已安装/更新 {result.InstalledVersion ?? "未安装"} → {result.LatestVersion}；{result.Detail}"
+                        : $"{item.BackendId}: 无需更新；{result.Detail}");
+                    if (result.PackageRoot != null) await output.WriteLineAsync("    引擎版本目录：" + result.PackageRoot);
+                }
+                return results.Any(r => !r.Ok || r.Update == null) ? 1 : 0;
             }
             case "--doctor":
             {

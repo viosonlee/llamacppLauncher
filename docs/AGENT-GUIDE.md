@@ -25,9 +25,10 @@
 | 网络（首次） | 能访问 github.com 与 python.org | 离线时不支持首次下载，只能 `--doctor --offline` 体检 |
 | Python 3.10+ | 不必预装（见 §4） | 初始化时自动安装 |
 
-**GPU 兼容性**：引擎按计算能力自动选 CUDA 大版本——计算能力 < 8.0（Turing/Volta，如 RTX 20 系列）
-用 CUDA 12.4；≥ 8.0 用 13.4。不要手动改成 13.4：13.4 nightly 不含 Turing SASS，会报
-`PTX was compiled with an unsupported toolchain`。
+**GPU 兼容性**：llama.cpp 按计算能力与 driver 上限选同发布 CUDA binary+cudart 配对——计算能力 < 8.0
+（Turing/Volta，如 RTX 20 系列）仅用 CUDA 12.4；≥8.0 优先不高于 driver 支持的 CUDA 13.x，必要时使用同发布 12.4。
+不要把最新 CUDA minor 强加给旧驱动。driver 检测兼容 `CUDA Version` 与新版 `CUDA UMD Version`。
+PolyStrata 使用其 BUILD 与同 tag 源码声明的 NVIDIA 运行库 pins；KVMem 使用显卡架构专用完整包。
 
 ## 2. 路径布局（安装根 = 解压目录）
 
@@ -38,10 +39,11 @@
 |---|---|
 | 管理器安装根 | 解压目录（含 `LlamaManager.exe`）；引擎装在 `<根>/engines/` |
 | llama.cpp 根 | 含 `llama-server.exe` 的目录（自安装根向上最多 4 层查找） |
-| llama.cpp 引擎 | `<llama.cpp 根>/llama-server.exe` |
+| llama.cpp 引擎 | 新安装：`<根>/engines/llamacpp/<build>-cuda-<版本>/llama-server.exe`；旧手工安装仍可使用 `<llama.cpp 根>/llama-server.exe` |
 | Prism 引擎 | `<llama.cpp 根>/engines/prism/llama-server.exe`（**无公开下载源，需手动放置**） |
-| polystrata 引擎 | `<根>/engines/polystrata/engine-poly/strata-poly.exe` + `serve/` |
-| Python venv | `<根>/venvs/polystrata/` |
+| polystrata 引擎 | 新安装：`<根>/engines/polystrata/<release>-cuda-<版本>/engine-poly/strata-poly.exe` + 同目录 `serve/`；保留旧手工根 |
+| Python venv | 新 PolyStrata 使用版本目录内 `runtime/venv/`；原全局 `venvs/polystrata/` 不就地升级 |
+| KVMem（可选） | `<根>/engines/kvmem/<版本-显卡>/` 完整 unified 包；worker 在 `workers/polystrata/`，服务在 `backends/polystrata/`，运行时在 `runtime/` |
 | 配置与日志 | `<根>/config.json`、`<根>/logs/` |
 
 ## 3. 部署步骤（CLI，逐条执行并核对退出码）
@@ -98,6 +100,7 @@ polystrata 的 HTTP 服务由 Python 提供，`--bootstrap` 检测不到 Python 
 |---|---|---|
 | `llamacpp` | 通用 GGUF（含 Prism 三元量化） | Prism 模型需先手动放置 Prism 引擎，否则回退到普通 llama.cpp |
 | `polystrata` | PolyStrata MoE | 专家格式由兼容性矩阵判定，见 `docs/engine-plugins.md` |
+| `kvmem`（可选） | 仅 `qwen35moe` GGUF | 真实分层 KV、单 NVIDIA GPU、fp16/q8_0；包内 Python/CUDA，不覆盖原版，见 [KVMem 集成说明](KVMEM-INTEGRATION.md) |
 
 > 说明：旧 `strata-cyber` 分支及离线 pack 路径（REQ-090）已全面归档只读，不进入注册表；统一使用上述自带 HTTP 服务的原生引擎。
 >
@@ -108,6 +111,22 @@ polystrata 的 HTTP 服务由 Python 提供，`--bootstrap` 检测不到 Python 
 **模型文件要求**：必须是完整的 `.gguf`；被截断的文件（大小明显偏小）不要用。qwen35moe 的
 专家大多放在主机内存，**主机内存才是瓶颈**：模型文件 + 系统占用要留出余量，否则会换页掉速
 （实测 23.4 GB 内存上 13–16 GB 的模型可用，但要保证没有其它大程序同时占内存）。
+
+### 5.1 KVMem 独立部署（REQ-125）
+
+```powershell
+.\LlamaManager.exe --bootstrap --backend kvmem
+.\LlamaManager.exe --doctor --offline
+.\LlamaManager.exe --start --backend kvmem --model "C:\models\qwen35moe.gguf" --port 8080
+.\LlamaManager.exe --status --backend kvmem
+.\LlamaManager.exe --stop --backend kvmem
+```
+
+不要向原版 llama.cpp/PolyStrata 传裸 `--kvmem`。先在 KVMem 参数面板设置 B/R、RAM/SSD 配额；
+逻辑 context 必须 >= B+R，预填充分块 <= R。默认 B8192/R512/H1024 MiB，SSD 关闭。
+本后端默认仅 GPU0 与普通解码，模型权重/工作区仍可能 OOM；S 是保留历史数量，不是 GPU 并发。
+独立 KVMem 服务只提供 API；“打开页面”展示 `/props`，不等于上游完整聊天控制台。
+普通回归仍不触 GPU；显式长上下文冒烟及证据标准见 [KVMem 集成说明](KVMEM-INTEGRATION.md)。
 
 ## 6. 排障表（现象 → 处理）
 

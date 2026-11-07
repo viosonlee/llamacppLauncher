@@ -14,6 +14,7 @@ public static class BackendRegistry
     {
         Register(new LlamaCppBackend());
         Register(new StrataBackend(StrataBackend.PolyProfile));
+        Register(new StrataBackend(StrataBackend.KvmemProfile));
     }
 
     public static void Register(IEngineBackend backend)

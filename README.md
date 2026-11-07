@@ -13,6 +13,9 @@ Windows 本地大模型启动器，使用 .NET 8 WPF。
   > 原 `strata-upstream`（`strata.exe`）已于 2026-10-18 退役：它唯一独有的 `qwen4exp`
   > （Qwen3.8-Flash-Next）需 32 GB 以上内存，在共同支持的 qwen35moe 上又比 polystrata 慢约 30%。
   > 见 `docs/CHANGELOG-DECISIONS.md` 同日条目。
+- **kvmem**（可选内置后端）：真实 KVMem PolyStrata 分层 KV 引擎，使用完整 unified 发布包，
+  与原版 PolyStrata 分目录保留。当前仅接入 `qwen35moe` GGUF、单 GPU、fp16/q8_0；
+  NInfer `.ninfer` 尚未接入。部署、预算与验收见 [KVMem 集成说明](docs/KVMEM-INTEGRATION.md)。
 - **插件后端**：`plugins/<id>/plugin.json`（`schema:1`）声明如何启动自带 HTTP 服务的第三方引擎、
   如何探测就绪、参数表。插件是独立进程，崩溃不影响启动器，新增引擎无需重编译。
 
@@ -20,9 +23,12 @@ Windows 本地大模型启动器，使用 .NET 8 WPF。
 [docs/engine-benchmarks.md](docs/engine-benchmarks.md)。
 
 
-「一键体检」（GUI 按钮 / CLI `--doctor`）检查所有引擎：缺失、可用、有更新（联网比对发布版本）、
-需手动（Prism 无公开下载源）。llama.cpp 下载按 GPU 计算能力选择 CUDA 大版本：
-pre-Ampere（如 RTX 20 系）取 CUDA 12.4 构建，更新的卡取 13.4。
+「一键体检」（GUI 按钮 / CLI `--doctor`）检查所有引擎：缺失、可用、有更新（联网比对适用发布版本）、
+需手动（Prism 等自定义变体不由官方引擎更新器覆盖）。顶部 **一键更新** 或 CLI `--update --all` 更新全部内置引擎和匹配运行库；再次点击可取消。
+llama.cpp 按 GPU 和 driver 可支持的 CUDA minor 选择同一发布的 binary+cudart 配对：pre-Ampere 仅 CUDA 12.4，
+其它显卡也不会安装高于 driver 能力的 CUDA 包。PolyStrata 使用对应发布的 Python/CUDA 依赖，KVMem 使用完整统一包。
+启动器管理的版本及下载缓存按每个引擎/架构保留 **当前版 + 最近一版旧版**；手工目录、运行中的版本和用户数据不会自动删除。
+详见 [更新与保留策略](docs/ENGINE-UPDATE-GUIDE.md)。
 
 标签页：模型 / 参数 / 高级 / **嵌入** / 日志。嵌入页管理独立的向量化服务
 （如 bge-m3，供资料量化 / RAG 使用），与主模型服务相互独立。
@@ -52,7 +58,12 @@ pre-Ampere（如 RTX 20 系）取 CUDA 12.4 构建，更新的卡取 13.4。
   预填速率与投机草稿接受率，以及运行期间采样的显存峰值——MoE 调优最关心的就是离显存上限有多近。
   实测前关掉其它占显存的程序，报告会记录开始时的显存空闲量。测速变体使用系统分配的临时
   端口，避开 8080、配置中的服务端口与已记录运行端口；不会停止或改写正式服务。
-- 超长上下文（KVMem）：llama.cpp 与 PolyStrata 参数面板提供「超长上下文 (KVMem)」参数组，包含开关 `--kvmem` 与动态展开的预算（--kvmem-budget）、生成预留（--kvmem-gen-reserve）、主机内存上限（--kvmem-host-mib）、磁盘存储空间（--kvmem-disk-mib）、磁盘路径（--kvmem-disk-path）与并发会话数（--kvmem-sessions）。当关闭时不向引擎传递额外选项；各模型独立通过预设隔离记忆。
+- 超长上下文（KVMem）：选择独立 **kvmem** 后端后初始化完整引擎包，再开启分层 KV。
+  原版 llama.cpp / PolyStrata 不支持这些参数，也不会再显示误导开关。KVMem 默认逻辑上下文 65536、
+  B=8192、R=512、H=1024 MiB、保留历史数 2；SSD 需显式设置配额及目录。
+  使用块稀疏注意力，降低长历史的 KV 显存增长，但不保证杜绝所有 OOM 或保持全量注意力质量。
+  默认普通解码（MTP 暂不接入），API 请求未指定输出上限时默认 1024 tokens。
+  此后端的“打开页面”显示 `/props` 实际能力；不启动上游统一控制台或承诺内置聊天页。
 - 小数参数（如 PolyStrata `cacheBias`）支持 `0.5` 和 `0,5`，保存统一为点号小数；
   非有限值（NaN/Infinity）和超范围值会阻止参数保存。
 - 关闭窗口后服务器继续运行，日志直接写入文件。重新打开启动器后可继续管理。
@@ -78,6 +89,8 @@ TQ1_0 的 CUDA 支持取决于引擎版本；见 [Sakura 兼容性说明](tools/
   打印日志页将渲染的全部内容。
 
 ## 构建和验证
+
+本次变更的规格与验收入口：[变更规格](docs/KVMEM-CHANGE-SPEC.md) · [测试用例矩阵](docs/KVMEM-TEST-CASES.md)。
 
 需要 Windows x64 和 .NET 8 SDK。发布包包含运行时，使用者无需安装 .NET。
 首次构建需要从 NuGet 还原 `System.Management 8.0.0`。

@@ -131,7 +131,7 @@ public partial class MainWindow
 
     private async void StartButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_serverStarting || _serverStopping || _selecting || _scanning) return;
+        if (_serverStarting || _serverStopping || _selecting || _scanning || _engineMaintenanceCancellation != null) return;
         var backend = SelectedEngineBackend();
         if (backend is not IServerBackend server) return;
 

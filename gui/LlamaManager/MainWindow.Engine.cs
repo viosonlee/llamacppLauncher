@@ -19,6 +19,7 @@ public partial class MainWindow
 {
     private bool _engineUpdate;
     private bool _doctorRunning;
+    private CancellationTokenSource? _engineMaintenanceCancellation;
     private readonly Dictionary<string, Control> _engineParameterControls = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, ParameterSpec> _engineParameterSpecs = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, TextBlock> _engineParameterErrors = new(StringComparer.OrdinalIgnoreCase);
@@ -210,6 +211,9 @@ public partial class MainWindow
             {
                 foreach (var (k, v) in preset)
                 {
+                    // Installation paths are engine-wide. A model preset must not undo a completed update.
+                    if (IsEngineLevelParam(k) && settings.Parameters.TryGetValue(k, out var current) &&
+                        !string.IsNullOrWhiteSpace(current)) continue;
                     settings.Parameters[k] = v;
                 }
             }
@@ -893,36 +897,32 @@ public partial class MainWindow
             first == null ? "有参数超出允许范围，已取消启动。" : $"“{first.Label}”超出允许范围，已取消启动。"));
     }
 
-    private async void EngineBootstrapButton_Click(object sender, RoutedEventArgs e)
-    {
-        var backend = SelectedEngineBackend();
-        if (backend == null || _serverStarting || _serverStopping) return;
-        EngineOutputBox.Clear();
-        LogService.Write($"=== 开始配置环境：{backend.Descriptor.DisplayName} ===");
-        try
-        {
-            await BootstrapService.RunAsync(backend.Descriptor.Id,
-                new DelegateLogSink(msg => { LogService.Write(msg); AppendEngineOutput(msg); }), _lifetime.Token);
-            AppendEngineOutput("初始化完成。");
-            LogService.Write("初始化完成。");
-        }
-        catch (OperationCanceledException) { AppendEngineOutput("已取消。"); LogService.Write("已取消。"); }
-        catch (Exception ex) { ShowError("初始化失败", ex); }
-        finally { await RefreshEngineAsync(); await RefreshStatusAsync(); }
-    }
+    private void EngineBootstrapButton_Click(object sender, RoutedEventArgs e) =>
+        EngineTopBootstrapButton_Click(sender, e);
 
     private async void EngineTopBootstrapButton_Click(object sender, RoutedEventArgs e)
     {
         var backend = SelectedEngineBackend();
-        if (backend == null || _serverStarting || _serverStopping) return;
+        if (backend == null || _serverStarting || _serverStopping || _engineMaintenanceCancellation != null) return;
+        try
+        {
+            if (!SaveEngineParameters(backend)) { ShowParameterValidationFailure(); return; }
+        }
+        catch (Exception ex) { ShowError("保存配置前设置失败", ex); return; }
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+        _engineMaintenanceCancellation = cancellation;
         EngineTopBootstrapButton.IsEnabled = false;
+        EngineBootstrapButton.IsEnabled = false;
+        EngineBackendBox.IsEnabled = false;
+        ConfigurationTabs.IsEnabled = false;
+        EngineUpdateAllButton.Content = "取消配置";
         ConfigurationTabs.SelectedIndex = ConfigurationTabs.Items.Count - 1; // 切换到日志页
         LogService.Write($"=== 一键配置运行环境：{backend.Descriptor.DisplayName} ===");
         try
         {
             var steps = await BootstrapService.RunAsync(backend.Descriptor.Id,
                 new DelegateLogSink(msg => { LogService.Write(msg); AppendEngineOutput(msg); }),
-                _lifetime.Token);
+                cancellation.Token);
             var allOk = steps.All(s => s.Ok);
             LogService.Write(allOk ? $"=== {backend.Descriptor.DisplayName} 环境配置完成，可以直接启动服务 ===" : "=== 部分步骤未成功，请检查日志 ===");
             if (allOk)
@@ -932,9 +932,73 @@ public partial class MainWindow
         catch (Exception ex) { ShowError("环境配置失败", ex); }
         finally
         {
+            _engineMaintenanceCancellation = null;
+            EngineUpdateAllButton.Content = "一键更新";
             EngineTopBootstrapButton.IsEnabled = true;
+            EngineBootstrapButton.IsEnabled = true;
+            EngineBackendBox.IsEnabled = true;
+            ConfigurationTabs.IsEnabled = true;
+            var latest = ConfigService.ReadConfig();
+            foreach (var (id, settings) in latest.Engines) _config.Engines[id] = settings;
+            RebuildEngineParameters();
             await RefreshEngineAsync();
             await RefreshStatusAsync();
+        }
+    }
+
+    private async void EngineUpdateAllButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_engineMaintenanceCancellation != null)
+        {
+            _engineMaintenanceCancellation.Cancel();
+            EngineUpdateAllButton.Content = "正在取消…";
+            return;
+        }
+        if (_serverStarting || _serverStopping) return;
+        var selected = SelectedEngineBackend();
+        try
+        {
+            if (selected != null && !SaveEngineParameters(selected)) { ShowParameterValidationFailure(); return; }
+        }
+        catch (Exception ex) { ShowError("保存更新前设置失败", ex); return; }
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+        _engineMaintenanceCancellation = cancellation;
+        EngineUpdateAllButton.Content = "取消更新";
+        EngineTopBootstrapButton.IsEnabled = false;
+        EngineBootstrapButton.IsEnabled = false;
+        EngineBackendBox.IsEnabled = false;
+        ConfigurationTabs.IsEnabled = false;
+        ConfigurationTabs.SelectedIndex = ConfigurationTabs.Items.Count - 1;
+        LogService.Write("—— 一键更新所有内置引擎及匹配运行库；保留当前版和最近一版旧版 ——");
+        try
+        {
+            // Network, hashing, runtime probes and retention never run on the WPF dispatcher.
+            var results = await Task.Run(() => EngineAcquisitionService.UpdateAllAsync(
+                new DelegateLogSink(msg => { LogService.Write(msg); AppendEngineOutput(msg); }), cancellation.Token), cancellation.Token);
+            foreach (var result in results)
+                LogService.Write(result.Ok
+                    ? $"[更新] {result.BackendId}: {result.Update?.Detail ?? (result.Update?.Updated == true ? "更新完成" : "已是最新") }"
+                    : $"[更新失败] {result.BackendId}: {result.Error}");
+            LogService.Write(results.All(r => r.Ok) ? "—— 一键更新完成；未停止任何模型服务 ——" : "—— 部分更新失败，已保留对应旧版；详见日志 ——");
+        }
+        catch (OperationCanceledException) { LogService.Write("—— 已取消后续更新；已成功提交的版本保留，未完成安装不生效 ——"); }
+        catch (Exception ex) { ShowError("更新失败", ex); }
+        finally
+        {
+            _engineMaintenanceCancellation = null;
+            EngineUpdateAllButton.Content = "一键更新";
+            EngineTopBootstrapButton.IsEnabled = true;
+            EngineBootstrapButton.IsEnabled = true;
+            EngineBackendBox.IsEnabled = true;
+            ConfigurationTabs.IsEnabled = true;
+            // Reload only engine settings: never save the pre-update path snapshot back over the installer.
+            var latest = ConfigService.ReadConfig();
+            foreach (var (id, settings) in latest.Engines) _config.Engines[id] = settings;
+            CudaService.Invalidate();
+            RebuildEngineParameters();
+            await RefreshEngineAsync();
+            await RefreshStatusAsync();
+            RefreshLog();
         }
     }
 

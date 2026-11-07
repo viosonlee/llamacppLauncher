@@ -38,7 +38,13 @@ public sealed class StrataBackend : IServerBackend
         "基于 Strata 内核的 MoE 引擎（lookup/重复猜测 + 内置 MTP 草稿）；通过自带 HTTP 服务接入 agent。",
         "engine-poly", "strata-poly.exe", "qwen35moe");
 
+    public static readonly StrataEngineProfile KvmemProfile = new(
+        "kvmem", "KVMem (PolyStrata · 分层 KV)",
+        "真实 KVMem 分页引擎：qwen35moe GGUF、单 GPU，历史放 RAM/SSD；保留原版 PolyStrata。",
+        "workers/polystrata", "strata-poly.exe", "qwen35moe");
+
     private readonly StrataEngineProfile _profile;
+    private bool IsKvmem => _profile.Id == KvmemProfile.Id;
 
     public StrataBackend(StrataEngineProfile profile)
     {
@@ -135,34 +141,22 @@ public sealed class StrataBackend : IServerBackend
             Help: "【草稿 / MTP 模型】\n• 作用：为 strata-poly 指定外部草稿权重文件（--draft-model）。\n• 适用：模型本身未内置 MTP 块、但附带独立的 mtp-*.gguf 文件时。\n• 留空：使用内置草稿块或不使用外部草稿。",
             Advanced: true));
 
-        // KVMem virtualized KV cache parameters (REQ-124)
-        list.Add(new("kvmem", "启用 KVMem 虚拟显存", "超长上下文 (KVMem)", ParamType.Boolean, "0",
-            "开启基于内存/SSD 分层的块稀疏 KV 缓存，允许在有限显存下运行 256K+ 超长文本（--kvmem）。",
-            Help: "【启用 KVMem 虚拟显存】\n• 作用：启用基于内存/SSD 分层的块稀疏注意力缓存（--kvmem）。\n• 原理：显存中仅维护固定槽位池（Budget + Reserve），全量原生历史常驻系统内存与 SSD。\n• 收益：让 6GB/8GB/16GB 显卡稳定运行 32K~256K+ 上下文，彻底避免显存 OOM。\n• 提示：开启后展开详细槽位与内存配额选项。"));
-        list.Add(new("kvmemBudget", "显存活跃预算", "超长上下文 (KVMem)", ParamType.Integer, "32768",
-            "显卡中固定分配的活跃上下文槽位上限（--kvmem-budget）。推荐 32768。", 1024, 131072,
-            Help: "【显存活跃预算】\n• 作用：显存中固定分配给当前活跃上下文的槽位数量（--kvmem-budget）。\n• 默认：32768（32K Tokens）。\n• 显存：该数值决定显存中 KV 的固定占用，不再随会话长度无限制增加。",
-            VisibleWhen: "param.kvmem", Unit: "tokens", RangeHint: "1,024–131,072，推荐 32768"));
-        list.Add(new("kvmemGenReserve", "生成缓冲余量", "超长上下文 (KVMem)", ParamType.Integer, "2048",
-            "显存中为单次生成预留的缓冲余量（--kvmem-gen-reserve）。推荐 2048。", 512, 16384,
-            Help: "【生成缓冲余量】\n• 作用：为单次生成及思考链预留的独立显存槽位（--kvmem-gen-reserve）。\n• 默认：2048。高思考预算（xhigh reasoning）或长回复时建议 2048~4096。",
-            VisibleWhen: "param.kvmem", Unit: "tokens", RangeHint: "512–16,384，推荐 2048"));
-        list.Add(new("kvmemHostMib", "系统内存配额", "超长上下文 (KVMem)", ParamType.Integer, "16384",
-            "系统内存（RAM）中用于缓存全量原生 KV 的大小（--kvmem-host-mib）。推荐 16384 MiB 以上。", 1024, 131072,
-            Help: "【系统内存配额】\n• 作用：Host RAM 中用于保存百万级上下文历史原生 KV 的内存配额（--kvmem-host-mib）。\n• 建议：分配 16384 (16 GiB) 以上；内存充足可设为 32768 (32 GiB)。",
-            VisibleWhen: "param.kvmem", Unit: "MiB", RangeHint: "1,024–131,072，推荐 16384"));
-        list.Add(new("kvmemDiskMib", "SSD 冷缓存上限", "超长上下文 (KVMem)", ParamType.Integer, "0",
-            "NVMe SSD 二级冷存储上限（--kvmem-disk-mib）。设为 0 表示仅使用系统内存。", 0, 524288,
-            Help: "【SSD 冷缓存上限】\n• 作用：当全量历史超过系统内存配额时，自动分层置换到 NVMe SSD 的容量（--kvmem-disk-mib）。\n• 0（默认）：不使用磁盘分层，纯内存缓存。\n• 正数：开启 SSD 溢出，必须同时配置“SSD 存储目录”。",
-            VisibleWhen: "param.kvmem", Unit: "MiB", RangeHint: "0–524,288，0 表示关闭"));
-        list.Add(new("kvmemDiskPath", "SSD 存储目录", "超长上下文 (KVMem)", ParamType.FolderPath, "",
-            "SSD 二级缓存存放路径（--kvmem-disk-path）。必须为高速固态硬盘路径。",
-            Help: "【SSD 存储目录】\n• 作用：KVMem 将冷数据溢出到固态硬盘的目录路径（--kvmem-disk-path）。\n• 仅在“SSD 冷缓存上限”大于 0 时生效，建议选择读写速度较快的 NVMe 固态硬盘。",
-            VisibleWhen: "param.kvmem && param.kvmemDiskMib > 0"));
-        list.Add(new("kvmemSessions", "多会话复用池", "超长上下文 (KVMem)", ParamType.Integer, "4",
-            "内存中同时驻留的对话会话数（--kvmem-sessions）。默认 4。", 1, 16,
-            Help: "【多会话复用池】\n• 作用：在系统内存中同时保留多少个不同对话的 KV 状态（--kvmem-sessions）。\n• 多个 Agent 工具并发或轮流调用时，切回历史对话无需重新 Prefill。\n• 默认：4。",
-            VisibleWhen: "param.kvmem", RangeHint: "1–16，默认 4"));
+        if (IsKvmem)
+        {
+            // Stock PolyStrata has no paging kernel. Only the distinct KVMem profile gets this UI.
+            list.RemoveAll(p => p.Key is "draftModel" or "conversationCache");
+            for (var i = 0; i < list.Count; i++)
+                list[i] = list[i].Key switch
+                {
+                    "context" => list[i] with { Default = "65536", ToolTip = "逻辑上下文上限，不等于 GPU 活跃槽位；开启 KVMem 时必须 >= B + R。", Help = "【逻辑上下文】\n• 历史存放 RAM/SSD，GPU 只留 B + R 槽位。\n• 6GB 从 65536、B=8192、R=512 起试；仍须保证系统内存/SSD 和工作区足够。" },
+                    "kv" => list[i] with { Default = "q8_0", Choices = [new ParamChoice("q8_0", "q8_0", "减少活跃 KV 占用。", Recommended: true), new ParamChoice("fp16", "fp16", "全精度活跃 KV。") ] },
+                    "vramReserveMib" => list[i] with { Default = "512", Min = 256 },
+                    "tensorCoreMma" => list[i] with { Default = "0" },
+                    "packageRoot" => list[i] with { ToolTip = "KVMem 完整统一包根目录（workers、backends、runtime）；留空查找本机已部署版本。", Help = "【KVMem 完整包】\n• 不要选择原版 engines/polystrata。\n• 新版本保存在 engines/kvmem 的独立版本目录中；原版引擎不覆盖。" },
+                    _ => list[i]
+                };
+            list.AddRange(KvmemParameters.Specs);
+        }
 
         Parameters = list;
     }
@@ -214,6 +208,18 @@ public sealed class StrataBackend : IServerBackend
         var python = await ResolvePythonAsync(config, _profile, ct).ConfigureAwait(false);
         if (python == null)
             return BackendStatus.Unavailable("未找到 Python 3.10+（服务需要）。");
+        if (IsKvmem)
+        {
+            var bundle = KvmemInstallation.ResolvePackageRoot(config)!;
+            var capability = await EngineAcquisitionService.DetectComputeCapabilityAsync(ct).ConfigureAwait(false);
+            var architecture = EngineCatalog.KvmemArchitecture(capability);
+            if (architecture == null) return BackendStatus.Unavailable("无法确定受支持的精确 KVMem GPU 架构；不会猜测引擎包。");
+            var layout = KvmemInstallation.Validate(bundle, architecture);
+            if (!layout.Ok) return BackendStatus.Unavailable(layout.Detail);
+            var validation = await KvmemInstallation.ValidateRuntimeAsync(bundle, ct).ConfigureAwait(false);
+            if (!validation.Ok) return BackendStatus.Unavailable(validation.Detail);
+            return new BackendStatus(true, engine, validation.Version, null);
+        }
         return new BackendStatus(true, engine, null, null);
     }
 
@@ -223,6 +229,14 @@ public sealed class StrataBackend : IServerBackend
             return new CompatibilityReport(false, ["请先选择已下载完成的 GGUF 模型。"], [], "未选择模型。", null);
         var md = await Task.Run(() => GgufService.ReadShards(modelPath, ct), ct).ConfigureAwait(false);
         var poly = PolyStrataCompatibility.Analyze(md);
+        if (IsKvmem)
+        {
+            var blockers = poly.Blockers.ToList();
+            if (md.Architecture != "qwen35moe") blockers.Add("KVMem v0.19.1 PolyStrata 仅支持 qwen35moe GGUF；稠密 .ninfer 需上游 NInfer，不在此后端范围。");
+            return new CompatibilityReport(blockers.Count == 0, blockers,
+                ["固定活跃 KV + RAM/SSD 历史池；块稀疏注意力，不保证与全量注意力相同。", "模型权重、系统和 KV 共用主机内存；6GB GPU 仍须控制 B/R/工作区。"],
+                $"KVMem：{md.Architecture} / {md.LayerCount} 层。", Estimate(md, modelPath));
+        }
         return new CompatibilityReport(poly.Runnable, poly.Blockers, poly.Notes, poly.Summary,
             Estimate(md, modelPath));
     }
@@ -244,16 +258,21 @@ public sealed class StrataBackend : IServerBackend
         var server = ResolveServer(config, _profile) ?? throw new FileNotFoundException("未找到 serve\\server.py。");
         var python = ResolvePython(config, _profile) ?? throw new FileNotFoundException("未找到 Python 3.10+。");
         var port = ResolvePort(request);
-        var host = Param(config, "host") ?? (string.IsNullOrWhiteSpace(config.Strata.Host) ? "127.0.0.1" : config.Strata.Host);
+        var host = Param(config, "host") ?? (IsKvmem || string.IsNullOrWhiteSpace(config.Strata.Host) ? "127.0.0.1" : config.Strata.Host);
 
+        if (IsKvmem)
+        {
+            var md = GgufService.TryReadShards(model);
+            if (md?.Architecture != "qwen35moe") throw new NotSupportedException("KVMem PolyStrata 仅支持 qwen35moe GGUF。");
+        }
         var runconfig = BuildRunConfig(config, engine, model, tokenizer, port, host);
         var configPath = RunConfigPath(_profile.Id, model);
 
-        var args = new List<string> { "-m", "serve.server", "--engine", "strata", "--config", configPath, "--port", port.ToString() };
+        var args = new List<string> { "-X", "utf8", "-u", "-m", "serve.server", "--engine", "strata", "--config", configPath, "--port", port.ToString() };
         if (!string.Equals(host, "127.0.0.1", StringComparison.Ordinal)) { args.Add("--host"); args.Add(host); }
 
         var env = new Dictionary<string, string> { ["PYTHONUTF8"] = "1", ["PYTHONUNBUFFERED"] = "1" };
-        var mma = Param(config, "tensorCoreMma") ?? "1";
+        var mma = Param(config, "tensorCoreMma") ?? (IsKvmem ? "0" : "1");
         if (mma is "1" or "true" or "True") env["STRATA_GDN_MMA"] = "1";
         var fattn = Param(config, "polyFlashAttention") ?? "1";
         if (fattn is "1" or "true" or "True")
@@ -283,7 +302,19 @@ public sealed class StrataBackend : IServerBackend
 
     public async Task<EngineSession> StartAsync(EngineStartRequest request, ILogSink log, CancellationToken ct)
     {
+        using var launchLease = IsKvmem ? new FileStream(Path.Combine(ConfigService.GetManagerRoot(), "logs", "kvmem-start.lock"),
+            FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None) : null;
         var model = ResolveModel(request.Config, _profile);
+        if (IsKvmem)
+        {
+            foreach (var backend in BackendRegistry.All().Where(b => b.Descriptor.GpuHeavy))
+            {
+                var slot = backend.Descriptor.Id == "llamacpp" ? ManagerConfig.SlotMain : backend.Descriptor.Id;
+                var recorded = ConfigService.ReadConfig().GetRunning(slot);
+                using var live = recorded == null ? null : ServerService.ValidateProcess(recorded);
+                if (live != null) throw new InvalidOperationException($"已有 {backend.Descriptor.DisplayName} 服务运行；不会为 KVMem 测试停止或替换它。");
+            }
+        }
         // The server needs the tokenizer directory (vocab.json etc.); prepare it first so the
         // runconfig can point at the directory the tool actually produced.
         var server = ResolveServer(request.Config, _profile)
@@ -294,9 +325,19 @@ public sealed class StrataBackend : IServerBackend
             ?? throw new FileNotFoundException("未找到 Python 3.10+。请先点击「配置环境」初始化。");
         var serveRoot = Path.GetDirectoryName(Path.GetDirectoryName(server))!;
         log.Write("准备分词表…");
-        var tokenizer = await StrataPackService.EnsureTokenizerDirAsync(serveRoot, model,
-            TokenizerDir(request.Config, _profile.Id, model),
-            Param(request.Config, _profile.Id, "pythonPath") ?? request.Config.Strata.PythonPath, log.Write, ct).ConfigureAwait(false);
+        if (IsKvmem)
+        {
+            var probe = await ProbeAsync(ct).ConfigureAwait(false);
+            if (!probe.Available) throw new InvalidOperationException(probe.Problem);
+            var report = await InspectAsync(model, ct).ConfigureAwait(false);
+            if (!report.Runnable) throw new NotSupportedException(string.Join("；", report.Blockers));
+        }
+        var tokenizer = IsKvmem
+            ? await KvmemRuntime.EnsureTokenizerAsync(KvmemInstallation.ResolvePackageRoot(request.Config)!,
+                serveRoot, python, model, Path.GetDirectoryName(TokenizerDir(request.Config, _profile.Id, model))!, log, ct).ConfigureAwait(false)
+            : await StrataPackService.EnsureTokenizerDirAsync(serveRoot, model,
+                TokenizerDir(request.Config, _profile.Id, model),
+                Param(request.Config, _profile.Id, "pythonPath") ?? request.Config.Strata.PythonPath, log.Write, ct).ConfigureAwait(false);
         log.Write("分词表：" + tokenizer);
         var plan = BuildLaunch(request, tokenizer);
         // Materialize generated files (the runconfig) before launching.
@@ -307,7 +348,7 @@ public sealed class StrataBackend : IServerBackend
         }
         var port = ResolvePort(request);
         var portProblem = ServerService.PortUnavailableReason(port,
-            Param(request.Config, "host") ?? request.Config.Strata.Host);
+            Param(request.Config, "host") ?? (IsKvmem ? "127.0.0.1" : request.Config.Strata.Host));
         if (portProblem != null) throw new InvalidOperationException(portProblem);
         var args = string.Join(" ", plan.Arguments.Select(LauncherArguments.Quote));
         log.Write($"启动 {_profile.DisplayName} 服务：{plan.FileName} {args}");
@@ -328,30 +369,35 @@ public sealed class StrataBackend : IServerBackend
         };
         process.Dispose();
         ConfigService.SaveSessionSlot(request.Config, _profile.Id, ToServerSession(session));
-        await WaitReadyAsync(session, log, ct).ConfigureAwait(false);
+        if (IsKvmem)
+        {
+            session.Extra["kvmem"] = KvmemParameters.Enabled(request.Config, _profile.Id) ? "1" : "0";
+            using var generated = JsonDocument.Parse(plan.GeneratedFiles.Values.Single());
+            var nativeArgs = generated.RootElement.GetProperty("args").EnumerateArray().Select(a => a.GetString()!).ToList();
+            foreach (var (flag, field) in new[] { ("--kvmem-budget", "budget_tokens"), ("--kvmem-gen-reserve", "reserve_tokens"),
+                ("--kvmem-host-mib", "host_mib"), ("--kvmem-block-tokens", "block_tokens"), ("--kvmem-sessions", "retained_sessions"),
+                ("--kvmem-disk-mib", "disk_mib") })
+            {
+                var index = nativeArgs.IndexOf(flag);
+                session.Extra[field] = index >= 0 ? nativeArgs[index + 1] : "0";
+            }
+        }
+        try { await WaitReadyAsync(session, log, ct).ConfigureAwait(false); }
+        catch
+        {
+            if (IsKvmem) await StopAsync(session, log).ConfigureAwait(false);
+            throw;
+        }
         return session;
     }
 
     public async Task StopAsync(EngineSession session, ILogSink log)
     {
-        Process? process = null;
-        try
-        {
-            if (session.ProcessId > 0) process = Process.GetProcessById(session.ProcessId);
-            if (process != null && (process.HasExited ||
-                process.StartTime.ToUniversalTime().Ticks != session.StartTimeUtcTicks))
-            {
-                process.Dispose();
-                process = null;
-            }
-        }
-        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
-        {
-            process = null;
-        }
+        // Validate all identity components, including executable path, before any tree kill.
+        Process? process = session.ProcessId > 0 ? ServerService.ValidateProcess(ToServerSession(session)) : null;
         if (process == null)
         {
-            ConfigService.SaveSessionSlot(ConfigService.ReadConfig(), _profile.Id, null);
+            ConfigService.ClearSessionSlotIfMatches(_profile.Id, ToServerSession(session));
             log.Write($"记录的 {_profile.DisplayName} 服务进程已不存在，已清理记录。");
             return;
         }
@@ -362,19 +408,19 @@ public sealed class StrataBackend : IServerBackend
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             try { await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false); } catch (OperationCanceledException) { }
         }
-        ConfigService.SaveSessionSlot(ConfigService.ReadConfig(), _profile.Id, null);
+        ConfigService.ClearSessionSlotIfMatches(_profile.Id, ToServerSession(session));
     }
 
     public Task<bool> ReadyAsync(EngineSession session, CancellationToken ct) =>
-        ServerService.TestApiReadyAsync(session.Port, ct);
+        IsKvmem ? KvmemRuntime.ReadyAsync(session, ct) : ServerService.TestApiReadyAsync(session.Port, ct);
 
     public int ResolvePort(EngineStartRequest request) =>
-        request.Port ?? ParamInt(request.Config, "servePort", request.Config.Strata.ServePort);
+        request.Port ?? ParamInt(request.Config, "servePort", IsKvmem ? 8080 : request.Config.Strata.ServePort);
 
     public string HealthUrl(EngineSession session) => $"http://127.0.0.1:{session.Port}/health";
 
     public void OpenWebUi(EngineSession session) =>
-        Process.Start(new ProcessStartInfo($"http://127.0.0.1:{session.Port}") { UseShellExecute = true });
+        Process.Start(new ProcessStartInfo($"http://127.0.0.1:{session.Port}" + (IsKvmem ? "/props" : "")) { UseShellExecute = true });
 
     // ---- helpers ----
 
@@ -385,15 +431,16 @@ public sealed class StrataBackend : IServerBackend
         {
             ct.ThrowIfCancellationRequested();
             using var process = TryGetProcess(session);
-            if (process is { HasExited: true })
+            if (process == null || process.HasExited)
                 throw new InvalidOperationException($"{_profile.DisplayName} 服务提前退出。请查看 logs\\engine-{_profile.Id}.stderr.log。");
-            if (await ServerService.TestApiReadyAsync(session.Port, ct).ConfigureAwait(false))
+            if (await ReadyAsync(session, ct).ConfigureAwait(false))
             {
                 log.Write($"{_profile.DisplayName} 服务已就绪：http://127.0.0.1:{session.Port}/v1");
                 return;
             }
             await Task.Delay(500, ct).ConfigureAwait(false);
         }
+        if (IsKvmem) throw new TimeoutException("180 秒内 KVMem 未报告模型载入及分层 KV 就绪；将清理本次启动的服务。请查看引擎日志。");
         log.Write("180 秒内 API 尚未就绪，进程仍在加载；可查看日志或停止服务。");
     }
 
@@ -407,9 +454,10 @@ public sealed class StrataBackend : IServerBackend
         string tokenizer, int port, string host)
     {
         var s = config.Strata;
-        var context = ParamInt(config, "context", s.Context);
+        var context = ParamInt(config, "context", IsKvmem ? 65536 : s.Context);
         var args = new List<string> { "--model", model, "--max-context", context.ToString() };
-        var reserve = ParamInt(config, "vramReserveMib", 256);
+        var reserve = ParamInt(config, "vramReserveMib", IsKvmem ? 512 : 256);
+        if (IsKvmem && reserve < 256) throw new ArgumentException("KVMem 显存预留必须至少 256 MiB。");
         var tailSkip = ParamInt(config, "tailSkip", 0);
         var threads = ParamInt(config, "threads", s.Workers);
         if (reserve > 0) { args.Add("--vram-reserve-mib"); args.Add(reserve.ToString()); }
@@ -417,7 +465,7 @@ public sealed class StrataBackend : IServerBackend
         if (threads > 0) { args.Add("--threads"); args.Add(threads.ToString()); }
         // KV format: only qwen35moe accepts q8_0; the engine refuses it for other families,
         // so the panel documents the limit and an empty value keeps the engine default.
-        var kv = Param(config, "kv");
+        var kv = Param(config, "kv") ?? (IsKvmem ? "q8_0" : null);
         if (kv is "fp16" or "q8_0" or "int8" or "int8k") { args.Add("--kv"); args.Add(kv); }
         // Router bias and the conversation park are opt-in (strata-poly defaults both off);
         // emit them only when the user chose a value, so older configs stay byte-identical.
@@ -433,26 +481,9 @@ public sealed class StrataBackend : IServerBackend
             args.Add("--conversation-cache-mib");
             args.Add(conversationCache);
         }
-        var kvmem = Param(config, "kvmem");
-        if (kvmem is "1" or "true" or "True")
-        {
-            args.Add("--kvmem");
-            var kvBudget = ParamInt(config, "kvmemBudget", 0);
-            if (kvBudget > 0) { args.Add("--kvmem-budget"); args.Add(kvBudget.ToString()); }
-            var kvReserve = ParamInt(config, "kvmemGenReserve", 0);
-            if (kvReserve > 0) { args.Add("--kvmem-gen-reserve"); args.Add(kvReserve.ToString()); }
-            var kvHost = ParamInt(config, "kvmemHostMib", 0);
-            if (kvHost > 0) { args.Add("--kvmem-host-mib"); args.Add(kvHost.ToString()); }
-            var kvDiskMib = ParamInt(config, "kvmemDiskMib", 0);
-            var kvDiskPath = Param(config, "kvmemDiskPath");
-            if (kvDiskMib > 0 && !string.IsNullOrWhiteSpace(kvDiskPath))
-            {
-                args.Add("--kvmem-disk-mib"); args.Add(kvDiskMib.ToString());
-                args.Add("--kvmem-disk-path"); args.Add(kvDiskPath);
-            }
-            var kvSessions = ParamInt(config, "kvmemSessions", 0);
-            if (kvSessions > 0) { args.Add("--kvmem-sessions"); args.Add(kvSessions.ToString()); }
-        }
+        if (IsKvmem) KvmemParameters.Append(config, _profile.Id, context, args);
+        else if (Param(config, "kvmem") is "1" or "true" or "True")
+            throw new NotSupportedException("原版 PolyStrata 不支持 KVMem；请选择独立 KVMem 后端并配置完整包。");
         var cfg = new Dictionary<string, object>
         {
             ["exe"] = engine,
@@ -465,6 +496,27 @@ public sealed class StrataBackend : IServerBackend
             ["port"] = port,
             ["host"] = host,
         };
+        if (IsKvmem)
+        {
+            var bundle = KvmemInstallation.ResolvePackageRoot(config)!;
+            cfg["backend"] = "cuda";
+            cfg["gpu"] = 0; // Explicit single GPU: KVMem PolyStrata's supported contract.
+            cfg["lib_dirs"] = new[] { Path.Combine(bundle, KvmemInstallation.CudaRelativePath) };
+            cfg["env"] = new Dictionary<string, string>
+            {
+                ["KVMEM_POLY_STORAGE_METRICS"] = "1", ["KVMEM_POLY_SESSION_METRICS"] = "1",
+                ["STRATA_FATTN"] = Param(config, "polyFlashAttention") is "0" or "false" ? "0" : "1",
+                ["STRATA_FDEC"] = Param(config, "polyFlashAttention") is "0" or "false" ? "0" : "1",
+                ["STRATA_GDN_MMA"] = Param(config, "tensorCoreMma") is "1" or "true" or "True" ? "1" : "0",
+                ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+            };
+            cfg["warm_start"] = false;
+            cfg["kvmem_default_max_tokens"] = 1024; // Explicit request max_tokens can override this bounded default.
+            cfg["client_reasoning_history"] = true;
+            cfg["kvmem_mtp_policy"] = "off";
+            cfg["kvmem_mtp_drafts_max"] = 0;
+            cfg["kvmem_vram_reserve_mib"] = reserve;
+        }
         var reasoning = ParamInt(config, "reasoningBudget", s.ReasoningBudgetTokens);
         if (reasoning > 0) cfg["reasoning_budget_tokens"] = reasoning;
         var thinking = Param(config, "anthropicThinking") ?? s.AnthropicThinking;
@@ -485,12 +537,15 @@ public sealed class StrataBackend : IServerBackend
                     ["exe"] = visionExe,
                     ["mmproj"] = Path.GetFullPath(mmproj),
                     ["model"] = Path.GetFullPath(model),
-                    ["gpu"] = true,
+                    ["gpu"] = !IsKvmem,
+                    ["max_tokens"] = 1024,
+                    ["threads"] = Math.Clamp(threads > 0 ? threads : 8, 1, 16),
                 };
             }
         }
         var draftModel = Param(config, "draftModel");
-        if (string.IsNullOrWhiteSpace(draftModel))
+        if (IsKvmem && KvmemParameters.Enabled(config, _profile.Id)) draftModel = null;
+        else if (string.IsNullOrWhiteSpace(draftModel))
         {
             draftModel = ModelPairingService.FindPairedDraftModel(model);
         }
@@ -523,7 +578,8 @@ public sealed class StrataBackend : IServerBackend
 
     public static string? ResolveEngine(ManagerConfig config, StrataEngineProfile profile)
     {
-        var root = Param(config, profile.Id, "packageRoot") ?? config.Strata.PackageRoot;
+        var root = profile.Id == KvmemProfile.Id ? KvmemInstallation.ResolvePackageRoot(config)
+            : Param(config, profile.Id, "packageRoot") ?? config.Strata.PackageRoot;
         if (string.IsNullOrWhiteSpace(root)) return null;
         var engine = Path.Combine(Path.GetFullPath(root), profile.EngineSubdir, profile.EngineExeName);
         return File.Exists(engine) ? engine : null;
@@ -534,6 +590,16 @@ public sealed class StrataBackend : IServerBackend
 
     public static string? ResolveServer(ManagerConfig config, StrataEngineProfile profile)
     {
+        if (profile.Id == KvmemProfile.Id)
+        {
+            var bundle = KvmemInstallation.ResolvePackageRoot(config);
+            if (bundle == null) return null;
+            var explicitRoot = Param(config, profile.Id, "serveRoot");
+            var candidate = string.IsNullOrWhiteSpace(explicitRoot)
+                ? Path.Combine(bundle, KvmemInstallation.ServerRelativePath)
+                : Path.Combine(Path.GetFullPath(explicitRoot), "serve", "server.py");
+            return File.Exists(candidate) ? candidate : null;
+        }
         var serveRoot = Param(config, profile.Id, "serveRoot") ?? config.Strata.ServeRoot;
         var packageRoot = Param(config, profile.Id, "packageRoot") ?? config.Strata.PackageRoot;
         foreach (var root in new[] { serveRoot, packageRoot })
@@ -549,9 +615,15 @@ public sealed class StrataBackend : IServerBackend
 
     internal static string? ResolvePython(ManagerConfig config, StrataEngineProfile profile)
     {
-        var configured = Param(config, profile.Id, "pythonPath") ?? config.Strata.PythonPath;
+        var configured = Param(config, profile.Id, "pythonPath") ?? (profile.Id == KvmemProfile.Id ? null : config.Strata.PythonPath);
         if (!string.IsNullOrWhiteSpace(configured) && File.Exists(configured))
             return configured;
+        if (profile.Id == KvmemProfile.Id)
+        {
+            var bundle = KvmemInstallation.ResolvePackageRoot(config);
+            var bundled = bundle == null ? null : Path.Combine(bundle, KvmemInstallation.PythonRelativePath);
+            return bundled != null && File.Exists(bundled) ? bundled : null;
+        }
         foreach (var candidate in new[] { "python", "py" })
         {
             var path = FindOnPath(candidate);
@@ -613,7 +685,7 @@ public sealed class StrataBackend : IServerBackend
         // The engine page stores the model in the backend's settings; the legacy Strata block
         // is the fallback for installs that predate it.
         var model = config.Engines.GetValueOrDefault(profile.Id)?.ModelPath;
-        if (string.IsNullOrWhiteSpace(model)) model = config.Strata.ModelPath;
+        if (string.IsNullOrWhiteSpace(model) && profile.Id != KvmemProfile.Id) model = config.Strata.ModelPath;
         if (!string.IsNullOrWhiteSpace(model) && File.Exists(model)) return Path.GetFullPath(model);
         throw new FileNotFoundException("请先选择已下载完成的 GGUF 模型。", model);
     }

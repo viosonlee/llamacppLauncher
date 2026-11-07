@@ -24,8 +24,8 @@
 - REQ-013 已实现：插件机制——`plugins/<id>/plugin.json`（schema:1）声明自带 HTTP
   服务的第三方引擎；独立进程、崩溃隔离、无需重编译。
 - REQ-014 已实现：引擎获取——「初始化环境」按后端自动下载并安装：
-  - llamacpp：官方 nightly Windows CUDA 包 + cudart；**按 GPU 计算能力选 CUDA 大版本**
-    （< 8.0 → CUDA 12.4，否则 13.4；13.4 nightly 不含 Turing/Volta SASS）。
+  - llamacpp：官方 nightly Windows CUDA 包 + 同发布 cudart；按 GPU 与 driver 上限选择完整 CUDA 配对，
+    <8.0 仅 CUDA 12.4，其它 GPU 不选择超过 driver 上限的 CUDA 13.x，必要时使用同发布 12.4。
   - polystrata：VecSzn/PolyStrata release 引擎 + 源码归档。
   - 下载须校验 SHA-256（GitHub digest），解压防 zip-slip。
 - REQ-015 已实现：Strata 家族自动建 Python venv 并按引擎 `requirements.txt` 安装依赖；
@@ -252,8 +252,25 @@
   实测器使用系统分配临时端口，排除 8080、配置端口、原始参数中的端口与运行会话端口；
   分配有界、可取消，变体启动前再次预检，失败/取消清理仅针对变体进程，保留正式服务身份与配置。
   新增端口分类/分配与失败/取消回归；既有 benchmark 遥测用例不再依赖固定 8095。
-- REQ-124 已实现（2026-11-07）：方案A集成 KVMem 虚拟显存超长上下文参数组与联动折叠。
-  在 llama.cpp（LlamaCppParameters）与 PolyStrata（StrataBackend）参数面板中新增「超长上下文 (KVMem)」参数组：
-  主开关 kvmem（--kvmem）与二级参数（kvmemBudget --kvmem-budget 默认 32768、kvmemGenReserve --kvmem-gen-reserve 默认 2048、kvmemHostMib --kvmem-host-mib 默认 16384、kvmemDiskMib --kvmem-disk-mib 默认 0、kvmemDiskPath --kvmem-disk-path、kvmemSessions --kvmem-sessions 默认 4）。
-  二级参数使用 VisibleWhen: param.kvmem 动态折叠联动（其中 kvmemDiskPath 需满足 param.kvmem && param.kvmemDiskMib > 0）；关闭时不向引擎注入参数，开启时正确映射至命令行或 runconfig args。
-  包含参数往返投影、表达式计算与预设隔离回归测试。
+- REQ-124 已实现（2026-11-07，协议纠正）：KVMem 参数组仅在独立 `kvmem` 后端显示，保留动态折叠与模型预设隔离。
+  原 c3e3644 仅实现 UI/假协议测试，未部署 KVMem 内核；原版 llama.cpp/PolyStrata 不具备该能力。
+  原生 PolyStrata 以正数 `--kvmem-budget` 启用，不接受裸 `--kvmem`；原版面板不再暴露这些选项，陈旧启用参数明确拒绝。
+  默认 B=8192、R=512、H=1024 MiB、SSD=0、保留历史 S=2；B/R 32 对齐、B+R<=context、prefill<=R，非法输入不静默改写。
+  关闭时不发送任何 `--kvmem-*`；SSD>0 必须指定目录。历史数量不是并发数，R 不是总输出上限，H/D 不包含模型与其它进程开销。
+
+- REQ-125 已实现（2026-11-07，PolyStrata 范围）：真实 KVMem 统一包获取、独立安全部署与运行验证。
+  `kvmem/kvmem` 完整 unified release 按精确 CUDA 架构选包（本机 sm86 → RTX30），未知架构拒绝猜测；SHA-256 校验后完整解压至新版本目录。
+  原版 PolyStrata/llama.cpp 不覆盖，不硬回滚代码，不改现有模型预设/活动后端/运行身份；取消或失败不切换安装路径。
+  使用包内 Python、CUDA、对应 serve 与同 GGUF 五件套分词表；不为 tokenizer 联网安装 gguf/venv。
+  当前接入仅 `qwen35moe` GGUF、单 GPU、fp16/q8_0、普通解码，自动禁用外部草稿与旧会话缓存；CPU 视觉需匹配 mmproj。
+  体检核验布局、版本、架构、原生 capabilities/worker hash；运行就绪核验 loaded、模型与有效预算，HTTP 200 不等于载入成功。
+  提供显式隔离 GPU smoke（不进入普通回归），需实测实际 32K/64K prompt、有效分层及非空输出；端到端证据与限制记录在 docs/KVMEM-INTEGRATION.md。
+
+- REQ-126 已实现（2026-11-07）：所有内置引擎及匹配运行库的一键更新，并只保留最近一版旧版本。
+  GUI 全局「一键更新」与 CLI `--update --all` 共用服务，覆盖注册的 llamacpp/polystrata/kvmem；逐引擎报告成功或错误，取消可中止未完成任务。
+  llama.cpp 必须读取真实 build 并与 Windows CUDA 资产比较，同发布 binary+cudart 配套且不超过驱动能力；PolyStrata 原生、对应 tag 服务源码及 Python/CUDA 依赖配套更新；KVMem 更新完整统一包。
+  新版本在独立目录校验完成后才原子提交路径，不覆盖正在运行或手工安装的引擎，不修改模型调优参数、活动后端与会话身份。
+  引擎级共享安装路径可同步到引用同一旧路径的模型预设；用户另行指定的手工路径保留，模型切换不能把新版公共路径覆盖回旧版。
+  清理只处理带启动器有效 ownership 记录的版本和匹配 SHA/长度的下载缓存；按 backend/架构保留当前版与最近一版旧版。
+  被运行会话、手工指定或用户数据保护的版本可额外保留并报告原因；未知目录、模型、配置、日志绝不为了数量上限删除。
+  清理失败仅警告，不回滚已成功安装；需通过安装/取消/保留策略回归及本机真实更新后推理验证。

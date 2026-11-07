@@ -29,6 +29,25 @@ internal static class Fixtures
         return ((IPEndPoint)listener.LocalEndpoint).Port;
     }
 
+    public static async Task AssertListenerReleasedAsync(int port, TimeSpan timeout, string operation)
+    {
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var released = false;
+        SocketError? lastError = null;
+        while (watch.Elapsed < timeout)
+        {
+            using var listener = new TcpListener(IPAddress.Loopback, port) { ExclusiveAddressUse = true };
+            try { listener.Start(); released = true; break; }
+            catch (SocketException ex) { lastError = ex.SocketErrorCode; }
+            finally { listener.Stop(); }
+            await Task.Delay(50);
+        }
+        Program.Check(released, $"{operation}: port {port} could not be exclusively bound within {timeout.TotalSeconds}s ({lastError})");
+        Program.Check(!await ServerService.TestApiReadyAsync(port), $"{operation}: port {port} still responds as an HTTP API");
+        if (ServerService.TestPortInUse(port))
+            Console.WriteLine($"TCP snapshot stale after {operation}: port={port}; exclusive loopback bind succeeded, HTTP offline.");
+    }
+
     public static byte[] Gguf(bool prism = false, uint type = 0, bool moe = true, int layers = 64, int context = 8192, bool mtp = false, int vocabSize = 2)
     {
         using var stream = new MemoryStream();

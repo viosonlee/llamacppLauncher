@@ -53,18 +53,18 @@ internal static class ParameterVisibilityRegression
         Check(!ParameterVisibility.Evaluate("param.context>=4096", new ParameterContext("poly", null, Values(("context", "512")))),
             "512 is below 4096");
 
-        // KVMem VisibleWhen conditions (REQ-124)
-        Check(ParameterVisibility.Evaluate("param.kvmem", new ParameterContext("poly", null, Values(("kvmem", "1")))),
+        // KVMem conditions belong to the independent paging backend, not stock PolyStrata.
+        Check(ParameterVisibility.Evaluate("param.kvmem", new ParameterContext("kvmem", null, Values(("kvmem", "1")))),
             "param.kvmem must be true when 1");
-        Check(!ParameterVisibility.Evaluate("param.kvmem", new ParameterContext("poly", null, Values(("kvmem", "0")))),
+        Check(!ParameterVisibility.Evaluate("param.kvmem", new ParameterContext("kvmem", null, Values(("kvmem", "0")))),
             "param.kvmem must be false when 0");
-        Check(!ParameterVisibility.Evaluate("param.kvmem", empty),
+        Check(!ParameterVisibility.Evaluate("param.kvmem", ParameterContext.For("kvmem")),
             "param.kvmem must be false when empty");
         Check(ParameterVisibility.Evaluate("param.kvmem && param.kvmemDiskMib > 0",
-            new ParameterContext("poly", null, Values(("kvmem", "1"), ("kvmemDiskMib", "1024")))),
+            new ParameterContext("kvmem", null, Values(("kvmem", "1"), ("kvmemDiskMib", "1024")))),
             "kvmem disk path visible when kvmem on and disk > 0");
         Check(!ParameterVisibility.Evaluate("param.kvmem && param.kvmemDiskMib > 0",
-            new ParameterContext("poly", null, Values(("kvmem", "1"), ("kvmemDiskMib", "0")))),
+            new ParameterContext("kvmem", null, Values(("kvmem", "1"), ("kvmemDiskMib", "0")))),
             "kvmem disk path hidden when disk == 0");
 
         // Boolean structure.

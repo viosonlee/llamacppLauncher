@@ -192,6 +192,17 @@ internal static class Program
                 File.WriteAllText(path, "null"); File.WriteAllText(path + ".bak", "null");
                 Throws<InvalidDataException>(() => store.Read());
             }));
+            await Test("config: narrow transactions preserve unknown user metadata", () => Run(() =>
+            {
+                var path = Path.Combine(_root, "extension-properties.json");
+                File.WriteAllText(path, """{"Window":{"Width":900,"Height":720},"FutureMetadata":{"nested":[1,"keep",true]}}""");
+                var store = new ConfigStore(path);
+                store.Update(c => c.Port = 8088);
+                using var json = JsonDocument.Parse(File.ReadAllText(path));
+                Equal(900, json.RootElement.GetProperty("Window").GetProperty("Width").GetInt32());
+                Equal("keep", json.RootElement.GetProperty("FutureMetadata").GetProperty("nested")[1].GetString());
+                Equal(8088, store.Read().Port);
+            }));
             await Test("config: serialize concurrent updates and propagate write failures", async () =>
             {
                 var path = Path.Combine(_root, "concurrent.json");
@@ -302,6 +313,59 @@ internal static class Program
                 Run(() => StrataBackendRegression.RunResolvers(_root)));
             await Test("strata backend: per-model presets persist across models", () =>
                 Run(() => StrataBackendRegression.RunModelPresets(_root)));
+            await Test("KVMem: independent registry and honest stock schemas", () =>
+                Run(KvmemRegression.RunRegistryAndSchema));
+            await Test("KVMem: exact GPU release assets and mandatory checksums", () =>
+                Run(() => KvmemRegression.RunCatalog(_root)));
+            await Test("KVMem: complete bundle layouts and isolated path resolution", () =>
+                Run(() => KvmemRegression.RunLayoutsAndResolvers(_root)));
+            await Test("KVMem: bounded bundled runtime probes and cancellation", () =>
+                KvmemRegression.RunRuntimeProbeAsync(_root));
+            await Test("KVMem: real native launch flags and effective defaults", () =>
+                Run(() => KvmemRegression.RunLaunchDefaults(_root)));
+            await Test("KVMem: disabled paging leaves no stale native flags", () =>
+                Run(() => KvmemRegression.RunDisabledZeroPollution(_root)));
+            await Test("KVMem: reject invalid capacity, alignment, SSD and decode combinations", () =>
+                Run(() => KvmemRegression.RunInvalidParameters(_root)));
+            await Test("KVMem: matching projection uses bundled CPU vision", () =>
+                Run(() => KvmemRegression.RunCpuVision(_root)));
+            await Test("KVMem: unsupported model architectures and experts are blocked", () =>
+                KvmemRegression.RunModelLimitsAsync(_root));
+            await Test("KVMem: stock llama.cpp refuses legacy raw paging flags", () =>
+                KvmemRegression.RunStockRawRejectionAsync(_root));
+            await Test("KVMem: health 200 requires loaded model and matching native budgets", () =>
+                KvmemRegression.RunReadinessAsync(_root));
+            await Test("KVMem: verified installation preserves concurrent settings and rolls back failures", () =>
+                KvmemAcquisitionRegression.RunInstallTransactionsAsync(_root));
+            await Test("KVMem: unified extraction rejects unsafe archives and occupied destinations", () =>
+                KvmemAcquisitionRegression.RunSafeExtractionAsync(_root));
+            await Test("updates: real native build and driver version parsing", () =>
+                Run(BuiltInUpdateRegression.RunVersionParsing));
+            await Test("updates: pair native and CUDA runtime by release and driver", () =>
+                Run(() => BuiltInUpdateRegression.RunManagedPlans(_root)));
+            await Test("updates: parse exact release CUDA pins without executing source", () =>
+                Run(BuiltInUpdateRegression.RunCudaWheelPins));
+            await Test("updates: vision uses real no-argument runtime probe", BuiltInUpdateRegression.RunVisionProbeAsync);
+            await Test("updates: latest or manual builds never trigger blind downloads", () =>
+                BuiltInUpdateRegression.RunLatestAndManualAsync(_root));
+            await Test("updates: verified llama installation preserves identity and rolls back failures", () =>
+                BuiltInUpdateRegression.RunLlamaTransactionsAsync(_root));
+            await Test("updates: all builtins share failure reporting and cancellation", () =>
+                BuiltInUpdateRegression.RunUpdateAllAsync(_root));
+            await Test("retention: current and newest previous owned version", () =>
+                Run(() => EngineRetentionRegression.RunKeepCurrentAndNewestPrevious(_root)));
+            await Test("retention: semantic ordering, repair revisions and GPU isolation", () =>
+                Run(() => EngineRetentionRegression.RunVersionOrderingAndMultiGpu(_root)));
+            await Test("retention: protect explicit paths and verified live sessions", () =>
+                Run(() => EngineRetentionRegression.RunProtectedRootsAndSessions(_root)));
+            await Test("retention: require matching ownership and safe paths", () =>
+                Run(() => EngineRetentionRegression.RunOwnershipAndPathSafety(_root)));
+            await Test("retention: never follow links or remove model/config/log data", () =>
+                Run(() => EngineRetentionRegression.RunReparseAndUserDataSafety(_root)));
+            await Test("retention: clean only owned unchanged download assets", () =>
+                Run(() => EngineRetentionRegression.RunOwnedDownloadRetention(_root)));
+            await Test("retention: failures and cancellation preserve committed versions", () =>
+                Run(() => EngineRetentionRegression.RunFailuresAndCancellation(_root)));
             await Test("plugins: manifest parse, validation and argument templating", () =>
                 Run(() => PluginRegression.RunManifest(_root)));
             await Test("plugins: discovery rejects built-in id collisions", () =>
@@ -810,9 +874,8 @@ internal static class Program
                 using (var first = ServerService.GetManagedProcess(config)) Check(first != null && first.Id == stale.ProcessId, "not detected");
                 // Simulate an external restart (autostart/manual): kill without recording, relaunch identical command line.
                 try { using var victim = Process.GetProcessById(stale.ProcessId); victim.Kill(true); victim.WaitForExit(15000); } catch { }
+                await Fixtures.AssertListenerReleasedAsync(stale.Port, TimeSpan.FromSeconds(15), "external restart fixture");
                 var deadline = DateTime.UtcNow.AddSeconds(15);
-                while (ServerService.TestPortInUse(stale.Port) && DateTime.UtcNow < deadline) await Task.Delay(200);
-                Check(!ServerService.TestPortInUse(stale.Port), "port not released");
                 using var relaunch = Process.Start(new ProcessStartInfo(Path.Combine(_root, "llama-server.exe"), stale.Args)
                 {
                     WorkingDirectory = _root, UseShellExecute = false, CreateNoWindow = true

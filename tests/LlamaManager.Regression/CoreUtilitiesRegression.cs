@@ -158,25 +158,18 @@ internal static class CoreUtilitiesRegression
         Check(withDraft.Contains("-md"), "-md was not added");
         Equal(@"C:\AIModel\draft.gguf", LlamaCppParameters.ReadFromArgs(withDraft)["draftModel"]);
 
-        // KVMem flags (REQ-124): master boolean flag and options
-        var withKvmem = LlamaCppParameters.Apply("-c 4096", "kvmem", "1");
-        Check(withKvmem.Contains("--kvmem"), "--kvmem was not added");
-        Equal("1", LlamaCppParameters.ReadFromArgs(withKvmem)["kvmem"]);
-        var withoutKvmem = LlamaCppParameters.Apply(withKvmem, "kvmem", "0");
-        Check(!withoutKvmem.Contains("--kvmem"), "--kvmem was not removed");
-
-        var kvArgs = LlamaCppParameters.Apply(
-            LlamaCppParameters.Apply(
-                LlamaCppParameters.Apply(
-                    LlamaCppParameters.Apply("-c 4096 --kvmem", "kvmemBudget", "32768"),
-                    "kvmemHostMib", "16384"),
-                "kvmemGenReserve", "2048"),
-            "kvmemSessions", "4");
-        var readKv = LlamaCppParameters.ReadFromArgs(kvArgs);
-        Equal("32768", readKv["kvmemBudget"]);
-        Equal("16384", readKv["kvmemHostMib"]);
-        Equal("2048", readKv["kvmemGenReserve"]);
-        Equal("4", readKv["kvmemSessions"]);
+        // Stock llama.cpp must not project a fictitious KVMem feature. The real paging
+        // kernel is a separate backend; legacy UI keys are ignored or explicitly refused.
+        var staleKeys = new[] { "kvmem", "kvmemBudget", "kvmemGenReserve", "kvmemHostMib", "kvmemDiskMib", "kvmemDiskPath", "kvmemSessions" };
+        Check(!LlamaCppParameters.Specs.Any(s => s.Key.StartsWith("kvmem", StringComparison.OrdinalIgnoreCase)),
+            "stock llama.cpp still exposes the KVMem parameter group");
+        foreach (var key in staleKeys)
+        {
+            Check(!LlamaCppParameters.ReadFromArgs("-c 4096 --kvmem --kvmem-budget 32768").ContainsKey(key),
+                "a stale raw flag was advertised as a supported llama.cpp setting: " + key);
+            try { Equal("-c 4096", LlamaCppParameters.Apply("-c 4096", key, "1")); }
+            catch (NotSupportedException) { } // Explicit refusal is also honest; silently adding a flag is not.
+        }
     }
 
     public static void RunModelPairing(string root)

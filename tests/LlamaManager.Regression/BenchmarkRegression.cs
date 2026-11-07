@@ -47,11 +47,7 @@ internal static class BenchmarkRegression
             Check(variantPorts.Count == 3 && variantPorts.All(p => p != 8080 && p != session.Port),
                 "a benchmark borrowed the agent/service port");
             foreach (var port in variantPorts)
-            {
-                var watch = Stopwatch.StartNew();
-                while (ServerService.TestPortInUse(port) && watch.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(50);
-                Check(!ServerService.TestPortInUse(port), $"benchmark leaked a listener after failure/cancellation: {port}");
-            }
+                await Fixtures.AssertListenerReleasedAsync(port, TimeSpan.FromSeconds(10), "benchmark failure/cancellation");
             Equal(session, ConfigService.ReadConfig().RunningServer);
             Check(ServerService.IsSessionAlive(session) && await ServerService.TestApiReadyAsync(session.Port),
                 "benchmark stopped or replaced the existing fixture service");
