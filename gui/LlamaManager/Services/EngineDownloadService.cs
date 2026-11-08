@@ -23,13 +23,21 @@ public static class EngineDownloadService
     /// percentage. When <paramref name="sha256"/> is given, the file is verified and deleted on
     /// mismatch. Returns the local path.
     /// </summary>
-    public static async Task<string> DownloadAsync(string url, string destination, string? sha256,
-        Action<string> log, CancellationToken ct, Action<long, long?>? progress = null)
+    public static Task<string> DownloadAsync(string url, string destination, string? sha256,
+        Action<string> log, CancellationToken ct, Action<long, long?>? progress = null) =>
+        DownloadCoreAsync(url, destination, sha256, log, ct, progress,
+            (source, target, token) => PublishVerifiedAsync(source, target, token));
+
+    // Per-call publication injection exercises real HTTP/hash/cleanup with deterministic lock gates.
+    // No mutable global hooks, and the public GUI/CLI API remains unchanged.
+    internal static async Task<string> DownloadCoreAsync(string url, string destination, string? sha256,
+        Action<string> log, CancellationToken ct, Action<long, long?>? progress,
+        Func<string, string, CancellationToken, Task> publish)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(destination))!);
-        // A fixed "<destination>.part" made two downloads of the same file collide: the second
-        // could not open it, and its failure path then deleted the first download's temp file.
-        var temp = destination + "." + Guid.NewGuid().ToString("N")[..12] + ".part";
+        // Each transfer owns its staging file. Shared .part names collide during writes and allow
+        // another attempt's cleanup to interfere after the original writer has closed.
+        var temp = destination + "." + Guid.NewGuid().ToString("N") + ".part";
         try
         {
             log($"下载：{url}");
@@ -59,7 +67,7 @@ public static class EngineDownloadService
                 }
                 log("校验通过。");
             }
-            File.Move(temp, destination, overwrite: true);
+            await publish(temp, destination, ct).ConfigureAwait(false);
             return destination;
         }
         catch
@@ -68,6 +76,31 @@ public static class EngineDownloadService
             throw;
         }
     }
+
+    /// <summary>
+    /// Atomically publishes already-verified bytes. Windows replacement can fail transiently while
+    /// another process replaces or reads the same target. Retry only the rename, not HTTP or hash;
+    /// genuine permissions failures still surface after six attempts (750ms total async delay).
+    /// </summary>
+    internal static async Task PublishVerifiedAsync(string source, string destination, CancellationToken ct,
+        Action<string, string>? move = null, Func<TimeSpan, CancellationToken, Task>? delay = null)
+    {
+        move ??= (from, to) => File.Move(from, to, overwrite: true);
+        delay ??= (duration, token) => Task.Delay(duration, token);
+        for (var attempt = 0; ; attempt++)
+        {
+            ct.ThrowIfCancellationRequested(); // Cancellation before commit must preserve the old file.
+            try { move(source, destination); return; }
+            catch (Exception ex) when (attempt < 5 && IsPublicationContention(ex))
+            {
+                await delay(TimeSpan.FromMilliseconds(50 * (attempt + 1)), ct).ConfigureAwait(false);
+            }
+        }
+    }
+
+    private static bool IsPublicationContention(Exception ex) =>
+        ex is IOException or UnauthorizedAccessException &&
+        ex.HResult is unchecked((int)0x80070005) or unchecked((int)0x80070020) or unchecked((int)0x80070021);
 
     /// <summary>Streams the file through SHA-256 (lower-case hex) without loading it into memory.</summary>
     public static async Task<string> Sha256Async(string path, CancellationToken ct)

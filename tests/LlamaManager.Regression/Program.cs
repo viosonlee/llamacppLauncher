@@ -30,6 +30,12 @@ internal static class Program
 
     public static async Task<int> Main(string[] args)
     {
+        if (args.FirstOrDefault() == "--real-download-publication")
+        {
+            var work = Path.Combine(ConfigService.GetManagerRoot(), "logs", "download-native-" + Guid.NewGuid().ToString("N"));
+            await DownloadConcurrencyRegression.RunWindowsLockAsync(work);
+            return 0;
+        }
         if (args.FirstOrDefault() == "--real-cuda-cache")
         {
             if (args.Length != 2) throw new ArgumentException("--real-cuda-cache requires the real llama-server executable path.");
@@ -390,6 +396,9 @@ internal static class Program
                 Run(DownloadRegression.RunCatalog));
             await Test("download: extract, zip-slip guard and checksum enforcement", () =>
                 DownloadRegression.RunDownloadMechanicsAsync(_root));
+            await Test("download: same-target failure, cancellation and two valid transfers preserve ownership", () => DownloadConcurrencyRegression.RunOwnershipAsync(_root));
+            await Test("download: publication retry policy is bounded and cancellation-aware", () => DownloadConcurrencyRegression.RunPublicationPolicyAsync(_root));
+            await Test("download: real Windows target lock resumes verified HTTP publication", () => DownloadConcurrencyRegression.RunWindowsLockAsync(_root));
             await Test("download: real GitHub release dumps map to install plans", () =>
                 Run(() => DownloadRegression.RunAgainstRealReleases(_root)));
             await Test("doctor: version comparison across release schemes", () =>

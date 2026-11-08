@@ -183,24 +183,10 @@ internal static class DownloadRegression
             throw new Exception("bad checksum accepted");
         }
         catch (EngineDownloadService.ChecksumMismatchException) { }
-        Check(!File.Exists(bad) && !File.Exists(bad + ".part"), "bad download not cleaned up");
+        Check(!File.Exists(bad) && !Directory.EnumerateFiles(work, "bad.bin*.part").Any(), "bad download not cleaned up");
 
-        // Concurrent downloads must not share a temp file. With a fixed "<destination>.part" the
-        // second attempt could not open it, and its cleanup then deleted the first attempt's file.
-        var foreign = target + ".other-attempt.part";
-        File.WriteAllText(foreign, "in-progress");
-        try
-        {
-            await EngineDownloadService.DownloadAsync(server.Url, target, new string('0', 64), _ => { }, CancellationToken.None);
-            throw new Exception("bad checksum accepted while another attempt was in flight");
-        }
-        catch (EngineDownloadService.ChecksumMismatchException) { }
-        Check(File.Exists(foreign) && File.ReadAllText(foreign) == "in-progress",
-            "a failed download deleted another attempt's temp file");
-        File.Delete(foreign);
-
-        // Parallel engine downloads (the update-all path) must not interfere through a shared
-        // temp name. Two attempts at the very same destination are inherently last-writer-wins.
+        // Different-destination transfers are an independent baseline; same-destination ownership
+        // and publication are now tested with actual overlapping tasks in DownloadConcurrencyRegression.
         var first = Path.Combine(work, "parallel-a.bin");
         var second = Path.Combine(work, "parallel-b.bin");
         await Task.WhenAll(
