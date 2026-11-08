@@ -30,6 +30,12 @@ internal static class Program
 
     public static async Task<int> Main(string[] args)
     {
+        if (args.FirstOrDefault() == "--real-cuda-cache")
+        {
+            if (args.Length != 2) throw new ArgumentException("--real-cuda-cache requires the real llama-server executable path.");
+            await CudaCacheRegression.RunNativeAsync(args[1]);
+            return 0;
+        }
         if (args.FirstOrDefault() == "--real-kvmem-ui")
             return await RealKvmemUiSmoke.RunAsync(args[1]);
         if (args.FirstOrDefault() == "--check-published")
@@ -547,6 +553,7 @@ internal static class Program
                 CudaService.Invalidate(); await CudaService.DetectAsync(_model);
                 Equal(2, File.ReadAllLines(file).Length);
             });
+            await Test("CUDA: deterministic TTL refresh shares in-flight probes and expires failures", CudaCacheRegression.RunAsync);
             await Test("CUDA: device-list parsing survives hostile or malformed numbers", () => Run(() =>
             {
                 var normal = CudaService.Parse("CUDA0: NVIDIA GeForce RTX 3060 Laptop GPU (6144 MiB, 5000 MiB free)");
