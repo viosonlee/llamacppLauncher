@@ -155,9 +155,22 @@ internal static class EnginesRegression
         Check(EngineArbiter.ActiveGpuBackend(config) == null, "empty config claims the GPU");
         Check(EngineArbiter.ConflictFor(config, "llamacpp") == null, "empty config conflicts");
 
+        // A record alone must not reserve the GPU: crash/reboot leftovers have no live process.
         config.SetRunning(ManagerConfig.SlotMain, new ServerSession { ProcessId = 1, EnginePath = "llama-server.exe", ModelPath = "m.gguf", Port = 8080 });
+        Check(EngineArbiter.ActiveGpuBackend(config) == null, "a dead record claimed the GPU");
+        Check(EngineArbiter.ConflictFor(config, "polystrata") == null, "a dead record caused a conflict");
+
+        // Only a process matching the recorded identity holds the GPU; this process stands in.
+        using var self = System.Diagnostics.Process.GetCurrentProcess();
+        config.SetRunning(ManagerConfig.SlotMain, new ServerSession
+        {
+            ProcessId = self.Id, StartTimeUtcTicks = self.StartTime.ToUniversalTime().Ticks,
+            EnginePath = LlamaManager.Services.ProcessIdentityService.ExecutablePath(self) ?? Environment.ProcessPath!,
+            ModelPath = "m.gguf", Port = 8080
+        });
         Equal("llamacpp", EngineArbiter.ActiveGpuBackend(config));
         Check(EngineArbiter.ConflictFor(config, "llamacpp") == null, "llamacpp conflicts with itself");
+        Equal("llamacpp", EngineArbiter.ConflictFor(config, "polystrata"));
 
         var embedOnly = new ManagerConfig();
         embedOnly.SetRunning(ManagerConfig.SlotEmbedding, new ServerSession { ProcessId = 2, Embedding = true, Port = 8081 });

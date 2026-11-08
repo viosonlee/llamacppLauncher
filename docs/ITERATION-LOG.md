@@ -115,6 +115,36 @@
 
 - 发布包隔离验证通过；`dist` 已部署本轮构建，新 SHA256：`4D13F68D520AB187DE5A0174312D3352DF368E3BEB6B2E43105762D78F79F54D`，用户配置哈希保持不变，保留回退副本。见“轮次汇总”。
 
+## 第05轮（2026-11-08）：GPU 互斥只看记录、且 CLI/自启动可绕过
+
+状态：**第05轮完成**。
+
+### 问题确认
+
+- `EngineArbiter.ActiveGpuBackend` 只判断 `GetRunning(slot) != null`：崩溃/重启/手动结束留下的**过期记录**会被当成仍在占用显卡，导致之后任何引擎都“冲突”。
+- 互斥只在 GUI 的启动按钮里调用；CLI `--start` 与自启动直接进 `StartAsync`。KVMem 后端有自己的一段检查（且仅 KVMem），原版 PolyStrata 与 llama.cpp 都没有，因此可同时加载两个占显存引擎。
+- 同一后端在被记录为运行时也没有保护，可能加载第二个实例。
+
+### 修复
+
+- `ActiveGpuBackend` 改用完整身份校验（PID+创建时刻+可执行路径）确认进程仍存活；过期记录不再占用显卡。
+- 新增 `EngineArbiter.EnsureGpuAvailable`：统一判定并给出指名冲突引擎的可读错误；同一后端重复启动也拒绝。
+- 所有后端启动路径接入：`StrataBackend`（含原版 PolyStrata 与 KVMem，替换原先仅 KVMem 的重复循环）与 `LlamaCppBackend`（仅阻止**其它**引擎，同后端仍走既有“接管已有实例”逻辑）。
+- `ConflictFor` 保持“后端不与自身冲突”的语义，供 GUI“停止它并继续”对话框使用。
+
+### 验证结果
+
+- Release 构建 0 警告 / 0 错误；回归 **121 通过、0 失败**（新增 2 项：过期记录不阻塞/存活记录拒绝同名与异名引擎；后端 `StartAsync` 在存活冲突时拒绝且不启动进程）。
+- 本机真实服务（隔离根、RTX3060 6GB、Qwen3.6-35B-A3B）：
+  1. 配置里写入一条**过期** llama.cpp 记录（PID 999999）后，KVMem `--start` 正常就绪 —— 修复前会被误判冲突；
+  2. KVMem 实际运行（显存约 4973 MiB）时再 `--start --backend polystrata`，被拒绝：`已有 KVMem … 服务占用显卡；请先停止它，再启动 PolyStrata`，退出码 1，进程数启动前后均为 3，未加载第二个引擎；
+  3. `--stop` 停止后进程退出、显存回到 0 MiB。
+- 证据：[回归](../downloads/iteration-20261108-round05/regression.log)、[KVMem 启动](../logs/iteration05-arbiter-20261108/logs/llama-manager.log)、[冲突拒绝输出](../downloads/iteration-20261108-round05/start-polystrata.log)。
+
+### 提交／推送
+
+- 发布包隔离验证通过；`dist` 已部署本轮构建，新 SHA256：`645A78B142D019BD631AC91EFC577804773F13E13596B8D5BB2634C8CBCE8D74`，用户配置哈希保持不变，保留回退副本。见“轮次汇总”。
+
 ## 后续轮次
 
 尚未推进；后续逐项复现已知缺陷再决定修复，不把代码审读风险冒称已实测bug，不承诺已找出所有缺陷。

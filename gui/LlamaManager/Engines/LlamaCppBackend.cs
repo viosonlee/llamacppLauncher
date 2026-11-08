@@ -110,6 +110,11 @@ public sealed class LlamaCppBackend : IServerBackend
     public async Task<EngineSession> StartAsync(EngineStartRequest request, ILogSink log, CancellationToken ct)
     {
         RejectKvmemArguments(request.Config.Args);
+        // CLI/autostart used to skip the GUI's mutual exclusion, so a second GPU-heavy engine
+        // could load next to a running one and exhaust VRAM. Same-backend starts still adopt.
+        if (EngineArbiter.ConflictFor(ConfigService.ReadConfig(), Descriptor.Id) is { } conflicting)
+            throw new InvalidOperationException(
+                $"已有 {EngineArbiter.DisplayName(conflicting)} 服务占用显卡；请先停止它，再启动 {Descriptor.DisplayName}。");
         if (request.Embedding)
             await ServerService.StartEmbeddingAsync(request.Config, log.Write, ct).ConfigureAwait(false);
         else

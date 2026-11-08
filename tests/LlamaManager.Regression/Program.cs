@@ -327,6 +327,10 @@ internal static class Program
                 Run(() => KvmemRegression.RunLaunchDefaults(_root)));
             await Test("KVMem: configurable default output budget and model isolation", () =>
                 Run(() => KvmemRegression.RunOutputLimit(_root)));
+            await Test("GPU arbitration: stale records never block and live ones refuse a second engine", () =>
+                Run(GpuArbitrationRegression.Run));
+            await Test("GPU arbitration: backend start refuses a live GPU engine without launching", () =>
+                GpuArbitrationRegression.RunStartRefusalAsync(_root));
             await Test("KVMem: browser opens the chat UI instead of the props JSON", () =>
                 Run(() => KvmemRegression.RunWebUiUrl(_root)));
             await Test("KVMem: disabled paging leaves no stale native flags", () =>

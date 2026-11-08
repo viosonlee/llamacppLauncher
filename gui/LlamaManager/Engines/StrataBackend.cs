@@ -315,16 +315,9 @@ public sealed class StrataBackend : IServerBackend
         using var launchLease = IsKvmem ? new FileStream(Path.Combine(ConfigService.GetManagerRoot(), "logs", "kvmem-start.lock"),
             FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None) : null;
         var model = ResolveModel(request.Config, _profile);
-        if (IsKvmem)
-        {
-            foreach (var backend in BackendRegistry.All().Where(b => b.Descriptor.GpuHeavy))
-            {
-                var slot = backend.Descriptor.Id == "llamacpp" ? ManagerConfig.SlotMain : backend.Descriptor.Id;
-                var recorded = ConfigService.ReadConfig().GetRunning(slot);
-                using var live = recorded == null ? null : ServerService.ValidateProcess(recorded);
-                if (live != null) throw new InvalidOperationException($"已有 {backend.Descriptor.DisplayName} 服务运行；不会为 KVMem 测试停止或替换它。");
-            }
-        }
+        // One shared GPU arbitration for GUI, CLI and autostart; a stale record with no live
+        // process must not block a start, and a second instance must never load the same GPU.
+        EngineArbiter.EnsureGpuAvailable(ConfigService.ReadConfig(), _profile.Id);
         // The server needs the tokenizer directory (vocab.json etc.); prepare it first so the
         // runconfig can point at the directory the tool actually produced.
         var server = ResolveServer(request.Config, _profile)
