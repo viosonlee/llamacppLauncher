@@ -472,6 +472,20 @@ internal static class KvmemRegression
         Throws<ArgumentException>(() => Build(fixture));
         Equal(beforeRejected, JsonSerializer.Serialize(fixture.Config));
 
+        // A small but valid KVMem budget pair must not be blocked by a reply limit the user
+        // never touched: the default follows the shorter logical context instead of erroring.
+        values["context"] = "4096";
+        values["kvmemBudget"] = "2048";
+        values["kvmemGenReserve"] = "256";
+        values["maxOutputTokens"] = "";
+        var small = BuildPure();
+        Equal(4096, small["kvmem_default_max_tokens"]!.GetValue<int>());
+        Equal("4096", Argument(NativeArgs(small), "--max-context"));
+        values["maxOutputTokens"] = "2048";
+        Equal(2048, BuildPure()["kvmem_default_max_tokens"]!.GetValue<int>());
+        values["maxOutputTokens"] = "4097";
+        Throws<ArgumentException>(() => Build(fixture));
+
         values["context"] = "131072";
         values["maxOutputTokens"] = "131072";
         Equal(131072, BuildPure()["kvmem_default_max_tokens"]!.GetValue<int>());

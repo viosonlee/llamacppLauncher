@@ -541,7 +541,9 @@ public sealed class StrataBackend : IServerBackend
             };
             cfg["warm_start"] = false;
             var outputText = Param(config, "maxOutputTokens");
-            var outputLimit = 8192;
+            // An unset field must not block startup: follow the logical context when it is
+            // smaller than the 8192 default (e.g. a small B/R on a 4096-token context).
+            var outputLimit = string.IsNullOrWhiteSpace(outputText) ? Math.Min(8192, context) : 0;
             if (!string.IsNullOrWhiteSpace(outputText) && !int.TryParse(outputText, NumberStyles.Integer, CultureInfo.InvariantCulture, out outputLimit))
                 throw new ArgumentException("默认回复上限必须是整数。");
             if (outputLimit is < 1 or > 131072 || outputLimit > context)
