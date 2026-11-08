@@ -101,6 +101,13 @@ internal static class RealKvmemUiSmoke
                     var engine = (ComboBox)window.FindName("EngineBackendBox");
                     engine.SelectedIndex = BackendRegistry.All().ToList().FindIndex(x => x.Descriptor.Id == "polystrata");
                     await Task.Delay(300);
+                    // Real GGUF: the compatibility tooltip must expose the notes and must not
+                    // repeat the old unconditional "6GB is below the 8GB minimum" claim.
+                    var compat = (TextBlock)window.FindName("EngineCompatText");
+                    await Wait(() => (compat.ToolTip as string)?.Contains("专家缓存") == true, TimeSpan.FromSeconds(30));
+                    var compatTip = (string)compat.ToolTip!;
+                    Check(!compatTip.Contains("8GB 最低要求"), "the compatibility note still claims an unconditional VRAM minimum");
+                    Check(compatTip.Contains("预检通过"), "the tooltip drops the compatibility summary");
                     Box("threads").Text = "10";
                     Equal("10", ConfigService.ReadConfig().Engines["polystrata"].Parameters["threads"]);
                     Equal("4096", ConfigService.ReadConfig().Engines["kvmem"].ModelPresets[bKey]["kvmemBudget"]);

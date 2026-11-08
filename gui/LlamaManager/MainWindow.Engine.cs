@@ -827,7 +827,10 @@ public partial class MainWindow
             {
                 var report = await backend.InspectAsync(model, _lifetime.Token);
                 EngineCompatText.Text = report.Summary + (report.Estimate != null ? "\n" + report.Estimate.Note : "");
-                EngineCompatText.ToolTip = report.Blockers.Count > 0 ? string.Join("\n", report.Blockers) : null;
+                // Notes (MTP draft, expert-cache limits) were computed but never shown, so users
+                // only saw the one-line summary and could not see why speed/behaviour differs.
+                var details = report.Blockers.Concat(report.Notes.Prepend(report.Summary)).ToArray();
+                EngineCompatText.ToolTip = details.Length > 0 ? string.Join("\n", details) : null;
             }
             else EngineCompatText.Text = "在「模型」页选择模型后，这里显示该引擎的兼容性。";
         }

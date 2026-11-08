@@ -222,6 +222,15 @@ internal static class CoreUtilitiesRegression
         Check(withMtp.Notes.Any(n => n.Contains("MTP")), "an MTP model got no draft note");
         var withoutMtp = PolyStrataCompatibility.Analyze(new GgufMetadata { Architecture = "qwen35moe" });
         Check(withoutMtp.Notes.Any(n => n.Contains("lookup")), "a non-MTP model got no lookup note");
+        // This check only sees GGUF metadata, so it must not assert a VRAM minimum. A 6 GiB card
+        // ran this engine with real prompts, and the old fixed "below the 8 GB minimum" note
+        // contradicted both that evidence and the absence of any GPU observation here.
+        foreach (var report in new[] { supported, withMtp, withoutMtp })
+        {
+            Check(!report.Notes.Any(n => n.Contains("8GB 最低要求") || n.Contains("低于其 8GB")),
+                "metadata-only compatibility still claims a VRAM minimum");
+            Check(report.Notes.Any(n => n.Contains("专家缓存")), "the expert-cache limitation note disappeared");
+        }
     }
 
     public static void RunBackendTypesAndDiagnostics()

@@ -24,7 +24,9 @@ public static class PolyStrataCompatibility
         }
         if (md.HasMtp) notes.Add("含内置 MTP 草稿块：strata-poly 会启用草稿解码。");
         else notes.Add("无 MTP 草稿块：strata-poly 仅用重复/lookup 猜测。");
-        notes.Add("strata-poly 使用专家缓存；6GB 卡低于其 8GB 最低要求，速度可能受限。");
+        // Do not assert a VRAM minimum here: this check only reads GGUF metadata and has no
+        // GPU observation, and a 6 GiB card demonstrably ran strata-poly with real prompts.
+        notes.Add("strata-poly 使用专家缓存：显存外的专家在 CPU 计算，速度受内存带宽限制；显存越小，越需要更小的上下文与专家缓存。");
         var summary = blockers.Count == 0
             ? $"PolyStrata 预检通过：{md.Architecture} / {md.LayerCount} 层。"
             : $"PolyStrata 预检发现问题（{blockers.Count} 项）。";
