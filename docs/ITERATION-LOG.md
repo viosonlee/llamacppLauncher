@@ -247,6 +247,31 @@
 
 - 发布包隔离验证通过；`dist` 已部署本轮构建，新 SHA256：`4364066771184E06D07F87F1AA68730CF01FF93D3E8955E66813760F8A952C86`，用户配置哈希保持不变，保留回退副本。见“轮次汇总”。
 
+## 第10轮（2026-11-08）：CUDA 设备列表用 `int.Parse` 解析外部输出
+
+状态：**第10轮完成**。
+
+### 问题确认
+
+- `CudaService.Parse` 直接用 `int.Parse` 解析 `llama-server --list-devices` 的显存数字。
+- 该文本来自外部进程、不可信：一旦出现超大数值或格式异常，`int.Parse` 抛 `OverflowException`／`FormatException`，会从设备探测路径抛出，而不是降级为“未知”。
+
+### 修复
+
+- 改为 `int.TryParse`（InvariantCulture、仅数字），失败或非正数一律记为 0（“未报告”），不抛异常。
+- 正则与 `Available` 判定不变，正常设备行解析结果与原实现一致。
+
+### 验证结果
+
+- Release 构建 0 警告 / 0 错误；回归 **122 通过、0 失败**。新增断言：正常行 `6144/5000` 正确；`99999999999999999999` 溢出值降级为 0 且另一字段仍正确；`0 MiB` 保留可用标记；空文本与无 CUDA 行不谎报可用。
+- 本机真实输出（`llama-server --list-devices`：`CUDA0: NVIDIA GeForce RTX 3060 Laptop GPU (6143 MiB, 5130 MiB free)`）用**已构建的产品程序集**解析：`Available=True; Total=6143; Free=5130`，与驱动实际输出一致。
+- 证据：[回归](../downloads/iteration-20261108-round10/regression.log)、[真实设备输出](../downloads/iteration-20261108-round10/cuda-real.txt)。
+
+### 提交／推送
+
+- 发布包隔离验证通过。
+- **`dist` 部署推迟**：用户启动器正在运行，按约束不得为部署停止用户程序。发布包保留在 `downloads/iteration-20261108-round10/publish/`，待启动器关闭后按哈希校验部署。见“轮次汇总”。
+
 ## 后续轮次
 
 尚未推进；后续逐项复现已知缺陷再决定修复，不把代码审读风险冒称已实测bug，不承诺已找出所有缺陷。

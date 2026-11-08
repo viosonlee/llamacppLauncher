@@ -46,12 +46,18 @@ public static class CudaService
     public static CudaInfo Parse(string text)
     {
         var match = Regex.Match(text, @"CUDA\d+:\s*[^\r\n(]+\((?<total>\d+)\s*MiB,\s*(?<free>\d+)\s*MiB\s+free\)", RegexOptions.IgnoreCase);
+        // The device list comes from an external process: a huge or malformed number must not
+        // throw out of a probe. Unknown stays 0, which callers already treat as "not reported".
         return new CudaInfo
         {
             Available = Regex.IsMatch(text, @"CUDA\d+:"),
             Text = string.IsNullOrWhiteSpace(text) ? "无 CUDA 设备信息。" : text.Trim(),
-            TotalVramMb = match.Success ? int.Parse(match.Groups["total"].Value) : 0,
-            FreeVramMb = match.Success ? int.Parse(match.Groups["free"].Value) : 0
+            TotalVramMb = MiB(match, "total"),
+            FreeVramMb = MiB(match, "free")
         };
     }
+
+    private static int MiB(Match match, string group) =>
+        match.Success && int.TryParse(match.Groups[group].Value, System.Globalization.NumberStyles.None,
+            System.Globalization.CultureInfo.InvariantCulture, out var value) && value > 0 ? value : 0;
 }

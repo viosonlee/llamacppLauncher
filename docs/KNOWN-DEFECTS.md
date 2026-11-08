@@ -36,7 +36,7 @@
 | DEF-15 | P3 | 代码审读 | 状态轮询每 2 秒读两遍日志（服务未运行时也读） |
 | DEF-16 | P3 | 代码审读 | `IncrementalLogReader` 实例与日志路径无界增长；容量早于 count 截断 |
 | DEF-17 | P3 | 代码审读 | CUDA 设备缓存无 TTL，只有显式刷新 |
-| DEF-18 | P3 | 代码审读 | `CudaService.Parse` 用 `int.Parse` 无溢出保护 |
+| DEF-18 | P2 | 已修复（2026-11-08） | `CudaService.Parse` 用 `int.Parse` 解析外部显存数字，溢出即抛异常 |
 | DEF-19 | P3 | 代码审读 | 归档 Strata 路径空 `PackageRoot` 抛 `ArgumentException` |
 | DEF-20 | P3 | 代码审读 | 文档/注释与实现不一致（多处，含本次新增偏差） |
 | DEF-21 | P3 | 已修复（2026-11-01） | benchmark 脱离保留端口段，原回归 80 通过 / 0 失败 |
@@ -341,12 +341,13 @@
 
 ## DEF-18 `CudaService.Parse` 用 `int.Parse` 无溢出保护
 
-**严重度 P3 · 代码审读**
+**严重度 P2 · 已修复（2026-11-08）**
 
-- 位置：`gui/LlamaManager/Services/CudaService.cs:47-51`。
+- 位置：`gui/LlamaManager/Services/CudaService.cs`。
 - 现象：正则匹配任意长度数字，超过 `int.MaxValue` 时 `int.Parse` 抛 `OverflowException`，
-  被上层折算成"检测失败：…"，掩盖真实原因。
-- 修复建议：`int.TryParse` + 上限校验。
+  被上层折算成"检测失败：…"，掩盖真实原因；该文本来自外部进程，属于不可信输入。
+- 修复：改为 `int.TryParse`（InvariantCulture、仅数字），失败或非正数记为 0（未报告），不抛异常；正则与 `Available` 判定不变。
+- 验证：回归 122 通过 0 失败（含溢出、0 值、空文本、无 CUDA 行）；本机真实 `--list-devices` 输出用已构建程序集解析为 `6143 MiB / 5130 MiB free`。
 
 ## DEF-19 归档 Strata 路径空 `PackageRoot` 抛 `ArgumentException`
 

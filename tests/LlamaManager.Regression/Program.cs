@@ -547,6 +547,20 @@ internal static class Program
                 CudaService.Invalidate(); await CudaService.DetectAsync(_model);
                 Equal(2, File.ReadAllLines(file).Length);
             });
+            await Test("CUDA: device-list parsing survives hostile or malformed numbers", () => Run(() =>
+            {
+                var normal = CudaService.Parse("CUDA0: NVIDIA GeForce RTX 3060 Laptop GPU (6144 MiB, 5000 MiB free)");
+                Check(normal.Available && normal.TotalVramMb == 6144 && normal.FreeVramMb == 5000, "normal device line misparsed");
+                // External output is untrusted: overflow and absurd values must degrade to "unknown".
+                var overflow = CudaService.Parse("CUDA0: GPU Pad (99999999999999999999 MiB, 5000 MiB free)");
+                Equal(0, overflow.TotalVramMb);
+                Equal(5000, overflow.FreeVramMb);
+                var absurd = CudaService.Parse("CUDA0: GPU Pad (0 MiB, 0 MiB free)");
+                Equal(0, absurd.TotalVramMb);
+                Check(absurd.Available, "a zero-capacity line lost the availability flag");
+                Equal(0, CudaService.Parse("").TotalVramMb);
+                Check(!CudaService.Parse("no devices").Available, "a text without a CUDA line claimed availability");
+            }));
             await Test("logs: incremental reads, partial UTF8, truncation and actual GPU buffers", () => Run(() =>
             {
                 var file = Path.Combine(_root, "incremental.log");
