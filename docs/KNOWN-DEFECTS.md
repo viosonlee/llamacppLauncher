@@ -305,13 +305,21 @@
 
 ## DEF-15 状态轮询每 2 秒读两遍日志
 
-**严重度 P3 · 代码审读**
+**严重度 P2 · 已修复（2026-11-08）**
 
-- 位置：`gui/LlamaManager/MainWindow.Runtime.cs:74`。
-- 现象：`LogService.GetGpuSummary(session!, backendId)` 在 `session` 为 `null`（服务未运行）时仍执行，
-  且内部会读主服务 stdout/stderr（或引擎日志）两个文件。
-- 影响：无服务时也在空转 IO，并与 `LogService` 的写入锁（`Gate`）争用。
-- 修复建议：`running == false` 时跳过；或按 session 缓存结果，仅在日志长度变化时重算。
+本轮同一轮询路径上的两个问题都已修复：
+
+1. **重复且无视可见性读取日志**
+   - 位置：`gui/LlamaManager/MainWindow.Runtime.cs`（轮询内两处 `RefreshLog()`）、`MainWindow.xaml.cs`。
+   - 现象：每 2 秒轮询中 `RefreshLog()` 被调用两次（开头、结尾）；且不判断日志页是否可见，用户停留在其它页时也持续读文件、拼近 500 行、比较全文并滚动到底。
+   - 影响：长期常驻的无效 IO 与布局开销，服务未运行时同样发生。
+   - 修复：`RefreshLog(bool force)` 默认仅在日志页选中时读取；删除轮询内重复调用；标签页切换时强制刷新一次；`清空显示` 语义不变。
+   - 验证：真实界面停留参数页 2.5s 后日志框无新条目，切到日志页立即显示。
+2. **无会话时仍读取 GPU 摘要**
+   - 位置：`MainWindow.Runtime.cs`（`LogService.GetGpuSummary(session!, backendId)`）。
+   - 现象：`session` 为 `null`（服务未运行）时仍调用，内部会读主服务 stdout/stderr（或引擎日志）并持有 `LogService` 写入锁。
+   - 修复：已无会话时直接跳过，不再读文件、不取锁。
+   - 验证：回归 121 通过 0 失败；真实界面在无服务状态下轮询正常、进程行显示“进程: 无”，无异常记录。
 
 ## DEF-16 `IncrementalLogReader` 实例与日志路径无界增长
 

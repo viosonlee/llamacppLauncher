@@ -174,7 +174,7 @@ internal static class UiRegression
                 LogService.Write("启动 PolyStrata (strata-poly) 服务：strata-poly.exe --serve --model ornith.gguf");
                 LogService.Write("[polystrata] 请求完成：300 tokens · 45.90 tok/s · 8.1 s · 草稿接受 157/180（87%）");
                 var logMethod = typeof(MainWindow).GetMethod("RefreshLog", BindingFlags.Instance | BindingFlags.NonPublic)!;
-                window.Dispatcher.Invoke(() => logMethod.Invoke(window, null));
+                window.Dispatcher.Invoke(() => logMethod.Invoke(window, [true])); // force: the log tab may be hidden here
                 for (var i = 0; i < 10; i++) window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
                 // The speed badge has its own grid column, so it must stay inside the window even
                 // when the model name is long: the old single-row top bar clipped it away entirely.

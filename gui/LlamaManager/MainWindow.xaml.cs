@@ -120,8 +120,11 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         try { SaveCurrentConfig(); } catch (Exception ex) { ShowError("保存失败", ex); }
     }
 
-    private void RefreshLog()
+    private void RefreshLog(bool force = false)
     {
+        // The status poll runs every two seconds forever. Rebuilding a 500-line log for a tab the
+        // user is not looking at is pure cost, so read only while the log page is selected.
+        if (!force && (!_loaded || ConfigurationTabs.SelectedItem != LogTab)) return;
         var backendId = SelectedEngineBackend()?.Descriptor.Id ?? _config.ActiveBackendId;
         string text;
         try { text = string.Join("\n", LogService.ReadRecent(backendId)); }
@@ -136,6 +139,16 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         _lastLogText = text;
         LogTextBox.Text = text;
         LogScrollViewer.ScrollToEnd();
+    }
+
+    private void ConfigurationTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        // Switching to the log page must show what happened while it was hidden.
+        if (ReferenceEquals(ConfigurationTabs.SelectedItem, LogTab))
+        {
+            _lastLogText = null; // force a rewrite, the text may be unchanged but the view was stale
+            RefreshLog(force: true);
+        }
     }
 
     private void ShowError(string title, Exception ex)

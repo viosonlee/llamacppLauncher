@@ -70,6 +70,16 @@ internal static class RealKvmemUiSmoke
                     window = new MainWindow { ShowActivated = false, Width = 960, Height = 880 };
                     window.Show();
                     await Wait(() => Field<bool>(window, "_loaded"), TimeSpan.FromSeconds(40));
+                    // The status poll must not rebuild the log for a hidden tab; switching to the
+                    // log page is what loads it, and it must then show what happened meanwhile.
+                    var logBox = (Wpf.Ui.Controls.TextBox)window.FindName("LogTextBox");
+                    LogService.Write("验收日志占位条目");
+                    await Task.Delay(2500); // longer than one 2s status poll
+                    Check(!logBox.Text.Contains("验收日志占位条目"), "a hidden log tab was refreshed by the status poll");
+                    ((TabControl)window.FindName("ConfigurationTabs")).SelectedItem = window.FindName("LogTab");
+                    await Wait(() => logBox.Text.Contains("验收日志占位条目"), TimeSpan.FromSeconds(10));
+                    ((TabControl)window.FindName("ConfigurationTabs")).SelectedIndex = 1;
+                    await Task.Delay(300);
                     // Real model directory: auxiliary weights (mmproj/mtp/draft) must never be
                     // offered as startable models, and every real primary model must still appear.
                     var modelsField = typeof(MainWindow).GetField("_models", BindingFlags.Instance | BindingFlags.NonPublic)!;

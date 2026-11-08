@@ -71,7 +71,10 @@ public partial class MainWindow
             LiveSpeedText.Foreground = (Brush)FindResource(status.IsActive ? "AccentFillColorDefaultBrush" : "SystemFillColorSuccessBrush");
             // The service's own telemetry (expert cache, VRAM, GPU load) beats a one-off parse of its
             // startup log, and is the only live source on PolyStrata.
-            var gpuSummary = status.Detail.Length > 0 ? status.Detail : LogService.GetGpuSummary(session!, backendId);
+            // Only a recorded session has logs worth reading; with no service this used to read the
+            // stdout/stderr files on every poll for nothing, under the shared log lock.
+            var gpuSummary = session == null ? ""
+                : status.Detail.Length > 0 ? status.Detail : LogService.GetGpuSummary(session, backendId);
             ProcessInfoText.Text = running
                 ? $"{Path.GetFileName(Path.GetDirectoryName(session!.EnginePath))} · PID {session.ProcessId}" +
                   (!string.IsNullOrEmpty(gpuSummary) ? $" · {gpuSummary}" : "") : "进程: 无";
@@ -112,7 +115,8 @@ public partial class MainWindow
 
             AutostartStatusText.Text = autostartTask.Result.Text;
             AutostartButton.Content = autostartTask.Result.Enabled ? "关闭自启" : "开启自启";
-            RefreshLog();
+            // The log page refreshes on its own when selected; rebuilding it twice per poll for a
+            // hidden tab was wasted work. The early call above covers the visible case.
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
         catch (Exception ex) { LogService.Write("状态检测失败：" + ex.Message); }

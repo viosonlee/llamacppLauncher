@@ -142,6 +142,7 @@
         <TabControl x:Name="ConfigurationTabs" Grid.Row="2" Margin="14,0,14,14"
                     Background="Transparent" BorderThickness="0"
                     TabStripPlacement="Left"
+                    SelectionChanged="ConfigurationTabs_SelectionChanged"
                     Template="{DynamicResource NavTabControlTemplate}"
                     ItemContainerStyle="{DynamicResource NavTabItem}">
 
@@ -411,7 +412,7 @@
             </TabItem>
 
             <!-- ===================== 日志 ===================== -->
-            <TabItem ToolTip="日志">
+            <TabItem ToolTip="日志" x:Name="LogTab">
                 <TabItem.Header>
                     <ui:SymbolIcon Symbol="Notebook24" FontSize="20"/>
                 </TabItem.Header>
