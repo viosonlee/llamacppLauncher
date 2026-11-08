@@ -185,6 +185,30 @@ internal static class DownloadRegression
         catch (EngineDownloadService.ChecksumMismatchException) { }
         Check(!File.Exists(bad) && !File.Exists(bad + ".part"), "bad download not cleaned up");
 
+        // Concurrent downloads must not share a temp file. With a fixed "<destination>.part" the
+        // second attempt could not open it, and its cleanup then deleted the first attempt's file.
+        var foreign = target + ".other-attempt.part";
+        File.WriteAllText(foreign, "in-progress");
+        try
+        {
+            await EngineDownloadService.DownloadAsync(server.Url, target, new string('0', 64), _ => { }, CancellationToken.None);
+            throw new Exception("bad checksum accepted while another attempt was in flight");
+        }
+        catch (EngineDownloadService.ChecksumMismatchException) { }
+        Check(File.Exists(foreign) && File.ReadAllText(foreign) == "in-progress",
+            "a failed download deleted another attempt's temp file");
+        File.Delete(foreign);
+
+        // Parallel engine downloads (the update-all path) must not interfere through a shared
+        // temp name. Two attempts at the very same destination are inherently last-writer-wins.
+        var first = Path.Combine(work, "parallel-a.bin");
+        var second = Path.Combine(work, "parallel-b.bin");
+        await Task.WhenAll(
+            EngineDownloadService.DownloadAsync(server.Url, first, digest, _ => { }, CancellationToken.None),
+            EngineDownloadService.DownloadAsync(server.Url, second, digest, _ => { }, CancellationToken.None));
+        Check(File.ReadAllText(first) == payload && File.ReadAllText(second) == payload, "parallel downloads corrupted a file");
+        Check(!Directory.EnumerateFiles(work, "parallel-*.bin*.part").Any(), "a parallel download left its temp file behind");
+
         Check(EngineDownloadService.FormatBytes(2L << 30).Contains("GiB"), "size formatting wrong");
     }
 

@@ -5,6 +5,8 @@
 
 ## 2026-11-08
 
+- **下载使用独立临时文件**（REQ-135 / DEF-11）：修复固定 `<目标>.part` 让并发下载争用同一路径、且失败清理会删除另一个下载正在写入的临时文件的问题；改为每次调用独立随机后缀，只移动/删除自己的临时文件，校验与原子替换不变。
+
 - **辅助权重不再作为主模型出现，配对确定化**（REQ-134 / DEF-05 / DEF-13）：模型列表与自动配对共用 `ModelPairingService.IsAuxiliaryWeight`（`mmproj*/mtp-*/draft-*`，仅 `.gguf`），修复裸 `draft-*.gguf` 被当成可启动模型的问题；候选按路径序选择，MTP 优先于普通草稿。
 
 - **GPU 互斥以存活为准并覆盖所有启动路径**（REQ-133 / DEF-09 / DEF-10）：`EngineArbiter` 改为完整身份校验，过期记录不再占用显卡；`EnsureGpuAvailable` 由原版 PolyStrata、KVMem 与 llama.cpp 共用，CLI/自启动不再能绕过 GUI 加载第二个占显存引擎，同后端重复启动同样拒绝。

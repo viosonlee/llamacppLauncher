@@ -29,7 +29,7 @@
 | DEF-08 | P2 | 已修复（2026-11-01） | 小数点/逗号输入、逐项与整面板保存口径一致 |
 | DEF-09 | P2 | 代码审读 | GPU 互斥只在 GUI 生效，CLI/自启动可双开吃显存引擎 |
 | DEF-10 | P2 | 代码审读 | GPU 互斥只看配置记录，不看进程是否存活 |
-| DEF-11 | P3 | 代码审读 | 下载临时文件名固定 `.part`，并发下载互相踩踏 |
+| DEF-11 | P2 | 已修复（2026-11-08） | 下载临时文件名固定 `.part`，并发下载互相踩踏并互删 |
 | DEF-12 | P3 | 代码审读 | `FileSignature` 缓存无上限（键含 mtime） |
 | DEF-13 | P3 | 代码审读 | 多个 mmproj/draft 候选时选择不确定 |
 | DEF-14 | P3 | 代码审读 | 后台线程直接修改共享 `_config.ModelPresets` |
@@ -262,13 +262,15 @@
 
 ## DEF-11 下载临时文件名固定 `.part`，并发下载互相踩踏
 
-**严重度 P3 · 代码审读**
+**严重度 P2 · 已修复（2026-11-08）**
 
-- 位置：`gui/LlamaManager/Services/EngineDownloadService.cs:30`。
+- 位置：`gui/LlamaManager/Services/EngineDownloadService.cs`。
 - 影响：GUI 与 CLI 同时 bootstrap（或双开 GUI）下载同一资产时使用同一 `.part`。
-  `FileShare.None` 阻止同时写入，所以不能断言会交错写数据；已能从代码确认并发任务会
-  争用同一个临时路径，失败分支的清理可能与另一任务交接阶段冲突，需并发回归复现。
-- 修复建议：临时名加进程/随机后缀，或复用项目已有的跨进程文件锁思路（`ServerService.LockLifecycle`）。
+  `FileShare.None` 阻止同时写入，但第二个任务的失败/取消分支会 `File.Delete` **第一个任务正在写入的临时文件**，
+  导致两个下载同时失败；这也是并发“一键更新”下的真实风险。
+- 修复：每次调用使用独立临时名（随机后缀），只移动/删除自己的临时文件；校验与原子替换语义不变。
+- 验证：回归断言失败下载不会删除其它尝试的临时文件、两个不同目标并行下载均成功且无残留 `.part`；
+  真实 `downloads/` 目录残留 `.part` 数为 0。
 
 ## DEF-12 `FileSignature` 缓存无上限
 

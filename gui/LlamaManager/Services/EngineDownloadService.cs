@@ -27,7 +27,9 @@ public static class EngineDownloadService
         Action<string> log, CancellationToken ct, Action<long, long?>? progress = null)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(destination))!);
-        var temp = destination + ".part";
+        // A fixed "<destination>.part" made two downloads of the same file collide: the second
+        // could not open it, and its failure path then deleted the first download's temp file.
+        var temp = destination + "." + Guid.NewGuid().ToString("N")[..12] + ".part";
         try
         {
             log($"下载：{url}");
