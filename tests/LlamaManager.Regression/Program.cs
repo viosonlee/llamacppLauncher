@@ -30,6 +30,12 @@ internal static class Program
 
     public static async Task<int> Main(string[] args)
     {
+        if (args.FirstOrDefault() == "--real-file-signature")
+        {
+            if (args.Length != 2) throw new ArgumentException("--real-file-signature requires the model path.");
+            await FileSignatureRegression.RunNativeAsync(Path.Combine(ConfigService.GetManagerRoot(), "logs"), args[1]);
+            return 0;
+        }
         if (args.FirstOrDefault() == "--real-download-publication")
         {
             var work = Path.Combine(ConfigService.GetManagerRoot(), "logs", "download-native-" + Guid.NewGuid().ToString("N"));
@@ -450,6 +456,9 @@ internal static class Program
                 Run(CoreUtilitiesRegression.RunBackendTypesAndDiagnostics));
             await Test("strata: complete GGUF shards, duplicate detection and cancellation", () =>
                 Run(() => StrataCompatibilityRegression.RunShards(_root)));
+            await Test("signatures: normalized paths, LRU bound, version replacement and failed-read recovery", () => Run(() => FileSignatureRegression.RunPolicies(_root)));
+            await Test("signatures: preserve head/tail format and renamed-model identity", () => Run(() => FileSignatureRegression.RunFormat(_root)));
+            await Test("signatures: share concurrent work and reject changed-file observations", () => FileSignatureRegression.RunConcurrencyAsync(_root));
             await Test("presets: reject a known signature mismatch on identical names", () => Run(() =>
             {
                 var config = new ManagerConfig();
