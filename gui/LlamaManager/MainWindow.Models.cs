@@ -22,7 +22,7 @@ public partial class MainWindow
                 if (!Directory.Exists(directory)) return new List<ModelInfo>();
                 var options = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true };
                 var list = Directory.EnumerateFiles(directory, "*.gguf", options)
-                    .Where(f => !Path.GetFileName(f).StartsWith("mmproj", StringComparison.OrdinalIgnoreCase) && !Path.GetFileName(f).StartsWith("mtp-", StringComparison.OrdinalIgnoreCase))
+                    .Where(f => !ModelPairingService.IsAuxiliaryWeight(f))
                     .OrderBy(f => f).Select(f =>
                     {
                         _ = GgufService.TryRead(f); // warm metadata cache away from the dispatcher

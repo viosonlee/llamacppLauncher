@@ -70,6 +70,22 @@ internal static class RealKvmemUiSmoke
                     window = new MainWindow { ShowActivated = false, Width = 960, Height = 880 };
                     window.Show();
                     await Wait(() => Field<bool>(window, "_loaded"), TimeSpan.FromSeconds(40));
+                    // Real model directory: auxiliary weights (mmproj/mtp/draft) must never be
+                    // offered as startable models, and every real primary model must still appear.
+                    var modelsField = typeof(MainWindow).GetField("_models", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                    await Wait(() => ((System.Collections.IList)modelsField.GetValue(window)!).Count > 0, TimeSpan.FromSeconds(60));
+                    var listed = ((System.Collections.IList)modelsField.GetValue(window)!).Cast<ModelInfo>()
+                        .Select(m => m.FileName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    var modelDirectory = real.ModelsDirectory;
+                    var expected = Directory.EnumerateFiles(modelDirectory, "*.gguf", SearchOption.AllDirectories)
+                        .Select(Path.GetFileName)
+                        .Where(name => !ModelPairingService.IsAuxiliaryWeight(name))
+                        .Select(name => name!)
+                        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    Check(listed.SetEquals(expected),
+                        $"model list mismatch: listed {listed.Count}, expected {expected.Count}");
+                    Check(!listed.Any(ModelPairingService.IsAuxiliaryWeight),
+                        "an auxiliary weight was offered as a startable model");
                     ((TabControl)window.FindName("ConfigurationTabs")).SelectedIndex = 1;
                     await Task.Delay(150);
                     Check(((FrameworkElement)window.FindName("KvmemRecommendationPanel")).Visibility == Visibility.Visible, "recommendation card is not visible for KVMem");

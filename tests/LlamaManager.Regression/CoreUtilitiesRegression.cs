@@ -185,6 +185,32 @@ internal static class CoreUtilitiesRegression
 
         Equal(mmproj, ModelPairingService.FindPairedMmproj(model));
         Equal(draft, ModelPairingService.FindPairedDraftModel(model));
+
+        // The model list and the pairing rules must agree on what is auxiliary. A bare
+        // draft-*.gguf was listed as a startable model while pairing still consumed it.
+        foreach (var auxiliary in new[] { "mmproj-F16.gguf", "mtp-x.gguf", "draft-x.gguf", "MMPROJ-any.gguf", "Draft-Y.GGUF" })
+            Check(ModelPairingService.IsAuxiliaryWeight(auxiliary), "auxiliary weight listed as a model: " + auxiliary);
+        foreach (var primary in new[] { "Qwen.gguf", "my-draft-tuned.gguf", "mmproj-x.bin", "mtpnotes.gguf" })
+            Check(!ModelPairingService.IsAuxiliaryWeight(primary), "primary model hidden by the filter: " + primary);
+
+        // Several candidates must resolve deterministically, and an MTP block wins over a draft.
+        File.WriteAllText(Path.Combine(modelDir, "draft-a.gguf"), "a");
+        File.WriteAllText(Path.Combine(modelDir, "draft-b.gguf"), "b");
+        File.WriteAllText(Path.Combine(modelDir, "mmproj-F16.gguf"), "f16");
+        File.WriteAllText(Path.Combine(modelDir, "mmproj-Q8_0.gguf"), "q8");
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            Equal(mmproj, ModelPairingService.FindPairedMmproj(model));
+            Equal(draft, ModelPairingService.FindPairedDraftModel(model));
+        }
+        var onlyDrafts = Path.Combine(root, "test-pair-drafts-only");
+        Directory.CreateDirectory(onlyDrafts);
+        var plain = Path.Combine(onlyDrafts, "Base.gguf");
+        File.WriteAllText(plain, "m");
+        File.WriteAllText(Path.Combine(onlyDrafts, "draft-b.gguf"), "b");
+        File.WriteAllText(Path.Combine(onlyDrafts, "draft-a.gguf"), "a");
+        for (var attempt = 0; attempt < 5; attempt++)
+            Equal(Path.Combine(onlyDrafts, "draft-a.gguf"), ModelPairingService.FindPairedDraftModel(plain));
     }
 
     public static void RunStrataDiagnostics()

@@ -22,7 +22,8 @@
 | DEF-02 | P1 | 已修复（2026-11-07） | 真实 build 与同发布 runtime 比较，最新不下载，未知/变体不盲目覆盖 |
 | DEF-03 | P1 | 已修复（2026-11-07） | llama.cpp doctor 与 updater 共用真实版本及适用发布选择 |
 | DEF-04 | P2 | 待核实 | 外部普通草稿与外部 MTP 权重的自动选择未区分 |
-| DEF-05 | P2 | 代码审读 | 模型列表过滤与配对规则不一致（`draft-*.gguf`） |
+| DEF-05 | P2 | 已修复（2026-11-08） | 模型列表过滤与配对规则不一致（`draft-*.gguf`） |
+| DEF-13 | P3 | 已修复（2026-11-08） | 多个 mmproj/draft 候选时选择不确定 |
 | DEF-06 | P2 | 部分证据、待核实 | PolyStrata Q2_K 预检白名单疑似过时；其它类型须按模型家族验证 |
 | DEF-07 | P2 | 代码审读 | PolyStrata 预检硬编码"6GB 低于 8GB 最低要求"（且重复实现） |
 | DEF-08 | P2 | 已修复（2026-11-01） | 小数点/逗号输入、逐项与整面板保存口径一致 |
@@ -188,12 +189,13 @@
 
 ## DEF-05 模型列表过滤与配对规则不一致
 
-**严重度 P2 · 代码审读**
+**严重度 P2 · 已修复（2026-11-08）**
 
 - 位置：`gui/LlamaManager/MainWindow.Models.cs:25` 对比 `Services/ModelPairingService.cs:44-48`。
 - 现象：模型列表只排除 `mmproj*` 与 `mtp-*`，但配对逻辑还接受 `draft-*`。
 - 影响：`draft-*.gguf` 既作为可选主模型出现（可被误启动），又被当作配对草稿；用户可选中裸草稿权重。
-- 修复建议：抽出统一的"辅助权重文件"判定（`mmproj*` / `mtp-*` / `draft-*`），列表过滤与配对共用。
+- 修复：新增 `ModelPairingService.IsAuxiliaryWeight`（仅 `.gguf`，识别 `mmproj*/mtp-*/draft-*`），列表过滤与配对共用；候选排序后选择，配对确定且 MTP 优先。
+- 验证：回归 121 通过 0 失败；本机真实 `C:\AIModel` 的 12 个 GGUF 中有 6 个辅助权重，界面实际只列出 6 个可启动模型，与预期集合相等。
 
 ## DEF-06 PolyStrata 专家格式白名单缺 Q2_K/Q8_K/BF16/F16/F32
 
@@ -279,13 +281,14 @@
 
 ## DEF-13 多个 mmproj/draft 候选时选择不确定
 
-**严重度 P3 · 代码审读**
+**严重度 P3 · 已修复（2026-11-08）**
 
-- 位置：`gui/LlamaManager/Services/ModelPairingService.cs:22-27`、`:48`。
+- 位置：`gui/LlamaManager/Services/ModelPairingService.cs`。
 - 现象：`Directory.EnumerateFiles` 的顺序不作保证；多个候选且都不含 Q8_0/BF16/F16 时落到
   `candidates[0]`，draft 更是直接 `FirstOrDefault()`。
 - 影响：同一目录下多个投影/草稿文件时，自动装配结果可能在不同次启动不同，难以复现问题。
-- 修复建议：按文件名排序后取第一个，或候选不唯一时给出"检测到多个候选，请在面板手选"的提示。
+- 修复：候选按路径序排序后再选择；同时存在 MTP 与普通草稿时优先 MTP 块。
+- 验证：回归中同一目录重复 5 次选择结果一致，含“仅多份草稿”场景。
 
 ## DEF-14 后台线程直接修改共享 `_config.ModelPresets`
 

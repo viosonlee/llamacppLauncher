@@ -5,6 +5,8 @@
 
 ## 2026-11-08
 
+- **辅助权重不再作为主模型出现，配对确定化**（REQ-134 / DEF-05 / DEF-13）：模型列表与自动配对共用 `ModelPairingService.IsAuxiliaryWeight`（`mmproj*/mtp-*/draft-*`，仅 `.gguf`），修复裸 `draft-*.gguf` 被当成可启动模型的问题；候选按路径序选择，MTP 优先于普通草稿。
+
 - **GPU 互斥以存活为准并覆盖所有启动路径**（REQ-133 / DEF-09 / DEF-10）：`EngineArbiter` 改为完整身份校验，过期记录不再占用显卡；`EnsureGpuAvailable` 由原版 PolyStrata、KVMem 与 llama.cpp 共用，CLI/自启动不再能绕过 GUI 加载第二个占显存引擎，同后端重复启动同样拒绝。
 
 - **回复上限留空时随上下文收缩**（REQ-132 / DEF-27）：修复未填写的 8192 默认会让小上下文合法配置（如 context4096/B2048/R256）启动被拒的问题。留空取 `min(8192, context)`，显式值仍严格校验并明确报错。
