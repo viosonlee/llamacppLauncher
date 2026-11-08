@@ -196,6 +196,30 @@
 
 - 发布包隔离验证通过；`dist` 已部署本轮构建，新 SHA256：`FA8FDD25F2BA70B17EDC8360B2400713242986449120D83C8A0449A3B5D1733F`，用户配置哈希保持不变，保留回退副本。见“轮次汇总”。
 
+## 第08轮（2026-11-08）：后台线程直接修改共享 `_config.ModelPresets`
+
+状态：**第08轮完成**。
+
+### 问题确认
+
+- 模型扫描在 `Task.Run`（后台线程）里调用 `ConfigService.RebindOrphanPresets(_config, …)`，该方法会 `Remove`／插入 `config.ModelPresets`、改写 `config.ModelPath` 并保存配置。
+- 同一时刻 UI 线程在枚举同一个字典（预设读取、配置序列化等），可抛 `InvalidOperationException: Collection was modified` 或读到半更新状态。
+
+### 修复
+
+- 扫描仍在线程池完成（读文件、预热 GGUF 元数据）；预设重绑定移到扫描完成后的 UI 线程执行。
+- 只有确实存在孤立预设时才做昂贵签名采样，因此常见情况下不增加可感知延迟；语义与保存时机不变。
+
+### 验证结果
+
+- Release 构建 0 警告 / 0 错误；回归 **121 通过、0 失败**（含既有预设恢复/签名用例）。
+- 本机真实界面验证通过：真实模型目录扫描后列表与预期集合一致，管理器日志无“集合已修改”或异常记录。
+- 证据：[回归](../downloads/iteration-20261108-round08/regression.log)、[真实界面](../downloads/iteration-20261108-round08/ui-verification.log)。
+
+### 提交／推送
+
+- 发布包隔离验证通过；`dist` 已部署本轮构建，新 SHA256：`726ECED9DD826FFE62ADB04F5522525022C9986E5818352CBC206A82A1060A4F`，用户配置哈希保持不变，保留回退副本。见“轮次汇总”。
+
 ## 后续轮次
 
 尚未推进；后续逐项复现已知缺陷再决定修复，不把代码审读风险冒称已实测bug，不承诺已找出所有缺陷。

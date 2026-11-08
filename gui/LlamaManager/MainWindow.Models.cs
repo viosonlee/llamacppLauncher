@@ -29,11 +29,14 @@ public partial class MainWindow
                         return new ModelInfo { FullName = Path.GetFullPath(f), FileName = Path.GetFileName(f),
                             RelativePath = Path.GetRelativePath(directory, f), SizeBytes = new FileInfo(f).Length };
                     }).ToList();
-                // Preset rebinding samples file signatures, so keep it off the dispatcher too.
-                ConfigService.RebindOrphanPresets(_config, list.Select(m => m.FullName), save: true);
                 return list;
             });
             if (_lifetime.IsCancellationRequested) return;
+            // Rebind on the UI thread: this mutates the shared _config.ModelPresets dictionary and
+            // may move ModelPath. Doing it inside the background task let the dispatcher enumerate
+            // the same dictionary and throw "Collection was modified". The expensive part is only
+            // signature sampling, and that runs solely when orphan presets actually exist.
+            ConfigService.RebindOrphanPresets(_config, models.Select(m => m.FullName), save: true);
             _selecting = true;
             try
             {

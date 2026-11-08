@@ -32,7 +32,7 @@
 | DEF-11 | P2 | 已修复（2026-11-08） | 下载临时文件名固定 `.part`，并发下载互相踩踏并互删 |
 | DEF-12 | P3 | 代码审读 | `FileSignature` 缓存无上限（键含 mtime） |
 | DEF-13 | P3 | 代码审读 | 多个 mmproj/draft 候选时选择不确定 |
-| DEF-14 | P3 | 代码审读 | 后台线程直接修改共享 `_config.ModelPresets` |
+| DEF-14 | P2 | 已修复（2026-11-08） | 后台线程直接修改共享 `_config.ModelPresets` |
 | DEF-15 | P3 | 代码审读 | 状态轮询每 2 秒读两遍日志（服务未运行时也读） |
 | DEF-16 | P3 | 代码审读 | `IncrementalLogReader` 实例与日志路径无界增长；容量早于 count 截断 |
 | DEF-17 | P3 | 代码审读 | CUDA 设备缓存无 TTL，只有显式刷新 |
@@ -294,13 +294,14 @@
 
 ## DEF-14 后台线程直接修改共享 `_config.ModelPresets`
 
-**严重度 P3 · 代码审读**
+**严重度 P2 · 已修复（2026-11-08）**
 
-- 位置：`gui/LlamaManager/MainWindow.Models.cs:33`（`Task.Run` 内调用 `ConfigService.RebindOrphanPresets(_config, …)`），
-  实现见 `Services/ConfigService.cs:266-320`（增删 `config.ModelPresets`、写 `config.ModelPath`）。
+- 位置：`gui/LlamaManager/MainWindow.Models.cs`（`Task.Run` 内调用 `ConfigService.RebindOrphanPresets(_config, …)`），
+  实现见 `Services/ConfigService.cs`（增删 `config.ModelPresets`、写 `config.ModelPath`）。
 - 影响：`Dictionary` 非线程安全，UI 线程同时读写时可能抛 `InvalidOperationException`（枚举时修改）或出现数据错乱；
   与 AGENTS.md "不阻塞 UI 调度器"的约束方向一致，实现方式不安全。
-- 修复建议：后台只计算（文件签名、孤儿判定），结果回到 UI 线程再落地；或对 presets 读写加锁。
+- 修复：文件枚举与 GGUF 元数据预热仍在线程池；预设重绑定移到扫描结束后的 UI 线程执行，只在存在孤儿预设时才做签名采样。
+- 验证：回归 121 通过 0 失败；本机真实界面扫描后列表正确，管理器日志无“集合已修改”或异常。
 
 ## DEF-15 状态轮询每 2 秒读两遍日志
 
