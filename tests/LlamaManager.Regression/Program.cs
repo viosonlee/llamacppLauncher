@@ -30,6 +30,12 @@ internal static class Program
 
     public static async Task<int> Main(string[] args)
     {
+        if (args.FirstOrDefault() == "--real-log-cache")
+        {
+            if (args.Length != 2) throw new ArgumentException("--real-log-cache requires a log path.");
+            LogCacheRegression.RunNative(args[1]);
+            return 0;
+        }
         if (args.FirstOrDefault() == "--real-file-signature")
         {
             if (args.Length != 2) throw new ArgumentException("--real-file-signature requires the model path.");
@@ -586,6 +592,10 @@ internal static class Program
                 Equal(0, CudaService.Parse("").TotalVramMb);
                 Check(!CudaService.Parse("no devices").Available, "a text without a CUDA line claimed availability");
             }));
+            await Test("log cache: recover requested history and protect shared small consumers", () => Run(() => LogCacheRegression.RunCounts(_root)));
+            await Test("log cache: normalize aliases, evict LRU paths and retry failures", () => Run(() => LogCacheRegression.RunCachePolicy(_root)));
+            await Test("log cache: preserve partial UTF8 and deterministic rotation recovery", () => Run(() => LogCacheRegression.RunIncremental(_root)));
+            await Test("log cache: preserve cold byte budget and bounded partial lines", () => Run(() => LogCacheRegression.RunByteBudget(_root)));
             await Test("logs: incremental reads, partial UTF8, truncation and actual GPU buffers", () => Run(() =>
             {
                 var file = Path.Combine(_root, "incremental.log");

@@ -34,7 +34,7 @@
 | DEF-13 | P3 | 代码审读 | 多个 mmproj/draft 候选时选择不确定 |
 | DEF-14 | P2 | 已修复（2026-11-08） | 后台线程直接修改共享 `_config.ModelPresets` |
 | DEF-15 | P3 | 代码审读 | 状态轮询每 2 秒读两遍日志（服务未运行时也读） |
-| DEF-16 | P3 | 代码审读 | `IncrementalLogReader` 实例与日志路径无界增长；容量早于 count 截断 |
+| DEF-16 | P3 | 已修复（2026-11-08） | 共享日志缓存64路径LRU、容量增长回读、超大请求不驻留且不静默截行数 |
 | DEF-17 | P3 | 已修复（2026-11-08） | CUDA观察五分钟TTL、过期并发共享、进行中的探测不重复启动 |
 | DEF-18 | P2 | 已修复（2026-11-08） | `CudaService.Parse` 用 `int.Parse` 解析外部显存数字，溢出即抛异常 |
 | DEF-19 | P3 | 代码审读 | 归档 Strata 路径空 `PackageRoot` 抛 `ArgumentException` |
@@ -333,13 +333,14 @@
 
 ## DEF-16 `IncrementalLogReader` 实例与日志路径无界增长
 
-**严重度 P3 · 代码审读**
+**严重度 P3 · 已修复（2026-11-08）**
 
-- 位置：`gui/LlamaManager/Services/LogService.cs:14-20`（每路径一个 reader，字典从不清理）、
-  `IncrementalLogReader.Read(path, capacity = 500)`，而 `ReadFileTail(path, count)` 未把 `count` 传入容量。
-- 影响：基准每轮产生 `benchmark-{i}.stdout/stderr.log` 等新路径，条目只增不减；
-  `count > 500` 时静默截断（当前调用方都 ≤ 500，属潜在坑）。
-- 修复建议：字典按最近使用裁剪；`ReadFileTail` 传 `capacity: count`。
+- 位置：`gui/LlamaManager/Services/LogService.cs`共享读缓存。
+- 实测确认：旧产品程序集读取650完整行、请求600行只得500行；同一个文件绝对/点路径别名产生两个读取器。
+- 纠正历史说明：benchmark每次从索引0复用路径，实际只有提前退出stderr以8行进入此缓存；不能声称每次成功运行都新增stdout/stderr读取器。结构上的任意路径无上限及行数截断仍是真实缺陷。
+- 修复：规范化路径、64路径LRU；保留容量高水位≥500，增长时回读，避免UI100/125与错误12行请求损坏GPU500行历史。缓存最多保留4096行，超大请求用不驻留读取器而不裁返回行数。
+- 验证：回归133通过0失败；真实95,392字节引擎日志1228完整行，12→600→650→100→500正确且别名共用一个读取器；测试缺失/非法/文件锁恢复、UTF8/部分行、轮转、LRU与大请求。
+- 边界：仍仅冷读最多1MiB内容，不能保证返回预算外历史；独立速度20行过滤读取器与原解码/轮转启发式不改。不会将此修复冒称为完整日志扫描器或解决所有IO延迟。
 
 ## DEF-17 CUDA 设备缓存无 TTL
 
