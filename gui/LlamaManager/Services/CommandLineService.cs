@@ -118,6 +118,10 @@ public static class CommandLineService
                 using (var process = recorded is { } open ? ServerService.ValidateProcess(open) : null)
                 {
                     if (process == null) throw new InvalidOperationException("服务尚未启动。");
+                    if (backend is StrataBackend strata && !strata.HasWebUi(config))
+                        throw new InvalidOperationException(
+                            $"{backend.Descriptor.DisplayName} 完整包未附带 serve/web 网页界面，根路径不可用；" +
+                            $"请使用 OpenAI 兼容接口 http://127.0.0.1:{recorded!.Port}/v1。");
                     backend.OpenWebUi(LlamaCppBackend.ToEngineSession(recorded!) with { BackendId = backendId });
                 }
                 return 0;

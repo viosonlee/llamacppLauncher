@@ -496,6 +496,39 @@ internal static class KvmemRegression
         }
     }
 
+    public static void RunWebUiUrl(string root)
+    {
+        var kvmem = new StrataBackend(StrataBackend.KvmemProfile);
+        var stock = new StrataBackend(StrataBackend.PolyProfile);
+        var session = new EngineSession
+        {
+            BackendId = "kvmem", Port = 8123, ProcessId = 1, StartTimeUtcTicks = 1, ExecutablePath = "unused.exe"
+        };
+        var kvmemUrl = kvmem.WebUiUrl(session);
+        Equal("http://127.0.0.1:8123/", kvmemUrl);
+        Equal(kvmemUrl, stock.WebUiUrl(session));
+        foreach (var url in new[] { kvmemUrl, stock.WebUiUrl(session) })
+        {
+            Check(!url.Contains("props", StringComparison.OrdinalIgnoreCase),
+                "the browser button opened the raw props JSON instead of the chat UI");
+            Check(url.EndsWith('/') && !url.Contains('?'), "web UI URL must be the serve frontend root");
+        }
+        // The browser button is the concrete method the GUI and CLI call.
+        var open = typeof(StrataBackend).GetMethod(nameof(StrataBackend.OpenWebUi), [typeof(EngineSession)]);
+        Check(open != null && open.ReturnType == typeof(void), "the GUI/CLI browser entry point is missing");
+
+        // The real unified KVMem package ships no serve/web/index.html, and the frontend raises
+        // FileNotFoundError for "/" in that case. The button must detect that instead of opening it.
+        var fixture = CreateFixture(root, "web ui");
+        Check(!kvmem.HasWebUi(fixture.Config), "a bundle without serve/web/index.html was reported as having a chat page");
+        var web = Path.Combine(fixture.Bundle, KvmemInstallation.ServeRootRelativePath, "serve", "web");
+        Directory.CreateDirectory(web);
+        File.WriteAllText(Path.Combine(web, "index.html"), "<html><body>fixture chat</body></html>");
+        Check(kvmem.HasWebUi(fixture.Config), "a bundle shipping serve/web/index.html was reported as having no chat page");
+        // A stock profile resolves its own serve root, not the KVMem bundle's.
+        Check(!stock.HasWebUi(fixture.Config), "the stock profile used the KVMem bundle's chat page");
+    }
+
     public static void RunDisabledZeroPollution(string root)
     {
         var fixture = CreateFixture(root, "disabled");

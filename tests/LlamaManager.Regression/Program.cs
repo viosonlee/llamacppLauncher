@@ -327,6 +327,8 @@ internal static class Program
                 Run(() => KvmemRegression.RunLaunchDefaults(_root)));
             await Test("KVMem: configurable default output budget and model isolation", () =>
                 Run(() => KvmemRegression.RunOutputLimit(_root)));
+            await Test("KVMem: browser opens the chat UI instead of the props JSON", () =>
+                Run(() => KvmemRegression.RunWebUiUrl(_root)));
             await Test("KVMem: disabled paging leaves no stale native flags", () =>
                 Run(() => KvmemRegression.RunDisabledZeroPollution(_root)));
             await Test("KVMem: reject invalid capacity, alignment, SSD and decode combinations", () =>

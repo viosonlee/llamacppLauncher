@@ -35,6 +35,34 @@
 - 已部署验证过的发布EXE，新SHA256：`DC6C6139969465B8915BAE666AC9056D72D91A8537E9B24B41C3847258704BDE`；用户配置哈希保持不变，保留上版EXE回退副本。
 - 模型、引擎、用户配置、日志和构建产物未暂存或提交。
 
+## 第02轮（2026-11-08）：KVMem「打开页面」打开坏页面／JSON接口
+
+状态：**第02轮完成**。修复、回归、本机验证、发布、提交与推送均完成。
+
+### 问题确认
+
+- 启动器对 KVMem 的“打开页面”打开 `http://127.0.0.1:PORT/props`，那是原始 JSON 能力接口，不是聊天界面。
+- 更深一层：真实 KVMem 统一包的 `serve/web/` 只有 `history-export.html`，**没有 `index.html`**；服务根路径直接抛 `FileNotFoundError` 并中断连接，而前端控制台却打印“open http://…/ in a browser to chat”。
+- 本机隔离实测：`package declares web UI: False`，根路径请求失败，`/props` 为 `application/json`，推理 HTTP 200 正常。原版 PolyStrata 包则确实带 `serve/web/index.html`。
+
+### 修复
+
+- 新增 `StrataBackend.WebUiUrl` 统一返回 serve 前端根路径 `/`，不再指向 `/props`。
+- 新增 `StrataBackend.HasWebUi`：仅当实际安装包内存在 `serve/web/index.html` 才认为有聊天页面；KVMem 与原版各自按自己的 serve 根解析。
+- GUI「打开页面」与 CLI `--open` 在无网页时**不打开浏览器**，明确说明缺页并以 `http://127.0.0.1:PORT/v1` 作为可用入口；有网页时正常打开根路径。
+- 不改引擎包内容、不伪造页面、不替换上游前端；不新增代理或第二进程。
+
+### 验证结果
+
+- Release 构建 0 警告 / 0 错误；回归 **119 通过、0 失败**，新增用例覆盖：URL 不含 props、根路径结尾 `/`、无 `index.html` 判定为不可用、补上 `index.html` 后判定为可用、原版 profile 不误用 KVMem 包页面、GUI/CLI 入口存在。
+- 本机隔离实测（RTX3060 6GB / Qwen3.6-35B-A3B）：`package declares web UI: False`，根路径请求如预期失败，`/props` 返回 JSON，推理仍 HTTP 200；结束后自身进程退出、显存释放。
+- 发布包隔离验证通过。证据：[回归](../downloads/iteration-20261108-round02/regression.log)、[原生网页契约](../downloads/iteration-20261108-round02/native-webui-b.log)、[发布包](../downloads/iteration-20261108-round02/published-smoke.log)。
+
+### 提交／推送
+
+- 发布包隔离验证通过（`--help`/`--service`/`--status`/`--stop` 与 PowerShell 包装器）。
+- **`dist` 部署推迟**：用户启动器正在运行（PID 18600，创建于 16:14:30），按约束不得为部署停止用户程序。已产出的发布包保留在 `downloads/iteration-20261108-round02/publish/`，待启动器关闭后再按哈希校验部署。
+
 ## 后续轮次
 
 尚未推进；后续逐项复现已知缺陷再决定修复，不把代码审读风险冒称已实测bug，不承诺已找出所有缺陷。

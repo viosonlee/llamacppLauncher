@@ -429,8 +429,27 @@ public sealed class StrataBackend : IServerBackend
 
     public string HealthUrl(EngineSession session) => $"http://127.0.0.1:{session.Port}/health";
 
+    /// <summary>
+    /// The serve frontend serves its chat UI at "/" for every profile; "/props" is the raw
+    /// JSON capability endpoint and must never be what the browser button opens.
+    /// </summary>
+    public string WebUiUrl(EngineSession session) => $"http://127.0.0.1:{session.Port}/";
+
+    /// <summary>
+    /// True only when the installed bundle actually ships the serve frontend's chat page.
+    /// The unified KVMem package contains no serve/web/index.html, and requesting "/" there
+    /// raises FileNotFoundError in the frontend instead of returning a page.
+    /// </summary>
+    public bool HasWebUi(ManagerConfig config)
+    {
+        var server = ResolveServer(config, _profile);
+        if (server == null) return false;
+        var web = Path.Combine(Path.GetDirectoryName(server)!, "web");
+        return File.Exists(Path.Combine(web, "index.html"));
+    }
+
     public void OpenWebUi(EngineSession session) =>
-        Process.Start(new ProcessStartInfo($"http://127.0.0.1:{session.Port}" + (IsKvmem ? "/props" : "")) { UseShellExecute = true });
+        Process.Start(new ProcessStartInfo(WebUiUrl(session)) { UseShellExecute = true });
 
     // ---- helpers ----
 

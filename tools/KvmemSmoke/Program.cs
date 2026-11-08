@@ -77,6 +77,39 @@ try
     await File.WriteAllTextAsync(Path.Combine(root, "session.json"), JsonSerializer.Serialize(session, new JsonSerializerOptions { WriteIndented = true }));
     var baseUrl = $"http://127.0.0.1:{port}";
     await File.WriteAllTextAsync(Path.Combine(root, "initial-props.json"), await http.GetStringAsync(baseUrl + "/props", deadline.Token));
+    // The launcher's browser button must only open a chat page the bundle actually ships.
+    var hasWebUi = backend is StrataBackend strata && strata.HasWebUi(config);
+    await File.WriteAllTextAsync(Path.Combine(root, "web-ui.json"),
+        JsonSerializer.Serialize(new { packageDeclaresUi = hasWebUi }, new JsonSerializerOptions { WriteIndented = true }));
+    Console.WriteLine($"package declares web UI: {hasWebUi}");
+    try
+    {
+        using var web = await http.GetAsync(baseUrl + "/", deadline.Token);
+        var webType = web.Content.Headers.ContentType?.MediaType ?? "";
+        var body = await web.Content.ReadAsStringAsync(deadline.Token);
+        await File.WriteAllTextAsync(Path.Combine(root, "web-ui.html"), body);
+        Console.WriteLine($"web UI: HTTP {(int)web.StatusCode}, {webType}, {body.Length} chars");
+        var html = web.IsSuccessStatusCode && webType == "text/html" && body.Contains("<html", StringComparison.OrdinalIgnoreCase);
+        if (hasWebUi != html)
+        {
+            failed = true;
+            Console.WriteLine(hasWebUi
+                ? "FAIL: the bundle ships serve/web/index.html but the served root is not an HTML chat page."
+                : "FAIL: the bundle has no chat UI, yet the served root returned a page.");
+        }
+        else Console.WriteLine(html ? "root serves the chat UI." : "root cannot serve a chat page; the launcher must not open it.");
+    }
+    catch (HttpRequestException ex)
+    {
+        Console.WriteLine("root request failed (expected when the bundle ships no chat page): " + ex.Message);
+        if (hasWebUi) { failed = true; Console.WriteLine("FAIL: a bundle with a chat page dropped the root request."); }
+    }
+    using (var props = await http.GetAsync(baseUrl + "/props", deadline.Token))
+    {
+        var propsType = props.Content.Headers.ContentType?.MediaType ?? "";
+        Console.WriteLine($"/props: {propsType}");
+        if (!propsType.Contains("json", StringComparison.OrdinalIgnoreCase)) { failed = true; Console.WriteLine("FAIL: /props is no longer JSON; re-check the UI contract."); }
+    }
     foreach (var request in requests)
     {
         var label = request!["label"]!.GetValue<string>();

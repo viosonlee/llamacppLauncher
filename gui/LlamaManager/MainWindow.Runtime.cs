@@ -262,8 +262,19 @@ public partial class MainWindow
             if (backend is not IServerBackend server) return;
             var session = SelectedSession();
             if (session == null) return;
-            if (await ServerService.TestApiReadyAsync(session.Port, _lifetime.Token))
-                server.OpenWebUi(LlamaCppBackend.ToEngineSession(session));
+            if (!await ServerService.TestApiReadyAsync(session.Port, _lifetime.Token)) return;
+            if (backend is StrataBackend strata && !strata.HasWebUi(_config))
+            {
+                // Do not open a page the installed frontend cannot serve; "/props" is JSON.
+                LogService.Write($"{backend.Descriptor.DisplayName} 完整包未附带 serve/web 网页界面；未打开浏览器。");
+                MessageBox.Show(
+                    $"当前 {backend.Descriptor.DisplayName} 完整包没有网页聊天界面（缺少 serve/web/index.html），根路径会报错。\n\n" +
+                    $"请使用 OpenAI 兼容接口：http://127.0.0.1:{session.Port}/v1\n" +
+                    "或在启动器日志中查看服务输出；拉取包含网页资源的引擎版本后再试。",
+                    "没有网页界面", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+            server.OpenWebUi(LlamaCppBackend.ToEngineSession(session));
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { ShowError("打开页面失败", ex); }

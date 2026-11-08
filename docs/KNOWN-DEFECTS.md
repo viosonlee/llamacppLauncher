@@ -42,8 +42,19 @@
 | DEF-22 | P1 | 已修复（2026-11-07） | KVMem 仅有面板/假协议，原版引擎无分页内核且裸开关不兼容 |
 | DEF-23 | P2 | 已修复（2026-11-07） | TCP 监听表漏报阻止完整身份匹配的脱离会话恢复 |
 | DEF-24 | P1 | 已修复（2026-11-08） | KVMem 默认输出硬编码1024且界面无法按模型调整 |
+| DEF-25 | P2 | 已修复（2026-11-08） | 「打开页面」对 KVMem 打开 `/props` JSON，而真实包根本没有 `serve/web/index.html` |
 
 ---
+
+## DEF-25 KVMem「打开页面」打开JSON接口或坏页面
+
+**严重度 P2 · 已修复（2026-11-08）**
+
+- 现象：GUI/CLI 的「打开页面」对 KVMem 打开 `http://127.0.0.1:PORT/props`，浏览器显示原始 JSON 而非聊天界面。
+- 更深原因（本机实测）：真实 unified 包 `backends/polystrata/serve/web/` 只有 `history-export.html`，**无 `index.html`**；`server.py` 根路由直接 `read_bytes()` 该文件，抛 `FileNotFoundError` 并中断连接。前端仍打印“open … in a browser to chat”，属上游打包缺口。
+- 原版 PolyStrata 包带完整 `serve/web/index.html`，因此不能把两边的可用性等同。
+- 修复：`StrataBackend.WebUiUrl` 返回 `/`；新增 `HasWebUi` 按各自 serve 根检查 `serve/web/index.html`。无网页时 GUI 与 CLI 均不打开浏览器，提示缺失并给出 `/v1` 入口；有网页时正常打开。
+- 验证：回归119通过0失败（含两向判定）；本机实测 `package declares web UI: False`、根路径失败、`/props` 为 JSON、推理 HTTP 200。证据见 [迭代记录](ITERATION-LOG.md)。
 
 ## DEF-24 KVMem默认输出1024导致长回复被截断
 
