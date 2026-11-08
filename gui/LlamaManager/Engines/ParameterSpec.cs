@@ -37,7 +37,8 @@ public sealed record ParameterSpec(
     string? Unit = null,
     bool Editable = false,
     bool Advanced = false,
-    string? RangeHint = null)
+    string? RangeHint = null,
+    int? MultipleOf = null)
 {
     /// <summary>The tooltip text, falling back to the longer help body when no short tip exists.</summary>
     public string? EffectiveToolTip => ToolTip ?? FirstLine(Help);

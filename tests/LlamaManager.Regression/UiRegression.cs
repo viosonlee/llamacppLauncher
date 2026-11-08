@@ -419,9 +419,16 @@ internal static class UiRegression
                         ["packageRoot"] = Path.Combine(ConfigService.GetManagerRoot(), "old-version"), ["context"] = "32768"
                     };
                     var settingsFor = typeof(MainWindow).GetMethod("SettingsFor", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                    var originalContext = currentSettings.Parameters.GetValueOrDefault("context");
                     var effective = (EngineSettings)settingsFor.Invoke(window, [strataBackend])!;
                     Program.Equal(Path.Combine(ConfigService.GetManagerRoot(), "new-version"), effective.Parameters["packageRoot"]);
-                    Program.Equal("32768", effective.Parameters["context"]);
+                    Program.Equal(originalContext, effective.Parameters.GetValueOrDefault("context"));
+                    effective.Parameters["context"] = "not-live";
+                    Program.Equal(originalContext, currentSettings.Parameters.GetValueOrDefault("context"));
+                    var otherModel = Path.Combine(ConfigService.GetManagerRoot(), "other model.gguf");
+                    var switched = EngineModelConfiguration.SelectModel(currentSettings, otherModel, strataBackend.Parameters);
+                    switched = EngineModelConfiguration.SelectModel(switched, currentSettings.ModelPath, strataBackend.Parameters);
+                    Program.Equal(Path.Combine(ConfigService.GetManagerRoot(), "new-version"), switched.Parameters["packageRoot"]);
                 }
                 finally { windowConfig.Engines["polystrata"] = System.Text.Json.JsonSerializer.Deserialize<EngineSettings>(savedSettings)!; }
 

@@ -138,7 +138,7 @@ public static class ServerService
         {
             process = Process.GetProcessById(session.ProcessId);
             if (!process.HasExited && process.StartTime.ToUniversalTime().Ticks == session.StartTimeUtcTicks &&
-                PathIdentity.Equals(process.MainModule?.FileName, session.EnginePath))
+                PathIdentity.Equals(ProcessIdentityService.ExecutablePath(process), session.EnginePath))
                 return process;
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) { }

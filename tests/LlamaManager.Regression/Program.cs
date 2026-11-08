@@ -30,6 +30,8 @@ internal static class Program
 
     public static async Task<int> Main(string[] args)
     {
+        if (args.FirstOrDefault() == "--real-kvmem-ui")
+            return await RealKvmemUiSmoke.RunAsync(args[1]);
         if (args.FirstOrDefault() == "--check-published")
             return await PublishedSmoke.RunAsync(args[1]);
         if (args.FirstOrDefault() == "--read-live-speed")
@@ -323,6 +325,8 @@ internal static class Program
                 KvmemRegression.RunRuntimeProbeAsync(_root));
             await Test("KVMem: real native launch flags and effective defaults", () =>
                 Run(() => KvmemRegression.RunLaunchDefaults(_root)));
+            await Test("KVMem: configurable default output budget and model isolation", () =>
+                Run(() => KvmemRegression.RunOutputLimit(_root)));
             await Test("KVMem: disabled paging leaves no stale native flags", () =>
                 Run(() => KvmemRegression.RunDisabledZeroPollution(_root)));
             await Test("KVMem: reject invalid capacity, alignment, SSD and decode combinations", () =>
@@ -397,6 +401,14 @@ internal static class Program
                 CliRegression.RunAsync(_root));
             await Test("strata: compatibility roles, native heads, required tensors and MTP structure", () =>
                 Run(StrataCompatibilityRegression.RunFormats));
+            await Test("models: switching restores per-engine per-model configuration", () => Run(() => EngineModelIsolationRegression.RunModelSwitchIsolation(_root)));
+            await Test("models: new model defaults and single-field edits never leak", () => Run(() => EngineModelIsolationRegression.RunNewModelDefaultsAndParameterIsolation(_root)));
+            await Test("models: recommendation apply is scoped and rejects concurrent edits", () => Run(() => EngineModelIsolationRegression.RunRecommendationCasIsolation(_root)));
+            await Test("hardware configuration: exact prepared parameters and current-model CAS", () => Run(() => KvmemHardwareConfigurationRegression.Run(_root)));
+            await Test("removed feature: no KVMem benchmarking CLI or recommendation cache", () => RemovedKvmemBenchmarkRegression.RunAsync(_root));
+            await Test("parameters: nearest legal multiples are safe and shared", () => Run(ParameterNormalizationRegression.Run));
+            await Test("hardware: model-scoped conservative recommendation policy", () => Run(HardwareRecommendationRegression.Run));
+            await Test("hardware: cached bounded probes and cancellation", HardwareRecommendationRegression.RunProbeAsync);
             await Test("parameters: VisibleWhen grammar hides, groups and never throws", () =>
                 Run(ParameterVisibilityRegression.Run));
             await Test("schema: help, tooltip and range hints fall back in order", () =>
@@ -860,6 +872,30 @@ internal static class Program
                 finally { Check(await ServerService.StopAsync(config), "could not stop fake server"); }
             });
             await Test("WPF parameter controls preserve original semantics", UiRegression.RunAsync);
+            await Test("process: kernel image identity is available at fresh startup", async () =>
+            {
+                var image = Path.Combine(_root, "llama-server.exe");
+                for (var attempt = 0; attempt < 3; attempt++)
+                {
+                    using var process = Process.Start(new ProcessStartInfo(image, "--probe-hang")
+                    { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = _root })!;
+                    var identity = new ServerSession { ProcessId = process.Id,
+                        StartTimeUtcTicks = process.StartTime.ToUniversalTime().Ticks, EnginePath = image };
+                    try
+                    {
+                        Check(PathIdentity.Equals(image, ProcessIdentityService.ExecutablePath(process)), "kernel image query failed at startup");
+                        using var valid = ServerService.ValidateProcess(identity);
+                        Check(valid != null, "fresh created process identity was rejected");
+                        Check(!process.HasExited, "live owned process was treated as exited");
+                    }
+                    finally
+                    {
+                        using var valid = ServerService.ValidateProcess(identity);
+                        if (valid != null) { valid.Kill(true); await valid.WaitForExitAsync(); }
+                    }
+                    Check(process.HasExited, "exited process cleanup was not confirmed");
+                }
+            });
             await Test("session: PID reuse guard", () => Run(() =>
             {
                 using var process = Process.GetCurrentProcess();

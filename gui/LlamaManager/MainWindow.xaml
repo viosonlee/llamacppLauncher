@@ -247,6 +247,18 @@
                                        Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,0,0,8"/>
                             <TextBlock x:Name="EngineCompatText" Text="" FontSize="11" TextWrapping="Wrap"
                                        Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,0,0,10"/>
+                            <Border x:Name="KvmemRecommendationPanel" Visibility="Collapsed" Padding="12" Margin="0,0,0,12"
+                                    CornerRadius="6" Background="{DynamicResource CardBackgroundFillColorSecondaryBrush}"
+                                    BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                                <StackPanel>
+                                    <TextBlock Foreground="{DynamicResource TextFillColorPrimaryBrush}" Text="不懂参数？先用本机推荐" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                                    <TextBlock Foreground="{DynamicResource TextFillColorPrimaryBrush}" x:Name="KvmemHardwareText" Text="读取 CPU、内存和 GPU，为当前模型生成保守配置。" TextWrapping="Wrap" FontSize="11" Margin="0,0,0,6"/>
+                                    <WrapPanel Margin="0,0,0,6">
+                                        <ui:Button x:Name="KvmemRecommendButton" Content="按硬件一键配置" Click="KvmemRecommendButton_Click" Padding="8,4" Margin="0,0,6,4"/>
+                                    </WrapPanel>
+                                    <TextBlock Foreground="{DynamicResource TextFillColorPrimaryBrush}" x:Name="KvmemRecommendationText" Text="仅根据硬件容量给出保守配置，不进行性能测试，也不保证整个进程 RAM 占用。" TextWrapping="Wrap" FontSize="11"/>
+                                </StackPanel>
+                            </Border>
                             <DockPanel Margin="0,0,0,8">
                                 <ui:Button x:Name="EngineBenchmarkButton" DockPanel.Dock="Right" Content="实测对比…"
                                            Click="EngineBenchmarkButton_Click" Margin="6,0,0,0" Padding="8,3" FontSize="11"

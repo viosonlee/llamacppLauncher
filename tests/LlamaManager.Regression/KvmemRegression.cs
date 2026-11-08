@@ -368,7 +368,7 @@ internal static class KvmemRegression
         Equal("PCI_BUS_ID", env["CUDA_DEVICE_ORDER"]!.GetValue<string>());
         Equal(false, cfg["warm_start"]!.GetValue<bool>());
         Equal(true, cfg["client_reasoning_history"]!.GetValue<bool>());
-        Equal(1024, cfg["kvmem_default_max_tokens"]!.GetValue<int>());
+        Equal(8192, cfg["kvmem_default_max_tokens"]!.GetValue<int>());
         Equal("off", cfg["kvmem_mtp_policy"]!.GetValue<string>());
         Equal(0, cfg["kvmem_mtp_drafts_max"]!.GetValue<int>());
         Check(plan.GeneratedFiles.Keys.All(p => p.Contains(Path.Combine("data", "kvmem"), StringComparison.OrdinalIgnoreCase)),
@@ -394,6 +394,106 @@ internal static class KvmemRegression
         var independent = ConfigOf(Build(fixture));
         Equal(8080, independent["port"]!.GetValue<int>());
         Equal("127.0.0.1", independent["host"]!.GetValue<string>());
+    }
+
+    public static void RunOutputLimit(string root)
+    {
+        var backend = new StrataBackend(StrataBackend.KvmemProfile);
+        Equal(1, backend.Parameters.Count(p => p.Key == "maxOutputTokens"));
+        var limit = backend.Parameters.Single(p => p.Key == "maxOutputTokens");
+        Equal(ParamType.Integer, limit.Type);
+        Equal<double?>(1, limit.Min);
+        Equal<double?>(131072, limit.Max);
+        Equal("8192", limit.Default);
+        Equal("推理", limit.Group);
+        Check(!limit.Advanced, "the output limit must be a basic inference control");
+        var help = limit.EffectiveHelp ?? "";
+        Check(help.Contains("思考", StringComparison.Ordinal)
+            && (help.Contains("答案", StringComparison.Ordinal) || help.Contains("回答", StringComparison.Ordinal)),
+            "output-limit help must explain that the limit includes both thinking and the answer");
+
+        var stock = new StrataBackend(StrataBackend.PolyProfile);
+        Check(!stock.Parameters.Any(p => p.Key == "maxOutputTokens"),
+            "the KVMem output-limit control leaked into the stock PolyStrata schema");
+        Check(!BackendRegistry.ById("polystrata")!.Parameters.Any(p => p.Key == "maxOutputTokens"),
+            "the registered stock PolyStrata schema advertises a KVMem-only output limit");
+
+        var fixture = CreateFixture(root, "output limit");
+        var values = fixture.Config.Engines["kvmem"].Parameters;
+        var stockBefore = BuildPure(stockProfile: true);
+        Check(!stockBefore.ContainsKey("kvmem_default_max_tokens"),
+            "stock PolyStrata received the KVMem frontend default");
+        Check(!values.ContainsKey("maxOutputTokens"), "the missing-setting fixture already has an output limit");
+        var defaults = BuildPure();
+        Equal(8192, defaults["kvmem_default_max_tokens"]!.GetValue<int>());
+        Check(!values.ContainsKey("maxOutputTokens"), "BuildLaunch persisted the default output limit");
+        var nativeDefaults = NativeArgs(defaults);
+        Equal("8192", Argument(nativeDefaults, "--kvmem-budget"));
+        Equal("512", Argument(nativeDefaults, "--kvmem-gen-reserve"));
+
+        foreach (var empty in new[] { "", " \t " })
+        {
+            values["maxOutputTokens"] = empty;
+            var config = BuildPure();
+            Equal(8192, config["kvmem_default_max_tokens"]!.GetValue<int>());
+            Check(nativeDefaults.SequenceEqual(NativeArgs(config)), "an empty output limit changed native B/R arguments");
+        }
+        foreach (var output in new[] { 1, 1024, 4096, 16384 })
+        {
+            // 1024 remains a supported intentional cap; 16384 exceeds B + R but is
+            // valid because frontend output length is independent of active KV slots.
+            values["maxOutputTokens"] = output.ToString(CultureInfo.InvariantCulture);
+            var config = BuildPure();
+            Equal(output, config["kvmem_default_max_tokens"]!.GetValue<int>());
+            Check(nativeDefaults.SequenceEqual(NativeArgs(config)), "the frontend output limit changed native arguments");
+        }
+        foreach (var invalid in new[] { "not-an-int", "4096.5", "4096.0", "NaN", "Infinity", "0", "-1", "131073", "2147483648", "1e3" })
+        {
+            values["maxOutputTokens"] = invalid;
+            var before = JsonSerializer.Serialize(fixture.Config);
+            try { Throws<ArgumentException>(() => Build(fixture)); }
+            catch (Exception ex) { throw new Exception("Invalid KVMem output limit was accepted: " + invalid, ex); }
+            Equal(before, JsonSerializer.Serialize(fixture.Config));
+        }
+
+        values["context"] = "20000";
+        values["kvmemBudget"] = "8192";
+        values["kvmemGenReserve"] = "512";
+        values["maxOutputTokens"] = "16384";
+        var bounded = BuildPure();
+        Equal(16384, bounded["kvmem_default_max_tokens"]!.GetValue<int>());
+        Equal("20000", Argument(NativeArgs(bounded), "--max-context"));
+        Equal("8192", Argument(NativeArgs(bounded), "--kvmem-budget"));
+        Equal("512", Argument(NativeArgs(bounded), "--kvmem-gen-reserve"));
+        values["maxOutputTokens"] = "20000";
+        Equal(20000, BuildPure()["kvmem_default_max_tokens"]!.GetValue<int>());
+        values["maxOutputTokens"] = "32768";
+        var beforeRejected = JsonSerializer.Serialize(fixture.Config);
+        Throws<ArgumentException>(() => Build(fixture));
+        Equal(beforeRejected, JsonSerializer.Serialize(fixture.Config));
+
+        values["context"] = "131072";
+        values["maxOutputTokens"] = "131072";
+        Equal(131072, BuildPure()["kvmem_default_max_tokens"]!.GetValue<int>());
+        // KVMem settings must not alter either the stock schema or its runconfig.
+        // Even a stale output-limit field in stock settings must remain inert.
+        fixture.Config.Engines["polystrata"].Parameters["maxOutputTokens"] = "not-an-int";
+        var stockAfter = BuildPure(stockProfile: true);
+        Check(!stockAfter.ContainsKey("kvmem_default_max_tokens"), "a custom KVMem limit contaminated the stock frontend default");
+        Equal(stockBefore.ToJsonString(), stockAfter.ToJsonString());
+
+        JsonObject BuildPure(bool stockProfile = false)
+        {
+            var before = JsonSerializer.Serialize(fixture.Config);
+            var plan = stockProfile
+                ? new StrataBackend(StrataBackend.PolyProfile).BuildLaunch(
+                    new EngineStartRequest { Config = fixture.Config }, fixture.Tokenizer)
+                : Build(fixture);
+            Equal(before, JsonSerializer.Serialize(fixture.Config));
+            Check(plan.GeneratedFiles.Keys.All(path => !File.Exists(path)),
+                "BuildLaunch materialized an output-limit runconfig as a side effect");
+            return ConfigOf(plan);
+        }
     }
 
     public static void RunDisabledZeroPollution(string root)
@@ -424,8 +524,7 @@ internal static class KvmemRegression
         var baseline = new Dictionary<string, string>(values);
         var cases = new (string Key, string Value)[]
         {
-            ("kvmemBudget", "2047"), ("kvmemBudget", "2049"), ("kvmemBudget", "131073"), ("kvmemBudget", "not-an-int"),
-            ("kvmemGenReserve", "31"), ("kvmemGenReserve", "33"), ("kvmemGenReserve", "16385"),
+            ("kvmemBudget", "not-an-int"),
             ("context", "8703"), ("context", "-1"),
             ("promptBatch", "0"), ("promptBatch", "513"), ("promptBatch", "4097"),
             ("stageMib", "0"), ("stageMib", "8193"),
@@ -443,6 +542,30 @@ internal static class KvmemRegression
             try { Throws<ArgumentException>(() => Build(fixture)); }
             catch (Exception ex) { throw new Exception($"Invalid KVMem setting was accepted: {key}={value}", ex); }
         }
+        // Nonmultiples/out-of-range integers now use the nearest legal multiple in native args.
+        // Set independent fields explicitly; normalization must not repair their relationships.
+        foreach (var (key, value, flag, expected) in new[]
+        {
+            ("kvmemBudget", "2047", "--kvmem-budget", "2048"),
+            ("kvmemBudget", "2049", "--kvmem-budget", "2048"),
+            ("kvmemBudget", "131073", "--kvmem-budget", "131072"),
+            ("kvmemBudget", "8193", "--kvmem-budget", "8192"),
+            ("kvmemBudget", "8208", "--kvmem-budget", "8192"),
+            ("kvmemBudget", "8210", "--kvmem-budget", "8224"),
+            ("kvmemGenReserve", "31", "--kvmem-gen-reserve", "32"),
+            ("kvmemGenReserve", "33", "--kvmem-gen-reserve", "32"),
+            ("kvmemGenReserve", "16385", "--kvmem-gen-reserve", "16384"),
+            ("kvmemGenReserve", "511", "--kvmem-gen-reserve", "512"),
+        })
+        {
+            Reset(values, baseline);
+            values["context"] = "262144";
+            values["promptBatch"] = "32";
+            values[key] = value;
+            var before = JsonSerializer.Serialize(fixture.Config);
+            Equal(expected, Argument(NativeArgs(ConfigOf(Build(fixture))), flag));
+            Equal(before, JsonSerializer.Serialize(fixture.Config));
+        }
         Reset(values, baseline);
         values["context"] = "8704";
         Equal("8704", Argument(NativeArgs(ConfigOf(Build(fixture))), "--max-context"));
@@ -450,6 +573,7 @@ internal static class KvmemRegression
         values["kvmemGenReserve"] = "32";
         values["promptBatch"] = "32";
         values["context"] = "2080";
+        values["maxOutputTokens"] = "1024"; // The intentional short output cap must fit this minimum context.
         values["kvmemSessions"] = "1";
         values["kv"] = "fp16";
         values["conversationCache"] = "0";

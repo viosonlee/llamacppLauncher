@@ -76,9 +76,6 @@ public partial class MainWindow
         RebuildEngineParameters();
     }
 
-    private static bool IsEngineLevelParam(string key) =>
-        key is "packageRoot" or "serveRoot" or "pythonPath" or "servePort" or "host" or "enginePath" or "executablePath";
-
     private async Task SelectModelAsync(string path)
     {
         if (_selecting || _scanning) return;
@@ -99,37 +96,20 @@ public partial class MainWindow
                     SaveEngineParameters(backend!);
                 }
 
-                var settings = _config.Engines.GetValueOrDefault(backendId) ?? new EngineSettings();
+                var previous = _config.Engines.GetValueOrDefault(backendId) ?? new EngineSettings();
                 var newKey = PathIdentity.Normalize(path);
-
-                var enginePaths = settings.Parameters
-                    .Where(kv => IsEngineLevelParam(kv.Key))
-                    .ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase);
-
-                if (settings.ModelPresets.TryGetValue(newKey, out var existingPreset))
+                var isNewPreset = !previous.ModelPresets.ContainsKey(newKey);
+                var settings = EngineModelConfiguration.SelectModel(previous, path, backend!.Parameters);
+                if (isNewPreset)
                 {
-                    settings.Parameters = new Dictionary<string, string>(existingPreset, StringComparer.OrdinalIgnoreCase);
-                    foreach (var (k, v) in enginePaths)
-                    {
-                        // Keep current engine-wide installation/endpoint settings across model switches.
-                        if (!string.IsNullOrWhiteSpace(v)) settings.Parameters[k] = v;
-                    }
-                }
-                else
-                {
-                    var newParams = new Dictionary<string, string>(enginePaths, StringComparer.OrdinalIgnoreCase);
                     var pairedMmproj = ModelPairingService.FindPairedMmproj(path);
-                    if (!string.IsNullOrEmpty(pairedMmproj)) newParams["mmproj"] = pairedMmproj;
+                    if (!string.IsNullOrEmpty(pairedMmproj)) EngineModelConfiguration.SetParameter(settings, path, "mmproj", pairedMmproj);
                     var pairedDraft = ModelPairingService.FindPairedDraftModel(path);
-                    if (backendId != "kvmem" && !string.IsNullOrEmpty(pairedDraft)) newParams["draftModel"] = pairedDraft;
-
-                    settings.Parameters = newParams;
-                    settings.ModelPresets[newKey] = new Dictionary<string, string>(newParams, StringComparer.OrdinalIgnoreCase);
+                    if (backendId != "kvmem" && !string.IsNullOrEmpty(pairedDraft)) EngineModelConfiguration.SetParameter(settings, path, "draftModel", pairedDraft);
                 }
-
-                settings.ModelPath = path;
                 _config.Engines[backendId] = settings;
                 ConfigService.SaveEngineSettings(_config, backendId, settings);
+                RefreshKvmemScopePresentation();
                 LogService.Write($"已为 {backend!.Descriptor.DisplayName} 选择 {Path.GetFileName(path)}。");
                 UpdateSelectedModelText();
                 _statusVersion++;

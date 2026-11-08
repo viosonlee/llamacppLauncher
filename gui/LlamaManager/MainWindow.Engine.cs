@@ -73,6 +73,7 @@ public partial class MainWindow
             ConfigService.SaveActiveBackend(_config, backend.Descriptor.Id);
         }
         ApplyEnginePanelVisibility();
+        RefreshKvmemScopePresentation();
         RebuildEngineParameters();
         // Reflect the newly selected engine's model in the model list.
         if (backend != null)
@@ -103,6 +104,7 @@ public partial class MainWindow
     private void ApplyEnginePanelVisibility()
     {
         var llamacpp = IsLlamaCppSelected();
+        KvmemRecommendationPanel.Visibility = SelectedEngineBackend()?.Descriptor.Id == "kvmem" ? Visibility.Visible : Visibility.Collapsed;
         LlamaCppAdvancedPanel.Visibility = llamacpp ? Visibility.Visible : Visibility.Collapsed;
         EngineAdvancedPanel.Visibility = llamacpp ? Visibility.Collapsed : Visibility.Visible;
         EmbeddingPanel.Visibility = llamacpp ? Visibility.Visible : Visibility.Collapsed;
@@ -122,6 +124,7 @@ public partial class MainWindow
             _engineParameterControls.Clear();
             _engineParameterSpecs.Clear();
             _engineParameterErrors.Clear();
+            _parameterAdjustmentNotes.Clear();
             _engineParameterRows.Clear();
             EngineParametersPanel.Children.Clear();
             // Detached controls keep their registered names; drop them so a stale lookup cannot
@@ -202,23 +205,10 @@ public partial class MainWindow
                 Parameters = LlamaCppParameters.ReadFromArgs(_loaded ? ArgsTextBox.Text : _config.Args),
             };
         }
+        // Model selection restores its preset explicitly. Rendering never mutates live settings or
+        // merges another model's/global parameters into the selected model.
         var settings = _config.Engines.GetValueOrDefault(backend.Descriptor.Id) ?? new EngineSettings();
-        var model = EngineModelFor(backend);
-        if (!string.IsNullOrWhiteSpace(model))
-        {
-            var key = PathIdentity.Normalize(model);
-            if (settings.ModelPresets.TryGetValue(key, out var preset))
-            {
-                foreach (var (k, v) in preset)
-                {
-                    // Installation paths are engine-wide. A model preset must not undo a completed update.
-                    if (IsEngineLevelParam(k) && settings.Parameters.TryGetValue(k, out var current) &&
-                        !string.IsNullOrWhiteSpace(current)) continue;
-                    settings.Parameters[k] = v;
-                }
-            }
-        }
-        return settings;
+        return System.Text.Json.JsonSerializer.Deserialize<EngineSettings>(System.Text.Json.JsonSerializer.Serialize(settings))!;
     }
 
     private void RegisterParameter(ParameterSpec spec, FrameworkElement element)
@@ -318,8 +308,23 @@ public partial class MainWindow
         {
             textBox.ToolTip = spec.EffectiveToolTip;
             if (spec.Type is ParamType.Integer or ParamType.Decimal) FilterNumericInput(textBox, spec);
-            textBox.LostFocus += (_, _) => ValidateEngineParameters();
-            textBox.TextChanged += (_, _) => { if (!_engineUpdate) OnParameterEdited(spec, control); };
+            textBox.LostFocus += (_, _) =>
+            {
+                if (spec.MultipleOf != null) CommitAlignedParameter(spec, control);
+                ValidateEngineParameters();
+            };
+            textBox.KeyDown += (_, e) =>
+            {
+                if (e.Key == System.Windows.Input.Key.Enter && spec.MultipleOf != null)
+                { CommitAlignedParameter(spec, control); e.Handled = true; }
+            };
+            textBox.TextChanged += (_, _) =>
+            {
+                if (_engineUpdate) return;
+                if (_parameterAdjustmentNotes.TryGetValue(spec.Key, out var note)) note.Visibility = Visibility.Collapsed;
+                if (spec.MultipleOf != null) ValidateEngineParameters(); // Defer persistence and snapping until commit.
+                else OnParameterEdited(spec, control);
+            };
         }
         else if (control is ComboBox combo)
         {
@@ -407,6 +412,14 @@ public partial class MainWindow
         };
         host.Children.Add(row);
         host.Children.Add(error);
+        if (spec.MultipleOf != null)
+        {
+            var note = new TextBlock { FontSize = 10, Margin = new Thickness(150, 2, 30, 0),
+                TextWrapping = TextWrapping.Wrap, Visibility = Visibility.Collapsed,
+                Foreground = (Brush)FindResource("TextFillColorSecondaryBrush") };
+            host.Children.Add(note);
+            _parameterAdjustmentNotes[spec.Key] = note;
+        }
         _engineParameterControls[spec.Key] = control;
         _engineParameterErrors[spec.Key] = error;
         // Dynamic controls are not in the XAML namescope; registering them keeps the panel
@@ -444,15 +457,14 @@ public partial class MainWindow
     /// <summary>Re-evaluates visibility after an edit: a condition may depend on another field.</summary>
     private void OnParameterEdited(ParameterSpec spec, Control control, string? explicitValue = null)
     {
+        if (!_engineParameterControls.TryGetValue(spec.Key, out var currentControl) || !ReferenceEquals(currentControl, control)) return;
         var backend = SelectedEngineBackend();
-        if (backend is LlamaCppBackend)
+        try
         {
-            ApplyLlamaCppParameter(spec, control, explicitValue);
+            if (backend is LlamaCppBackend) ApplyLlamaCppParameter(spec, control, explicitValue);
+            else if (backend != null) ApplyEngineParameter(backend, spec, control, explicitValue);
         }
-        else if (backend != null)
-        {
-            ApplyEngineParameter(backend, spec, control, explicitValue);
-        }
+        catch (Exception ex) { ShowError("参数未保存", ex); }
         ValidateEngineParameters();
         ApplyParameterVisibility();
         ApplyParameterFilter();
@@ -464,20 +476,10 @@ public partial class MainWindow
         // ReadControlValue normalizes Decimal values for both per-edit and whole-panel saves.
         if (spec.Type == ParamType.Decimal) value = value.Trim().Replace(',', '.');
         var settings = _config.Engines.GetValueOrDefault(backend.Descriptor.Id) ?? new EngineSettings();
-        settings.Parameters[spec.Key] = value;
         var model = EngineModelFor(backend);
-        if (!string.IsNullOrWhiteSpace(model))
-        {
-            var key = PathIdentity.Normalize(model);
-            if (!settings.ModelPresets.TryGetValue(key, out var preset))
-            {
-                preset = new Dictionary<string, string>(settings.Parameters, StringComparer.OrdinalIgnoreCase);
-                settings.ModelPresets[key] = preset;
-            }
-            preset[spec.Key] = value;
-        }
+        ConfigService.SaveModelParameter(backend.Descriptor.Id, model, spec.Key, value);
+        EngineModelConfiguration.SetParameter(settings, model, spec.Key, value);
         _config.Engines[backend.Descriptor.Id] = settings;
-        ConfigService.SaveEngineSettings(_config, backend.Descriptor.Id, settings);
     }
 
     /// <summary>
@@ -619,11 +621,13 @@ public partial class MainWindow
         var backend = SelectedEngineBackend();
         if (backend == null) return true;
         var ok = true;
+        var context = BuildParameterContext(backend, _config.Engines.GetValueOrDefault(backend.Descriptor.Id));
         foreach (var spec in backend.Parameters)
         {
             if (!_engineParameterControls.TryGetValue(spec.Key, out var control)) continue;
             var error = _engineParameterErrors.GetValueOrDefault(spec.Key);
-            var problem = ValidateValue(spec, ReadControlValue(control, spec));
+            var problem = ParameterVisibility.Evaluate(spec.VisibleWhen, context)
+                ? ValidateValue(spec, ReadControlValue(control, spec)) : null;
             if (problem != null) ok = false;
             if (error != null)
             {
@@ -644,6 +648,13 @@ public partial class MainWindow
         var numeric = spec.Type is ParamType.Integer or ParamType.Decimal
             || (spec.Type == ParamType.Choice && spec.Min != null);
         if (!numeric) return null;
+        if (spec.MultipleOf != null)
+        {
+            var normalized = ParameterNormalizer.Normalize(spec, value);
+            if (!normalized.IsValid) return normalized.Error;
+            // While typing, bounds/alignment are resolved at commit rather than rejecting a partial number.
+            return null;
+        }
         if (string.IsNullOrWhiteSpace(value)) return null;
         var text = value.Trim();
         // -ngl also accepts "all" / "auto", which are not numbers at all.
@@ -844,7 +855,8 @@ public partial class MainWindow
     private bool SaveEngineParameters(IEngineBackend backend)
     {
         if (_engineUpdate || backend.Parameters.Count == 0) return true;
-        if (!ValidateEngineParameters())
+        var normalized = NormalizePanelParameters(backend);
+        if (!ValidateEngineParameters() || !normalized)
         {
             LogService.Write($"[{backend.Descriptor.Id}] 参数校验未通过，已阻止启动。");
             return false;

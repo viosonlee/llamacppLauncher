@@ -218,6 +218,40 @@ public static class ConfigService
         });
     }
 
+    /// <summary>Commits one current-model field without rewriting other presets or installation/runtime state.</summary>
+    public static void SaveModelParameter(string backendId, string model, string key, string value)
+    {
+        Store.Update(latest =>
+        {
+            var settings = latest.Engines.GetValueOrDefault(backendId) ?? new EngineSettings();
+            if (!EngineModelConfiguration.SetParameter(settings, model, key, value))
+                throw new IOException("编辑期间当前模型已改变；没有把旧模型参数保存到新模型。");
+            latest.Engines[backendId] = settings;
+            Touch(latest);
+        });
+    }
+
+    /// <summary>Applies a model-scoped recommendation without overwriting concurrent edits or runtime identity.</summary>
+    public static void SaveModelRecommendation(string backendId, string model,
+        IReadOnlyDictionary<string, string> parameters, EngineSettings expectedSelection)
+    {
+        Store.Update(latest =>
+        {
+            var settings = latest.Engines.GetValueOrDefault(backendId);
+            if (settings == null || !PathIdentity.Equals(settings.ModelPath, model) ||
+                !string.Equals(settings.ExecutablePath, expectedSelection.ExecutablePath, StringComparison.OrdinalIgnoreCase) ||
+                settings.Parameters.Count != expectedSelection.Parameters.Count ||
+                settings.Parameters.Any(p => !expectedSelection.Parameters.TryGetValue(p.Key, out var value) || value != p.Value))
+                throw new IOException("模型或参数在推荐期间已被修改；未覆盖你的新设置，请重新推荐或实测。");
+            foreach (var (key, value) in parameters) settings.Parameters[key] = value;
+            var modelKey = PathIdentity.Normalize(model);
+            if (!settings.ModelPresets.TryGetValue(modelKey, out var preset))
+                settings.ModelPresets[modelKey] = preset = new Dictionary<string, string>(settings.Parameters, StringComparer.OrdinalIgnoreCase);
+            foreach (var (key, value) in parameters) preset[key] = value;
+            Touch(latest);
+        });
+    }
+
     /// <summary>
     /// Atomically commits only a verified installation's executable and path parameters. Optional
     /// selection compare-and-swap rejects concurrent path edits without touching sessions, models,

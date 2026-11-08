@@ -145,6 +145,10 @@ public sealed class StrataBackend : IServerBackend
         {
             // Stock PolyStrata has no paging kernel. Only the distinct KVMem profile gets this UI.
             list.RemoveAll(p => p.Key is "draftModel" or "conversationCache");
+            list.Add(new("maxOutputTokens", "默认回复上限", "推理", ParamType.Integer, "8192",
+                "客户端没有指定最大输出时的默认上限；思考与正文共用此预算。", 1, 131072,
+                Help: "【默认回复上限】\n• 仅在客户端未指定 max_tokens / max_completion_tokens 时生效，显式请求值优先。\n• 思考 tokens 和最终回答共用总预算，1024 很容易让长回答被截断。\n• 默认 8192；需要更长回复可增加，但不能超过逻辑上下文，且仍须留下提示词与运行内存空间。\n• 此参数不是 KVMem 的追加区 R，也不改变 B/R 或模型权重。\n• 保存到当前模型，下次启动服务生效。",
+                Unit: "tokens", RangeHint: "1–131072；默认8192，思考与正文合计"));
             for (var i = 0; i < list.Count; i++)
                 list[i] = list[i].Key switch
                 {
@@ -302,6 +306,12 @@ public sealed class StrataBackend : IServerBackend
 
     public async Task<EngineSession> StartAsync(EngineStartRequest request, ILogSink log, CancellationToken ct)
     {
+        if (IsKvmem)
+        {
+            var normalized = KvmemParameters.NormalizeValues(request.Config.Engines.GetValueOrDefault(_profile.Id)?.Parameters);
+            foreach (var adjustment in normalized.Adjustments) log.Write("参数自动对齐：" + adjustment.Message);
+            if (!normalized.IsValid) throw new ArgumentException(string.Join("；", normalized.Errors.Select(e => e.Error)));
+        }
         using var launchLease = IsKvmem ? new FileStream(Path.Combine(ConfigService.GetManagerRoot(), "logs", "kvmem-start.lock"),
             FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None) : null;
         var model = ResolveModel(request.Config, _profile);
@@ -511,7 +521,13 @@ public sealed class StrataBackend : IServerBackend
                 ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
             };
             cfg["warm_start"] = false;
-            cfg["kvmem_default_max_tokens"] = 1024; // Explicit request max_tokens can override this bounded default.
+            var outputText = Param(config, "maxOutputTokens");
+            var outputLimit = 8192;
+            if (!string.IsNullOrWhiteSpace(outputText) && !int.TryParse(outputText, NumberStyles.Integer, CultureInfo.InvariantCulture, out outputLimit))
+                throw new ArgumentException("默认回复上限必须是整数。");
+            if (outputLimit is < 1 or > 131072 || outputLimit > context)
+                throw new ArgumentException("默认回复上限必须在1–131072之间，且不能超过逻辑上下文。");
+            cfg["kvmem_default_max_tokens"] = outputLimit; // Client request limits still override this default.
             cfg["client_reasoning_history"] = true;
             cfg["kvmem_mtp_policy"] = "off";
             cfg["kvmem_mtp_drafts_max"] = 0;

@@ -15,13 +15,13 @@ public static class KvmemParameters
             Help: "【KVMem 分层 KV】\n• 独立的 KVMem PolyStrata 引擎，不是给原版 llama.cpp 加开关。\n• 当前仅支持 qwen35moe GGUF、单张 NVIDIA GPU、fp16/q8_0 KV。\n• Budget + Reserve 固定活跃 KV 容量；历史可放 RAM/SSD，但模型权重、工作区及配额仍可能耗尽。\n• 不保证杜绝 OOM，也不保证稀疏检索与全量注意力答案一致。\n• 关闭后不传任何 --kvmem-*，仍使用此包的普通推理。"),
         new("kvmemBudget", "显存活跃预算 B", Group, ParamType.Integer, "8192",
             "活跃槽位数，须为 32 的倍数；B + R 不得超过上下文。6GB 从 8192 起试。", 2048, 131072,
-            VisibleWhen: "param.kvmem", Unit: "tokens", RangeHint: "2048–131072，32 对齐"),
+            VisibleWhen: "param.kvmem", Unit: "tokens", RangeHint: "2048–131072，32 对齐", MultipleOf: 32, Advanced: true),
         new("kvmemGenReserve", "追加工作区 R", Group, ParamType.Integer, "512",
             "追加/交换工作空间，须为 32 的倍数；不是总输出 token 硬上限。", 32, 16384,
-            VisibleWhen: "param.kvmem", Unit: "tokens", RangeHint: "32–16384，32 对齐"),
+            VisibleWhen: "param.kvmem", Unit: "tokens", RangeHint: "32–16384，32 对齐", MultipleOf: 32, Advanced: true),
         new("kvmemHostMib", "KV 系统内存配额", Group, ParamType.Integer, "1024",
             "仅 KV 历史配额，不含模型权重和系统占用；本机 24GB RAM 不应默认再分配 16GB。", 1, 131072,
-            VisibleWhen: "param.kvmem", Unit: "MiB", RangeHint: "1–131072；不足时需 SSD 或减少历史"),
+            VisibleWhen: "param.kvmem", Unit: "MiB", RangeHint: "1–131072；不足时需 SSD 或减少历史", Advanced: true),
         new("kvmemDiskMib", "SSD 冷缓存上限", Group, ParamType.Integer, "0",
             "0 禁用磁盘；正数必须同时指定目录。缓存为进程内临时状态，不跨重启保留。", 0, 524288,
             VisibleWhen: "param.kvmem", Unit: "MiB"),
@@ -30,25 +30,57 @@ public static class KvmemParameters
             VisibleWhen: "param.kvmem && param.kvmemDiskMib > 0"),
         new("kvmemSessions", "保留历史数量", Group, ParamType.Integer, "2",
             "包含当前 GPU 会话；自动开启 history-reuse。不是同时在 GPU 上运行的并发槽位。", 1, 16,
-            VisibleWhen: "param.kvmem", RangeHint: "1–16；更多历史需要更多 RAM/SSD"),
+            VisibleWhen: "param.kvmem", RangeHint: "1–16；更多历史需要更多 RAM/SSD", Advanced: true),
         new("promptBatch", "预填充分块", Group, ParamType.Integer, "128",
             "--prompt-batch，必须 <= R；6GB 建议 128，减少预填充工作区峰值。", 1, 4096,
-            Unit: "tokens"),
+            Unit: "tokens", Advanced: true),
         new("stageMib", "专家预填充搬运区", Group, ParamType.Integer, "128",
             "--stage-mib，6GB 建议从 128 MiB 起试；更大可能提速但增加显存峰值。", 1, 8192,
-            Unit: "MiB"),
+            Unit: "MiB", Advanced: true),
     ];
 
     public static bool Enabled(ManagerConfig config, string backendId) =>
         Value(config, backendId, "kvmem", "1") is "1" or "true" or "True";
 
+    /// <summary>
+    /// Returns a copy with explicit integer-multiple adjustments for GUI persistence or CLI logs.
+    /// Missing/empty values retain their defaults; disabled KVMem leaves even stale invalid values
+    /// untouched. This only normalizes multiples: Append still validates other fields and relations.
+    /// </summary>
+    public static ParameterValuesNormalizationResult NormalizeValues(IReadOnlyDictionary<string, string>? values)
+    {
+        var copy = values is Dictionary<string, string> dictionary
+            ? new Dictionary<string, string>(dictionary, dictionary.Comparer)
+            : values is null ? new Dictionary<string, string>() : new Dictionary<string, string>(values);
+        var adjustments = new List<ParameterAdjustment>();
+        var errors = new List<ParameterNormalizationError>();
+        var enabled = copy.GetValueOrDefault("kvmem") is { Length: > 0 } setting ? setting : "1";
+        if (enabled is not ("1" or "true" or "True")) return new(copy, adjustments, errors);
+        foreach (var spec in Specs.Where(spec => spec.MultipleOf.HasValue))
+        {
+            if (!copy.TryGetValue(spec.Key, out var value)) continue;
+            var result = ParameterNormalizer.Normalize(spec, value);
+            if (result.Error is { } error) errors.Add(new(spec.Key, error));
+            else if (result.Changed)
+            {
+                copy[spec.Key] = result.NormalizedValue!;
+                adjustments.Add(new(spec.Key, value, result.NormalizedValue!, result.Message!));
+            }
+        }
+        return new(copy, adjustments, errors);
+    }
+
     private static string Value(ManagerConfig config, string id, string key, string fallback) =>
         config.Engines.GetValueOrDefault(id)?.Parameters.GetValueOrDefault(key) is { Length: > 0 } value
             ? value : fallback;
 
-    private static int Number(ManagerConfig config, string id, string key, int fallback, int min, int max)
+    private static int Number(ManagerConfig config, string id, string key, int fallback, int min, int max) =>
+        Number(config.Engines.GetValueOrDefault(id)?.Parameters, key, fallback, min, max);
+
+    private static int Number(IReadOnlyDictionary<string, string>? values, string key, int fallback, int min, int max)
     {
-        var value = Value(config, id, key, fallback.ToString(CultureInfo.InvariantCulture));
+        var value = values?.GetValueOrDefault(key) is { Length: > 0 } setting
+            ? setting : fallback.ToString(CultureInfo.InvariantCulture);
         if (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var number) || number < min || number > max)
             throw new ArgumentException($"KVMem {key} 必须为 {min}–{max} 的整数。");
         return number;
@@ -61,10 +93,11 @@ public static class KvmemParameters
         Add("--prompt-batch", prefill);
         Add("--stage-mib", Number(config, id, "stageMib", 128, 1, 8192));
         if (!Enabled(config, id)) return;
-        var budget = Number(config, id, "kvmemBudget", 8192, 2048, 131072);
-        var reserve = Number(config, id, "kvmemGenReserve", 512, 32, 16384);
-        if (budget % 32 != 0 || reserve % 32 != 0)
-            throw new ArgumentException("KVMem Budget 与 Reserve 必须为 32 的倍数；不会静默改写输入。");
+        var normalized = NormalizeValues(config.Engines.GetValueOrDefault(id)?.Parameters);
+        if (!normalized.IsValid)
+            throw new ArgumentException(string.Join(Environment.NewLine, normalized.Errors.Select(error => error.Error)));
+        var budget = Number(normalized.Values, "kvmemBudget", 8192, 2048, 131072);
+        var reserve = Number(normalized.Values, "kvmemGenReserve", 512, 32, 16384);
         if ((long)budget + reserve > context)
             throw new ArgumentException("KVMem 上下文必须 >= Budget + Reserve。");
         if (prefill > reserve)
