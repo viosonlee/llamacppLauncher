@@ -290,6 +290,23 @@ public static class ServerService
     public static int GetRunningPort(ManagerConfig config) => config.RunningServer?.Port ?? ParsePortFromArgs(config.Args, config.Port);
     public static int ParsePortFromArgs(string args, int fallback = 8080) => new LauncherArguments(args).GetPort(fallback);
 
+    /// <summary>Default API model name when the caller omitted -a / --alias: the file stem without directory or extension.</summary>
+    internal static string DefaultModelAlias(string modelPath) =>
+        Path.GetFileNameWithoutExtension(modelPath).Trim();
+
+    /// <summary>Applies the resolved port, model path and default API alias (preserving an explicit -a / --alias).</summary>
+    internal static string ApplyLaunchIdentity(LauncherArguments parsed, string model, int port)
+    {
+        var args = new LauncherArguments(parsed.Set("--port", port.ToString())).Set("-m", model);
+        if (!parsed.Has("--alias"))
+        {
+            var alias = DefaultModelAlias(model);
+            if (!string.IsNullOrEmpty(alias))
+                args = new LauncherArguments(args).Set("--alias", alias);
+        }
+        return args;
+    }
+
     public static Task<bool> StartAsync(ManagerConfig config, bool openBrowser = false, Action<string>? log = null, CancellationToken ct = default)
         => StartCoreAsync(config, false, openBrowser, log, ct);
 
@@ -317,7 +334,7 @@ public static class ServerService
         var draft = parsed.Get("-md");
         if (!string.IsNullOrEmpty(draft) && !File.Exists(draft))
             throw new FileNotFoundException("未找到投机解码草稿模型 (-md)。", draft);
-        args = new LauncherArguments(parsed.Set("--port", port.ToString())).Set("-m", model);
+        args = ApplyLaunchIdentity(parsed, model, port);
         ServerSession session;
         Process process;
         using (await LockLifecycle(embedding, ct).ConfigureAwait(false))

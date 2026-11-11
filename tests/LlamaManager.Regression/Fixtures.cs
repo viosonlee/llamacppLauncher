@@ -2,6 +2,7 @@ using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.Json;
 using LlamaManager.Services;
 
 internal static class Fixtures
@@ -209,8 +210,10 @@ internal static class Fixtures
             else
             {
                 if (request.Contains("/v1/models")) await Task.Delay(450);
-                var body = request.Contains("/v1/models") ? "{\"data\":[{\"id\":\"fixture\"}]}" :
-                    request.Contains("/slots") ? "[{\"is_processing\":false}]" : "{\"status\":\"ok\"}";
+                var modelId = parsed.Get("--alias") ?? parsed.Get("-m") ?? "fixture";
+                var body = request.Contains("/v1/models")
+                    ? JsonSerializer.Serialize(new { data = new[] { new { id = modelId } } })
+                    : request.Contains("/slots") ? "[{\"is_processing\":false}]" : "{\"status\":\"ok\"}";
                 await writer.WriteAsync($"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {Encoding.UTF8.GetByteCount(body)}\r\nConnection: close\r\n\r\n{body}");
             }
         }

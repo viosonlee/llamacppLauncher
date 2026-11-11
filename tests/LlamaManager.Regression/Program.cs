@@ -1069,6 +1069,20 @@ internal static class Program
                 Check(result.Success && !result.HasUsage && result.DecodeTps == null, "fabricated tokens from SSE events");
                 await ServerService.StopAsync(config);
             });
+            await Test("lifecycle: default alias uses model file stem and respects explicit -a / --alias", async () =>
+            {
+                var config = Config(Fixtures.FreePort()); ConfigService.SaveConfig(config);
+                Check(await ServerService.StartAsync(config), "fake server failed");
+                Equal("standard model", new LauncherArguments(config.RunningServer!.Args).Get("--alias"));
+                Equal("standard model", (await SpeedTestService.RunAsync(config.RunningServer!.Port)).Model);
+                await ServerService.StopAsync(config);
+
+                config = Config(Fixtures.FreePort()); config.Args += " -a custom-api-model"; ConfigService.SaveConfig(config);
+                Check(await ServerService.StartAsync(config), "fake server with explicit -a failed");
+                Equal("custom-api-model", new LauncherArguments(config.RunningServer!.Args).Get("--alias"));
+                Equal("custom-api-model", (await SpeedTestService.RunAsync(config.RunningServer!.Port)).Model);
+                await ServerService.StopAsync(config);
+            });
             await Test("CLI: detached server survives parent exit and GUI settings edits", async () =>
             {
                 var config = Config(Fixtures.FreePort()); config.ActiveBackendId = "llamacpp"; ConfigService.SaveConfig(config);

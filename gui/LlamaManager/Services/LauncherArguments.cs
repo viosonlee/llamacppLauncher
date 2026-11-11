@@ -9,7 +9,7 @@ public sealed class LauncherArguments
     private sealed record Token(string Value, int Start, int End, bool Quoted);
     private static readonly string[][] Aliases =
     [
-        ["-m", "--model"], ["--port"], ["--host"],
+        ["-m", "--model"], ["--alias", "-a"], ["--port"], ["--host"],
         ["-c", "--ctx-size"], ["-ngl", "--gpu-layers", "--n-gpu-layers"],
         ["-t", "--threads"], ["-tb", "--threads-batch"],
         ["-b", "--batch-size"], ["-ub", "--ubatch-size"],

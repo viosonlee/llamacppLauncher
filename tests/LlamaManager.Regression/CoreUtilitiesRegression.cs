@@ -158,6 +158,28 @@ internal static class CoreUtilitiesRegression
         Check(withDraft.Contains("-md"), "-md was not added");
         Equal(@"C:\AIModel\draft.gguf", LlamaCppParameters.ReadFromArgs(withDraft)["draftModel"]);
 
+        // Model alias: -a and --alias map to modelAlias, round-trip cleanly, and ServerService injects
+        // the file stem as the default alias only when the user did not specify one.
+        Equal("my-llm", LlamaCppParameters.ReadFromArgs("-c 4096 -a my-llm")["modelAlias"]);
+        var withAlias = LlamaCppParameters.Apply("-c 4096", "modelAlias", "Spark Custom");
+        Check(withAlias.Contains("--alias \"Spark Custom\""), "--alias was not quoted/written: " + withAlias);
+        Equal("Spark Custom", LlamaCppParameters.ReadFromArgs(withAlias)["modelAlias"]);
+        Check(!new LauncherArguments(LlamaCppParameters.Apply("-c 4096 -a custom", "modelAlias", "")).Has("--alias"),
+            "clearing modelAlias left -a behind");
+
+        var defaulted = new LauncherArguments(ServerService.ApplyLaunchIdentity(
+            new LauncherArguments("--host 127.0.0.1 -c 4096"), @"C:\Models\Spark-X2.6-4B-Q8_0.gguf", 8080));
+        Equal("Spark-X2.6-4B-Q8_0", defaulted.Get("--alias"));
+        var spaced = new LauncherArguments(ServerService.ApplyLaunchIdentity(
+            new LauncherArguments("--host 127.0.0.1"), @"C:\Models\model with spaces.gguf", 8080));
+        Equal("model with spaces", spaced.Get("--alias"));
+        var explicitShort = new LauncherArguments(ServerService.ApplyLaunchIdentity(
+            new LauncherArguments("--host 127.0.0.1 -a custom-name"), @"C:\Models\Spark-X2.6-4B-Q8_0.gguf", 8080));
+        Equal("custom-name", explicitShort.Get("--alias"));
+        var explicitEquals = new LauncherArguments(ServerService.ApplyLaunchIdentity(
+            new LauncherArguments("--alias=pinned-name"), @"C:\Models\Spark-X2.6-4B-Q8_0.gguf", 8080));
+        Equal("pinned-name", explicitEquals.Get("--alias"));
+
         // Stock llama.cpp must not project a fictitious KVMem feature. The real paging
         // kernel is a separate backend; legacy UI keys are ignored or explicitly refused.
         var staleKeys = new[] { "kvmem", "kvmemBudget", "kvmemGenReserve", "kvmemHostMib", "kvmemDiskMib", "kvmemDiskPath", "kvmemSessions" };

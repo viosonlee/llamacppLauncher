@@ -33,6 +33,7 @@ public static class LlamaCppParameters
         ["specType"] = "--spec-type",
         ["draftModel"] = "-md",
         ["mmproj"] = "--mmproj",
+        ["modelAlias"] = "--alias",
         ["verbose"] = "-v",
     };
 
@@ -172,6 +173,10 @@ public static class LlamaCppParameters
             new("mmproj", "视觉投影 (mmproj)", "视觉 / 多模态", ParamType.FilePath, "",
                 "多模态视觉投影模型文件路径（--mmproj，如 mmproj-Q8_0.gguf）。设置后开启图片理解与视觉交互。",
                 Help: "【视觉投影 (mmproj)】\n• 作用：指定多模态视觉投影模型文件（--mmproj / -mm），使语言模型获得图像理解与多模态交互能力（支持 Qwen2-VL、MiniCPM-V、Qwen3.5/3.6 Vision 等）。\n• 常见文件：mmproj-Q8_0.gguf、mmproj-BF16.gguf 等。\n• 留空：不加载视觉投影，按纯文本运行。"),
+
+            new("modelAlias", "模型别名", "基本", ParamType.Text, "",
+                "API 返回的模型名称（--alias / -a）。留空时自动使用模型文件名。",
+                Help: "【模型别名】\n• 作用：设置 OpenAI 兼容接口（/v1/models）暴露的模型名称（--alias / -a）。\n• 留空：启动时自动使用不含目录与 .gguf 后缀的模型文件名，避免外部客户端显示完整本地路径。\n• 填写：可自定义外部客户端（如 Magpie、pi agent）看到的模型名。"),
 
             new("verbose", "详细日志", "基本", ParamType.Boolean, "0", "输出详细运行日志（-v）。",
                 Help: "【详细日志】\n• 作用：打开引擎的详细日志（-v），排查问题时有帮助，日常可关闭。"),
