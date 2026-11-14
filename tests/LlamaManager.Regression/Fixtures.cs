@@ -141,6 +141,14 @@ internal static class Fixtures
 
     public static void CopyRuntime(string directory)
     {
+        // A standalone native-acceptance runner may resolve its manager root to its own bin
+        // directory. Never recursively copy that directory into itself (or back over its parent).
+        var source = Path.TrimEndingDirectorySeparator(Path.GetFullPath(AppContext.BaseDirectory));
+        var target = Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory));
+        if (string.Equals(source, target, StringComparison.OrdinalIgnoreCase) ||
+            target.StartsWith(source + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
+            source.StartsWith(target + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Fixture runtime copy source and destination must not overlap; set a separate LLAMA_MANAGER_ROOT.");
         Directory.CreateDirectory(directory);
         foreach (var file in Directory.EnumerateFiles(AppContext.BaseDirectory, "*", SearchOption.AllDirectories))
         {
@@ -173,6 +181,12 @@ internal static class Fixtures
         if (delay > 0) await Task.Delay(delay);
         using var listener = new TcpListener(IPAddress.Loopback, port);
         listener.Start();
+        if (parsed.Get("--fake-env-report") is { } environmentReport)
+        {
+            var keys = (parsed.Get("--fake-env-keys") ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries);
+            File.WriteAllText(environmentReport, System.Text.Json.JsonSerializer.Serialize(
+                keys.ToDictionary(key => key, Environment.GetEnvironmentVariable)));
+        }
         Console.Error.WriteLine("load_tensors: offloaded 54/65 layers to GPU");
         Console.Error.WriteLine("load_tensors: CUDA0 model buffer size = 4458.01 MiB");
         Console.Error.WriteLine("load_tensors: CPU_Mapped model buffer size = 1149.43 MiB");
@@ -191,6 +205,15 @@ internal static class Fixtures
                 await reader.ReadBlockAsync(body, 0, body.Length);
             }
             using var writer = new StreamWriter(stream, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true, NewLine = "\r\n" };
+            // Readiness race fixture: acknowledge an actual HTTP request, then let the parent
+            // replace/stop/cancel the launch before returning the otherwise-successful response.
+            if (request.Contains("/health") && Environment.GetEnvironmentVariable("LLAMA_FIXTURE_HEALTH_GATE") is { } healthGate)
+            {
+                File.WriteAllText(healthGate + ".entered", "request");
+                var deadline = System.Diagnostics.Stopwatch.StartNew();
+                while (!File.Exists(healthGate + ".release") && deadline.Elapsed < TimeSpan.FromSeconds(15))
+                    await Task.Delay(10);
+            }
             if (request.Contains("/v1/chat/completions"))
             {
                 await writer.WriteAsync("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n");

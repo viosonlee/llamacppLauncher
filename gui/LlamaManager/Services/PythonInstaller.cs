@@ -212,14 +212,36 @@ public static class PythonInstaller
 
     private static async Task<int> DefaultRunner(string exe, IReadOnlyList<string> arguments, ILogSink log, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         try
         {
             var start = StrataService.CaptureStart(exe);
             foreach (var arg in arguments) start.ArgumentList.Add(arg);
             using var process = Process.Start(start);
             if (process == null) return -1;
-            await process.WaitForExitAsync(ct).ConfigureAwait(false);
-            return process.ExitCode;
+            using var reads = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            // Both redirected pipes must be drained concurrently, including output without
+            // newlines. Discard it instead of retaining unbounded installer output in memory.
+            var output = process.StandardOutput.BaseStream.CopyToAsync(Stream.Null, reads.Token);
+            var error = process.StandardError.BaseStream.CopyToAsync(Stream.Null, reads.Token);
+            try
+            {
+                await process.WaitForExitAsync(ct).ConfigureAwait(false);
+                await Task.WhenAll(output, error).ConfigureAwait(false);
+                return process.ExitCode;
+            }
+            catch
+            {
+                reads.Cancel();
+                // Disposing Process only closes our handle; it does not stop an installer.
+                try { if (!process.HasExited) process.Kill(entireProcessTree: true); }
+                catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception) { }
+                using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+                try { await process.WaitForExitAsync(cleanup.Token).ConfigureAwait(false); }
+                catch (Exception ex) when (ex is OperationCanceledException or InvalidOperationException or System.ComponentModel.Win32Exception) { }
+                try { await Task.WhenAll(output, error).ConfigureAwait(false); } catch { }
+                throw;
+            }
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex) when (ex is IOException or System.ComponentModel.Win32Exception or InvalidOperationException)

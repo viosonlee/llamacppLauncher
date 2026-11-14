@@ -15,7 +15,9 @@ namespace LlamaManager.Services;
 /// </summary>
 public static class SpeedTestService
 {
-    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(600) };
+    // ResponseHeadersRead ends HttpClient.Timeout at the headers. Each run owns a linked
+    // deadline instead, so discovery and every subsequent body read share the same budget.
+    private static readonly HttpClient Http = new() { Timeout = Timeout.InfiniteTimeSpan };
 
     private const string TestPrompt =
         "Explain how a C# async producer-consumer pipeline using System.Threading.Channels " +
@@ -81,18 +83,25 @@ public static class SpeedTestService
     private static double? Sanitize(double? value) =>
         value is > 0 && double.IsFinite(value.Value) ? value : null;
 
-    public static async Task<Result> RunAsync(int port, CancellationToken ct = default)
+    public static Task<Result> RunAsync(int port, CancellationToken ct = default)
+        => RunAsync(port, TimeSpan.FromSeconds(600), ct);
+
+    /// <summary>Runs a speed test with a deadline covering discovery, headers and response body.</summary>
+    public static async Task<Result> RunAsync(int port, TimeSpan timeout, CancellationToken ct)
     {
         var result = new Result();
         var stopwatch = new Stopwatch();
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(timeout);
+        var requestToken = deadline.Token;
 
         try
         {
             // 1) 取当前服务的模型 id
-            using (var resp = await Http.GetAsync($"http://127.0.0.1:{port}/v1/models", ct))
+            using (var resp = await Http.GetAsync($"http://127.0.0.1:{port}/v1/models", requestToken))
             {
                 resp.EnsureSuccessStatusCode();
-                using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
+                using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(requestToken));
                 if (doc.RootElement.TryGetProperty("data", out var data)
                     && data.ValueKind == JsonValueKind.Array && data.GetArrayLength() > 0)
                 {
@@ -125,27 +134,46 @@ public static class SpeedTestService
             };
 
             stopwatch.Start();
-            using var chatResp = await Http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
+            using var chatResp = await Http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, requestToken);
             chatResp.EnsureSuccessStatusCode();
 
-            await using var stream = await chatResp.Content.ReadAsStreamAsync(ct);
+            await using var stream = await chatResp.Content.ReadAsStreamAsync(requestToken);
             using var reader = new StreamReader(stream);
 
             double? firstTokenAt = null;
             double lastTokenAt = 0;
             string? line;
+            var completed = false;
+            var errorEvent = false;
 
-            while ((line = await reader.ReadLineAsync(ct)) != null)
+            while ((line = await reader.ReadLineAsync(requestToken)) != null)
             {
+                if (line.Length == 0) { errorEvent = false; continue; }
+                if (line.StartsWith("event:", StringComparison.Ordinal))
+                {
+                    errorEvent = line[6..].Trim() == "error";
+                    continue;
+                }
                 if (!line.StartsWith("data:", StringComparison.Ordinal)) continue;
                 var data = line[5..].Trim();
                 if (data.Length == 0) continue;
-                if (data == "[DONE]") break;
+                if (errorEvent)
+                {
+                    result.Error = "服务流错误：" + data;
+                    break;
+                }
+                if (data == "[DONE]") { completed = true; break; }
 
                 var now = stopwatch.Elapsed.TotalSeconds;
 
                 using var chunk = JsonDocument.Parse(data);
                 var root = chunk.RootElement;
+                if (root.TryGetProperty("error", out var error) && error.ValueKind != JsonValueKind.Null)
+                {
+                    result.Error = "服务流错误：" + (error.ValueKind == JsonValueKind.Object
+                        ? GetString(error, "message") ?? error.ToString() : error.ToString());
+                    break;
+                }
 
                 if (ParseTimingsElement(root) is { } sample)
                 {
@@ -167,6 +195,9 @@ public static class SpeedTestService
 
                 foreach (var choice in choices.EnumerateArray())
                 {
+                    // Some compatible servers close after a finish_reason without [DONE].
+                    // Continue reading so trailing usage/timings and errors are not discarded.
+                    if (!string.IsNullOrEmpty(GetString(choice, "finish_reason"))) completed = true;
                     if (!choice.TryGetProperty("delta", out var delta)) continue;
                     var text = (GetString(delta, "content") ?? "") + (GetString(delta, "reasoning_content") ?? "");
                     if (text.Length == 0) continue;
@@ -186,13 +217,17 @@ public static class SpeedTestService
             if (!result.DecodeTps.HasValue && result.HasUsage && firstTokenAt.HasValue &&
                 lastTokenAt > firstTokenAt.Value && result.CompletionTokens > 1)
                 result.DecodeTps = (result.CompletionTokens - 1) / (lastTokenAt - firstTokenAt.Value);
-            if (!firstTokenAt.HasValue) result.Error = "服务未返回生成内容。";
+            if (result.Error == null)
+            {
+                if (!firstTokenAt.HasValue) result.Error = "服务未返回生成内容。";
+                else if (!completed) result.Error = "服务流提前结束，未收到完成标记。";
+            }
 
             return result;
         }
         catch (OperationCanceledException)
         {
-            result.Error = "测速已取消";
+            result.Error = ct.IsCancellationRequested ? "测速已取消" : "测速超时";
             return result;
         }
         catch (Exception ex)

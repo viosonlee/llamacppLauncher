@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
+using LlamaManager.Engines;
 using LlamaManager.Models;
 
 namespace LlamaManager.Services;
@@ -77,7 +78,8 @@ public sealed record BenchmarkReport(
 /// Runs the same model with different llama.cpp arguments and measures each variant with the
 /// same fixed prompt, so the numbers are comparable. Every variant gets its own process on its
 /// own port and its own log files, and the user's running service is never touched: the sweep
-/// refuses to start while a managed or foreign server holds the test port.
+/// refuses to start while any managed GPU-heavy main is live, or a server holds the test port.
+/// The global GPU lease stays held until every transient variant and its cleanup have finished.
 /// </summary>
 public static class ParameterBenchmarkService
 {
@@ -114,15 +116,22 @@ public static class ParameterBenchmarkService
         var engine = ConfigService.GetLlamaServerPath(modelPath);
         if (!File.Exists(engine)) throw new FileNotFoundException("未找到 llama-server.exe。", engine);
 
+        // Device/help probes do not load a model and stay outside GPU-start arbitration.
+        var device = await CudaService.DetectAsync(modelPath).ConfigureAwait(false);
+        using var gpuLease = await EngineArbiter.AcquireGpuStartLeaseAsync(ct).ConfigureAwait(false);
+        ct.ThrowIfCancellationRequested();
+        // Re-read only after acquiring the shared lease: even another llama.cpp main conflicts
+        // with these transient processes. Do not stop it or publish a benchmark session.
+        var config = ConfigService.ReadConfig();
+        EngineArbiter.EnsureGpuAvailable(config, "llamacpp", gpuHeavy: true,
+            allowSameBackend: false, displayName: "参数实测");
+
         // Ports come from the OS instead of a fixed base: a fixed 8095 sits inside Hyper-V/WSL
         // reserved ranges on some machines, where no listener shows yet every bind is refused.
         // The configured service ports (the 8080 the agents point at) are never borrowed.
-        var config = ConfigService.ReadConfig();
         var ports = AllocatePorts(plan.Count, ServicePorts(config), ct);
 
-        // VRAM shared with another engine changes every number: record it so a result set that
-        // was measured next to a busy GPU is not mistaken for a clean one.
-        var device = await CudaService.DetectAsync(modelPath).ConfigureAwait(false);
+        // Unmanaged GPU users can still change the available VRAM and measured rates.
         var vramNote = device.Available && device.FreeVramMb > 0
             ? $"开始时显存空闲 {device.FreeVramMb:N0} / {device.TotalVramMb:N0} MiB" +
               (device.FreeVramMb < device.TotalVramMb * 0.6 ? "（有其它程序占用显存，数字会偏低且波动）" : "")
@@ -157,6 +166,7 @@ public static class ParameterBenchmarkService
                 ct.ThrowIfCancellationRequested();
                 var portProblem = ServerService.PortUnavailableReason(port);
                 if (portProblem != null) throw new InvalidOperationException(portProblem);
+                await LlamaCppFeatureGate.EnsureAsync(engine, fullArgs, ct).ConfigureAwait(false);
                 process = DetachedProcess.Start(engine, fullArgs, stdout, stderr);
                 await WaitReadyAsync(process, index, port, label, log, ct).ConfigureAwait(false);
                 // Sample VRAM in the background while the variant answers, so the report shows how

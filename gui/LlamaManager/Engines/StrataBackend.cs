@@ -45,6 +45,8 @@ public sealed class StrataBackend : IServerBackend
 
     private readonly StrataEngineProfile _profile;
     private bool IsKvmem => _profile.Id == KvmemProfile.Id;
+    internal Func<EngineSession, CancellationToken, Task>? BeforePublishAsync { get; init; }
+    internal Action? OnStartLeaseContention { get; init; }
 
     public StrataBackend(StrataEngineProfile profile)
     {
@@ -245,11 +247,8 @@ public sealed class StrataBackend : IServerBackend
             Estimate(md, modelPath));
     }
 
-    public Task<EngineStatus> StatusAsync(EngineSession? session, CancellationToken ct)
-    {
-        if (session == null) return Task.FromResult(new EngineStatus(false, false, null, "未运行"));
-        return Task.FromResult(new EngineStatus(true, false, session.Port, null));
-    }
+    public Task<EngineStatus> StatusAsync(EngineSession? session, CancellationToken ct) =>
+        EngineSessionStatus.QueryAsync(session, ReadyAsync, ct);
 
     public LaunchPlan BuildLaunch(EngineStartRequest request) =>
         BuildLaunch(request, TokenizerDir(request.Config, _profile.Id, ResolveModel(request.Config, _profile)));
@@ -277,13 +276,9 @@ public sealed class StrataBackend : IServerBackend
 
         var env = new Dictionary<string, string> { ["PYTHONUTF8"] = "1", ["PYTHONUNBUFFERED"] = "1" };
         var mma = Param(config, "tensorCoreMma") ?? (IsKvmem ? "0" : "1");
-        if (mma is "1" or "true" or "True") env["STRATA_GDN_MMA"] = "1";
+        env["STRATA_GDN_MMA"] = mma is "1" or "true" or "True" ? "1" : "0";
         var fattn = Param(config, "polyFlashAttention") ?? "1";
-        if (fattn is "1" or "true" or "True")
-        {
-            env["STRATA_FATTN"] = "1";
-            env["STRATA_FDEC"] = "1";
-        }
+        env["STRATA_FATTN"] = env["STRATA_FDEC"] = fattn is "1" or "true" or "True" ? "1" : "0";
         var engineDir = Path.GetDirectoryName(engine);
         var managerRoot = ConfigService.GetManagerRoot();
         var llamaCppRoot = ConfigService.GetLlamaCppRoot();
@@ -306,18 +301,21 @@ public sealed class StrataBackend : IServerBackend
 
     public async Task<EngineSession> StartAsync(EngineStartRequest request, ILogSink log, CancellationToken ct)
     {
+        request = request with { Config = JsonSerializer.Deserialize<ManagerConfig>(JsonSerializer.Serialize(request.Config))! };
+        EngineSession session;
+        using (await EngineArbiter.AcquireGpuStartLeaseAsync(ct, OnStartLeaseContention).ConfigureAwait(false))
+        using (await EngineArbiter.AcquireBackendLeaseAsync(_profile.Id, ct).ConfigureAwait(false))
+        {
         if (IsKvmem)
         {
             var normalized = KvmemParameters.NormalizeValues(request.Config.Engines.GetValueOrDefault(_profile.Id)?.Parameters);
             foreach (var adjustment in normalized.Adjustments) log.Write("参数自动对齐：" + adjustment.Message);
             if (!normalized.IsValid) throw new ArgumentException(string.Join("；", normalized.Errors.Select(e => e.Error)));
         }
-        using var launchLease = IsKvmem ? new FileStream(Path.Combine(ConfigService.GetManagerRoot(), "logs", "kvmem-start.lock"),
-            FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None) : null;
         var model = ResolveModel(request.Config, _profile);
         // One shared GPU arbitration for GUI, CLI and autostart; a stale record with no live
         // process must not block a start, and a second instance must never load the same GPU.
-        EngineArbiter.EnsureGpuAvailable(ConfigService.ReadConfig(), _profile.Id);
+        EngineArbiter.EnsureGpuAvailable(ConfigService.ReadConfig(), _profile.Id, gpuHeavy: true, displayName: _profile.DisplayName);
         // The server needs the tokenizer directory (vocab.json etc.); prepare it first so the
         // runconfig can point at the directory the tool actually produced.
         var server = ResolveServer(request.Config, _profile)
@@ -355,23 +353,35 @@ public sealed class StrataBackend : IServerBackend
         if (portProblem != null) throw new InvalidOperationException(portProblem);
         var args = string.Join(" ", plan.Arguments.Select(LauncherArguments.Quote));
         log.Write($"启动 {_profile.DisplayName} 服务：{plan.FileName} {args}");
-        var process = DetachedProcess.Start(plan.FileName, args,
+        ct.ThrowIfCancellationRequested();
+        using var process = DetachedProcess.Start(plan.FileName, args,
             Path.Combine(ConfigService.GetManagerRoot(), "logs", $"engine-{_profile.Id}.stdout.log"),
             Path.Combine(ConfigService.GetManagerRoot(), "logs", $"engine-{_profile.Id}.stderr.log"),
-            plan.WorkingDirectory);
-        var session = new EngineSession
+            plan.WorkingDirectory, plan.Environment);
+        ServerSession? captured = null;
+        try
         {
-            BackendId = _profile.Id,
-            ProcessId = process.Id,
-            StartTimeUtcTicks = process.StartTime.ToUniversalTime().Ticks,
-            ExecutablePath = plan.FileName,
-            ModelPath = model,
-            Arguments = args,
-            Port = port,
-            Extra = { ["runconfig"] = RunConfigPath(_profile.Id, model) },
-        };
-        process.Dispose();
-        ConfigService.SaveSessionSlot(request.Config, _profile.Id, ToServerSession(session));
+            session = new EngineSession
+            {
+                BackendId = _profile.Id, ProcessId = process.Id,
+                StartTimeUtcTicks = process.StartTime.ToUniversalTime().Ticks, ExecutablePath = plan.FileName,
+                ModelPath = model, Arguments = args, Port = port,
+                Extra = { ["runconfig"] = RunConfigPath(_profile.Id, model) },
+            };
+            captured = ToServerSession(session);
+            using (var verified = ServerService.ValidateProcess(captured))
+                if (verified == null) throw new InvalidOperationException("新启动的服务进程身份验证失败。");
+            if (BeforePublishAsync != null) await BeforePublishAsync(session, ct).ConfigureAwait(false);
+            ct.ThrowIfCancellationRequested();
+            using (var verified = ServerService.ValidateProcess(captured))
+                if (verified == null) throw new InvalidOperationException("登记前服务进程身份已变化。");
+            ConfigService.SaveSessionSlot(request.Config, _profile.Id, captured);
+        }
+        catch
+        {
+            await EngineArbiter.CleanupUnpublishedAsync(process, captured, plan.FileName).ConfigureAwait(false);
+            throw;
+        }
         if (IsKvmem)
         {
             session.Extra["kvmem"] = KvmemParameters.Enabled(request.Config, _profile.Id) ? "1" : "0";
@@ -385,6 +395,7 @@ public sealed class StrataBackend : IServerBackend
                 session.Extra[field] = index >= 0 ? nativeArgs[index + 1] : "0";
             }
         }
+        } // Persistent identity is durable; release both leases before network readiness waits.
         try { await WaitReadyAsync(session, log, ct).ConfigureAwait(false); }
         catch
         {
@@ -396,6 +407,7 @@ public sealed class StrataBackend : IServerBackend
 
     public async Task StopAsync(EngineSession session, ILogSink log)
     {
+        using var lifecycle = await EngineArbiter.AcquireBackendLeaseAsync(_profile.Id, CancellationToken.None).ConfigureAwait(false);
         // Validate all identity components, including executable path, before any tree kill.
         Process? process = session.ProcessId > 0 ? ServerService.ValidateProcess(ToServerSession(session)) : null;
         if (process == null)
@@ -409,7 +421,8 @@ public sealed class StrataBackend : IServerBackend
             log.Write($"正在停止 {_profile.DisplayName} 服务，PID {process.Id}。");
             process.Kill(entireProcessTree: true);
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            try { await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false); } catch (OperationCanceledException) { }
+            try { await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false); }
+            catch (OperationCanceledException ex) { throw new InvalidOperationException("引擎进程尚未退出，保留运行记录。", ex); }
         }
         ConfigService.ClearSessionSlotIfMatches(_profile.Id, ToServerSession(session));
     }
@@ -449,14 +462,13 @@ public sealed class StrataBackend : IServerBackend
     private async Task WaitReadyAsync(EngineSession session, ILogSink log, CancellationToken ct)
     {
         var deadline = DateTime.UtcNow.AddSeconds(180);
+        var expected = ToServerSession(session);
         while (DateTime.UtcNow < deadline)
         {
-            ct.ThrowIfCancellationRequested();
-            using var process = TryGetProcess(session);
-            if (process == null || process.HasExited)
-                throw new InvalidOperationException($"{_profile.DisplayName} 服务提前退出。请查看 logs\\engine-{_profile.Id}.stderr.log。");
+            LaunchSessionGuard.EnsureCurrent(_profile.Id, expected, ct);
             if (await ReadyAsync(session, ct).ConfigureAwait(false))
             {
+                LaunchSessionGuard.EnsureCurrent(_profile.Id, expected, ct);
                 log.Write($"{_profile.DisplayName} 服务已就绪：http://127.0.0.1:{session.Port}/v1");
                 return;
             }
@@ -464,12 +476,6 @@ public sealed class StrataBackend : IServerBackend
         }
         if (IsKvmem) throw new TimeoutException("180 秒内 KVMem 未报告模型载入及分层 KV 就绪；将清理本次启动的服务。请查看引擎日志。");
         log.Write("180 秒内 API 尚未就绪，进程仍在加载；可查看日志或停止服务。");
-    }
-
-    private static Process? TryGetProcess(EngineSession session)
-    {
-        try { return Process.GetProcessById(session.ProcessId); }
-        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException) { return null; }
     }
 
     private Dictionary<string, object> BuildRunConfig(ManagerConfig config, string engine, string model,

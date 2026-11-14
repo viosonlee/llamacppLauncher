@@ -36,14 +36,40 @@ public sealed class ConfigStore(string path)
     {
         var config = JsonSerializer.Deserialize<ManagerConfig>(File.ReadAllText(path))
             ?? throw new InvalidDataException("配置内容为空。");
+        // Keep the existing legacy collection defaults, but reject broken object graphs before
+        // Normalize dereferences them. Missing fields already have the model's normal defaults.
         config.ModelPresets ??= [];
         config.Running ??= [];
+        ValidateStructure(config);
         config.Normalize();
+        return config;
+    }
+
+    private static void ValidateStructure(ManagerConfig config)
+    {
         if (config.ModelPath == null || config.Args == null || config.ModelsDirectory == null ||
+            config.EmbeddingModelPath == null || config.ActiveBackendId == null ||
+            config.Engines == null || config.Strata == null ||
             config.ModelPresets.Any(p => p.Value == null || p.Value.Args == null) ||
+            config.Running.Any(p => p.Value == null) ||
             config.Port is < 1 or > 65535 || config.EmbeddingPort is < 1 or > 65535)
             throw new InvalidDataException("配置字段无效。");
-        return config;
+
+        foreach (var settings in config.Engines.Values)
+        {
+            if (settings == null || settings.ModelPath == null || settings.ExecutablePath == null ||
+                settings.Parameters?.Any(p => p.Value == null) == true ||
+                settings.ModelPresets?.Any(p => p.Value == null || p.Value.Any(v => v.Value == null)) == true)
+                throw new InvalidDataException("配置中的引擎设置或模型预设无效。");
+            // Normalize migrates these paths without accessing the filesystem. Classify malformed
+            // paths as bad data, not arbitrary Normalize exceptions or operational IO failures.
+            if (!string.IsNullOrWhiteSpace(settings.ModelPath) && settings.Parameters is { Count: > 0 })
+            {
+                try { _ = PathIdentity.Normalize(settings.ModelPath); }
+                catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+                { throw new InvalidDataException("配置中的引擎模型路径无效。", ex); }
+            }
+        }
     }
 
     private ManagerConfig ReadCore()
@@ -59,7 +85,9 @@ public sealed class ConfigStore(string path)
                 RecoveryWarning = "配置损坏，已读取上次备份。原文件会保留为 .corrupt 文件。";
                 return recovered;
             }
-            catch (Exception backupError) when (backupError is IOException or InvalidDataException or JsonException)
+            // Missing/malformed backup is a recovery failure. Sharing, permission and other IO
+            // failures must retain their operational exception rather than masquerade as bad JSON.
+            catch (Exception backupError) when (backupError is FileNotFoundException or DirectoryNotFoundException or InvalidDataException or JsonException)
             {
                 throw new InvalidDataException($"无法读取配置，且没有有效备份。已保留原文件：{_path}", error);
             }

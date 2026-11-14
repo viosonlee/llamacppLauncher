@@ -4,6 +4,7 @@ using System.Management;
 using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
+using LlamaManager.Engines;
 using LlamaManager.Models;
 
 namespace LlamaManager.Services;
@@ -313,7 +314,15 @@ public static class ServerService
     public static Task<bool> StartEmbeddingAsync(ManagerConfig config, Action<string>? log = null, CancellationToken ct = default)
         => StartCoreAsync(config, true, false, log, ct);
 
-    private static async Task<bool> StartCoreAsync(ManagerConfig config, bool embedding, bool openBrowser, Action<string>? log, CancellationToken ct)
+    /// <summary>Observes only a newly created process, after identity capture and before publication.</summary>
+    internal static Task<bool> StartObservedAsync(ManagerConfig config, bool embedding, Action<string>? log,
+        CancellationToken ct, Func<ServerSession, CancellationToken, Task>? beforePublish,
+        Action? onGpuLeaseContention = null)
+        => StartCoreAsync(config, embedding, false, log, ct, beforePublish, onGpuLeaseContention);
+
+    private static async Task<bool> StartCoreAsync(ManagerConfig config, bool embedding, bool openBrowser, Action<string>? log,
+        CancellationToken ct, Func<ServerSession, CancellationToken, Task>? beforePublish = null,
+        Action? onGpuLeaseContention = null)
     {
         // Snapshot before the first await: editing the form cannot change this launch.
         var model = embedding ? config.EmbeddingModelPath : config.ModelPath;
@@ -325,6 +334,7 @@ public static class ServerService
         var engine = ConfigService.GetLlamaServerPath(model);
         if (!File.Exists(engine)) throw new FileNotFoundException("未找到 llama-server.exe。", engine);
         var args = embedding ? $"--host 127.0.0.1 --port {fallbackPort} --embedding -ngl 0 -c 8192 -b 512" : config.Args;
+        if (!embedding) LlamaCppBackend.RejectKvmemArguments(args);
         if (string.IsNullOrWhiteSpace(args))
             args = await Task.Run(() => PresetService.GeneratePresetArgs(model, fallbackPort), ct).ConfigureAwait(false);
         var parsed = new LauncherArguments(args);
@@ -337,32 +347,70 @@ public static class ServerService
         args = ApplyLaunchIdentity(parsed, model, port);
         ServerSession session;
         Process process;
+        // All GPU-heavy starts serialize their actual adopt/create/publish transaction, not an
+        // advisory adapter check. CPU-only embedding still uses its independent lifecycle lock.
+        // Lock order: GPU lease -> lifecycle lease -> short synchronous ConfigStore calls.
+        using (embedding ? null : await EngineArbiter.AcquireGpuStartLeaseAsync(ct, onGpuLeaseContention).ConfigureAwait(false))
         using (await LockLifecycle(embedding, ct).ConfigureAwait(false))
         {
+            if (!embedding)
+                EngineArbiter.EnsureGpuAvailable(ConfigService.ReadConfig(), "llamacpp", gpuHeavy: true,
+                    allowSameBackend: true, displayName: "llama.cpp (llama-server)");
             var existing = GetProcess(config, embedding);
             if (existing != null)
             {
                 process = existing;
-                session = (embedding ? config.RunningEmbedding : config.RunningServer)!;
-                log?.Invoke($"服务已运行：{Path.GetFileName(session.ModelPath)}，PID {session.ProcessId}，端口 {session.Port}。");
+                try
+                {
+                    session = (embedding ? config.RunningEmbedding : config.RunningServer)
+                        ?? throw new InvalidOperationException("运行中的服务缺少会话记录。");
+                    log?.Invoke($"服务已运行：{Path.GetFileName(session.ModelPath)}，PID {session.ProcessId}，端口 {session.Port}。");
+                }
+                catch { process.Dispose(); throw; } // Adoption never owns or kills the existing process.
             }
             else
             {
+                // Same-backend ownership is allowed only for adoption above, never a new instance.
+                if (!embedding)
+                    EngineArbiter.EnsureGpuAvailable(ConfigService.ReadConfig(), "llamacpp", gpuHeavy: true,
+                        displayName: "llama.cpp (llama-server)");
                 var portProblem = PortUnavailableReason(port, parsed.Get("--host"));
                 if (portProblem != null) throw new InvalidOperationException(portProblem);
+                if (!embedding) await LlamaCppFeatureGate.EnsureAsync(engine, args, ct).ConfigureAwait(false);
                 log?.Invoke($"启动 {engine} {args}");
+                ct.ThrowIfCancellationRequested();
                 process = DetachedProcess.Start(engine, args,
                     embedding ? ConfigService.GetEmbeddingStdoutPath() : ConfigService.GetMainStdoutPath(),
                     embedding ? ConfigService.GetEmbeddingStderrPath() : ConfigService.GetMainStderrPath());
-                session = new ServerSession
+                ServerSession? captured = null;
+                try
                 {
-                    ProcessId = process.Id, StartTimeUtcTicks = process.StartTime.ToUniversalTime().Ticks,
-                    EnginePath = engine, ModelPath = model, Args = args, Port = port, Embedding = embedding
-                };
-                try { ConfigService.SaveSession(config, session, embedding); }
-                catch { if (!process.HasExited) process.Kill(true); process.Dispose(); throw; }
+                    // Keep the created Process handle until publication succeeds. If reading any
+                    // identity field fails, cleanup receives null rather than a partial session.
+                    captured = new ServerSession
+                    {
+                        ProcessId = process.Id, StartTimeUtcTicks = process.StartTime.ToUniversalTime().Ticks,
+                        EnginePath = engine, ModelPath = model, Args = args, Port = port, Embedding = embedding
+                    };
+                    using (var verified = ValidateProcess(captured))
+                        if (verified == null) throw new InvalidOperationException("新服务进程身份验证失败。");
+                    if (beforePublish != null) await beforePublish(captured, ct).ConfigureAwait(false);
+                    ct.ThrowIfCancellationRequested();
+                    // An observer may await for a long time; do not publish a process that exited
+                    // or lost its validated identity during that interval.
+                    using (var verified = ValidateProcess(captured))
+                        if (verified == null) throw new InvalidOperationException("新服务进程身份验证失败。");
+                    ConfigService.SaveSession(config, captured, embedding);
+                    session = captured;
+                }
+                catch
+                {
+                    try { await EngineArbiter.CleanupUnpublishedAsync(process, captured, engine).ConfigureAwait(false); }
+                    finally { process.Dispose(); }
+                    throw;
+                }
             }
-        }
+        } // Release both leases before HTTP readiness or any post-publication cancellation.
 
         using (process)
         {

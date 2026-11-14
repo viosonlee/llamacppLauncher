@@ -27,20 +27,24 @@ public class ManagerConfig
 
     /// <summary>The main (llama.cpp) session, if any. Computed; never serialized under this name.</summary>
     [JsonIgnore]
-    public ServerSession? RunningServer => Running.GetValueOrDefault(SlotMain);
+    public ServerSession? RunningServer => GetRunning(SlotMain);
 
     /// <summary>The embedding session, if any. Computed; never serialized under this name.</summary>
     [JsonIgnore]
-    public ServerSession? RunningEmbedding => Running.GetValueOrDefault(SlotEmbedding);
+    public ServerSession? RunningEmbedding => GetRunning(SlotEmbedding);
 
     public const string SlotMain = "main";
     public const string SlotEmbedding = "embedding";
 
-    public ServerSession? GetRunning(string slot) => Running.GetValueOrDefault(slot);
+    public ServerSession? GetRunning(string slot) { lock (Running) return Running.GetValueOrDefault(slot); }
+    internal KeyValuePair<string, ServerSession>[] RunningSnapshot() { lock (Running) return Running.ToArray(); }
     public void SetRunning(string slot, ServerSession? session)
     {
-        if (session == null) Running.Remove(slot);
-        else Running[slot] = session;
+        lock (Running)
+        {
+            if (session == null) Running.Remove(slot);
+            else Running[slot] = session;
+        }
     }
 
     [JsonPropertyName("ModelPath")]

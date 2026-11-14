@@ -218,9 +218,26 @@ public sealed class PluginManifest
     {
         if (Schema != 1) return $"schema 版本 {Schema} 不受支持（需要 1）。";
         if (string.IsNullOrWhiteSpace(Id)) return "缺少 id。";
+        if (Id is "." or ".." || Id.IndexOfAny(System.IO.Path.GetInvalidFileNameChars()) >= 0 || Id.Contains('/') || Id.Contains('\\'))
+            return "id 必须是安全的单个名称，不能包含路径。";
         if (string.IsNullOrWhiteSpace(DisplayName)) return "缺少 displayName。";
-        if (Executable.Count == 0) return "缺少 executable。";
-        if (Launch.Arguments.Count == 0) return "缺少 launch.arguments。";
+        if (Executable == null || Executable.Count == 0 || Executable.Any(p => string.IsNullOrWhiteSpace(p.Value))) return "缺少有效 executable。";
+        if (Launch?.Arguments == null || Launch.Arguments.Count == 0 || Launch.Arguments.Any(a => a == null || a.Contains('\0')))
+            return "缺少有效 launch.arguments。";
+        if (Launch.WorkingDirectory == null || Launch.Environment == null || Launch.Environment.Any(p =>
+                string.IsNullOrEmpty(p.Key) || p.Key.Contains('=') || p.Key.Contains('\0') || p.Value == null || p.Value.Contains('\0')))
+            return "launch 工作目录或环境变量无效。";
+        if (Ready == null || !("http".Equals(Ready.Type, StringComparison.OrdinalIgnoreCase) || "tcp".Equals(Ready.Type, StringComparison.OrdinalIgnoreCase)))
+            return "ready.type 必须为 http 或 tcp。";
+        if (Ready.TimeoutSeconds is < 1 or > 3600) return "ready.timeoutSeconds 必须为1–3600。";
+        if ("http".Equals(Ready.Type, StringComparison.OrdinalIgnoreCase) &&
+            (Ready.Path == null || !Ready.Path.StartsWith('/') || Ready.Path.StartsWith("//") || Ready.Path.Contains('\\') || Ready.Path.Any(char.IsControl)))
+            return "ready.path 必须是本地HTTP路径，不能是远程URL。";
+        if (Parameters == null || Parameters.Any(p => p == null || string.IsNullOrWhiteSpace(p.Key) || p.Choices?.Any(c => c == null) == true))
+            return "parameters 含无效定义。";
+        if (Parameters.GroupBy(p => p.Key, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1)) return "参数名称重复。";
+        if (Detect != null && (Detect.VersionArg == null || Detect.VersionArg.Any(a => a == null) || Detect.VersionRegex == null))
+            return "detect 版本探测定义无效。";
         return null;
     }
 

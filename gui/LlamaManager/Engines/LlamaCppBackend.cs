@@ -82,18 +82,15 @@ public sealed class LlamaCppBackend : IServerBackend
         return new CompatibilityReport(true, [], notes, summary, estimate);
     }
 
-    public Task<EngineStatus> StatusAsync(EngineSession? session, CancellationToken ct)
-    {
-        if (session == null) return Task.FromResult(new EngineStatus(false, false, null, "未运行"));
-        return Task.FromResult(new EngineStatus(true, false, session.Port, null));
-    }
+    public Task<EngineStatus> StatusAsync(EngineSession? session, CancellationToken ct) =>
+        EngineSessionStatus.QueryAsync(session, ReadyAsync, ct);
 
     public LaunchPlan BuildLaunch(EngineStartRequest request)
     {
         var config = request.Config;
         var model = request.Embedding ? config.EmbeddingModelPath : config.ModelPath;
         var engine = ConfigService.GetLlamaServerPath(model);
-        RejectKvmemArguments(config.Args);
+        if (!request.Embedding) RejectKvmemArguments(config.Args);
         var args = new LauncherArguments(config.Args).Values.ToArray();
         return new LaunchPlan(engine, args, Path.GetDirectoryName(engine) ?? "",
             new Dictionary<string, string>(), new Dictionary<string, string>());
@@ -109,12 +106,8 @@ public sealed class LlamaCppBackend : IServerBackend
 
     public async Task<EngineSession> StartAsync(EngineStartRequest request, ILogSink log, CancellationToken ct)
     {
-        RejectKvmemArguments(request.Config.Args);
-        // CLI/autostart used to skip the GUI's mutual exclusion, so a second GPU-heavy engine
-        // could load next to a running one and exhaust VRAM. Same-backend starts still adopt.
-        if (EngineArbiter.ConflictFor(ConfigService.ReadConfig(), Descriptor.Id) is { } conflicting)
-            throw new InvalidOperationException(
-                $"已有 {EngineArbiter.DisplayName(conflicting)} 服务占用显卡；请先停止它，再启动 {Descriptor.DisplayName}。");
+        // ServerService owns arbitration under the GPU lease at the actual main-service
+        // transaction. Its CPU-only embedding path ignores unrelated main-service arguments.
         if (request.Embedding)
             await ServerService.StartEmbeddingAsync(request.Config, log.Write, ct).ConfigureAwait(false);
         else

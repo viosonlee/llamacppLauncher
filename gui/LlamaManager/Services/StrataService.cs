@@ -3,6 +3,7 @@ using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Text.Json;
+using LlamaManager.Engines;
 using LlamaManager.Models;
 
 namespace LlamaManager.Services;
@@ -203,16 +204,23 @@ public static class StrataService
     public static async Task<StrataResult> RunAsync(ManagerConfig config, Action<string>? log = null, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
+        var snapshot = JsonSerializer.Deserialize<ManagerConfig>(JsonSerializer.Serialize(config))!;
+        // Consistent lock order: global GPU lease -> Strata run gate/file lease -> short config read.
+        // This archived diagnostic path never replaces or stops a registry main session.
+        using var gpuLease = await EngineArbiter.AcquireGpuStartLeaseAsync(ct).ConfigureAwait(false);
         if (!await RunGate.WaitAsync(0, ct).ConfigureAwait(false))
             throw new InvalidOperationException("已有一个 Strata 推理或分词任务在运行，请先停止。");
         try
         {
-            // Hold the lease through tokenization, execution and cleanup, including across GUI instances.
+            // Hold both leases through tokenization, native execution and all child/temp cleanup.
             using var lease = new FileStream(Path.Combine(ConfigService.GetManagerRoot(), "logs", "strata.run.lock"),
                 FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
-            using var existing = GetLiveProcess(ConfigService.ReadConfig().Strata);
+            ct.ThrowIfCancellationRequested();
+            var current = ConfigService.ReadConfig();
+            EngineArbiter.EnsureGpuAvailable(current, "strata-diagnostic", gpuHeavy: true,
+                allowSameBackend: false, displayName: "Strata 诊断推理");
+            using var existing = GetLiveProcess(current.Strata);
             if (existing != null) throw new InvalidOperationException("已有一个 Strata 推理在运行，请先停止。");
-            var snapshot = JsonSerializer.Deserialize<ManagerConfig>(JsonSerializer.Serialize(config))!;
             return await RunCoreAsync(snapshot, log, ct).ConfigureAwait(false);
         }
         finally { RunGate.Release(); }

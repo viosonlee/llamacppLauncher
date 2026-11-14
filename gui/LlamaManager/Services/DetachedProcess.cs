@@ -17,8 +17,14 @@ internal static class DetachedProcess
     /// The child's working directory. Callers that launch interpreters with module arguments
     /// (<c>python -m serve.server</c>) must pass the package root, since module resolution uses it.
     /// </param>
-    public static Process Start(string executable, string arguments, string stdout, string stderr, string workingDirectory)
+    public static Process Start(string executable, string arguments, string stdout, string stderr, string workingDirectory) =>
+        Start(executable, arguments, stdout, stderr, workingDirectory, null);
+
+    /// <summary>Merge plan overrides into a private Unicode environment; never mutate the launcher's environment.</summary>
+    public static Process Start(string executable, string arguments, string stdout, string stderr, string workingDirectory,
+        IReadOnlyDictionary<string, string>? environment)
     {
+        using var environmentBlock = CreateEnvironmentBlock(environment);
         var security = new SecurityAttributes { Length = Marshal.SizeOf<SecurityAttributes>(), InheritHandle = true };
         using var output = CreateFile(stdout, 0x40000000, 3, ref security, 2, 0x80, IntPtr.Zero);
         using var error = CreateFile(stderr, 0x40000000, 3, ref security, 2, 0x80, IntPtr.Zero);
@@ -47,8 +53,8 @@ internal static class DetachedProcess
             Marshal.Copy(new[] { startup.Startup.StdInput, startup.Startup.StdOutput, startup.Startup.StdError }, 0, handles, 3);
             if (!UpdateProcThreadAttribute(startup.Attributes, 0, (nuint)0x20002, handles, (nuint)(3 * IntPtr.Size), IntPtr.Zero, IntPtr.Zero))
                 throw new Win32Exception(Marshal.GetLastWin32Error());
-            if (!CreateProcess(executable, command, IntPtr.Zero, IntPtr.Zero, true, 0x08080000,
-                IntPtr.Zero, workingDirectory, ref startup, out var process))
+            if (!CreateProcess(executable, command, IntPtr.Zero, IntPtr.Zero, true, 0x08080400,
+                environmentBlock?.DangerousGetHandle() ?? IntPtr.Zero, workingDirectory, ref startup, out var process))
                 throw new Win32Exception(Marshal.GetLastWin32Error());
             try { return Process.GetProcessById((int)process.Id); }
             finally { CloseHandle(process.Process); CloseHandle(process.Thread); }
@@ -59,6 +65,28 @@ internal static class DetachedProcess
             Marshal.FreeHGlobal(startup.Attributes);
             Marshal.FreeHGlobal(handles);
         }
+    }
+
+    private sealed class EnvironmentBlock(string value) : SafeHandleZeroOrMinusOneIsInvalid(true)
+    {
+        public EnvironmentBlock Initialize() { SetHandle(Marshal.StringToHGlobalUni(value)); return this; }
+        protected override bool ReleaseHandle() { Marshal.FreeHGlobal(handle); return true; }
+    }
+
+    private static EnvironmentBlock? CreateEnvironmentBlock(IReadOnlyDictionary<string, string>? overrides)
+    {
+        if (overrides == null || overrides.Count == 0) return null;
+        var values = new SortedDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (System.Collections.DictionaryEntry entry in Environment.GetEnvironmentVariables())
+            values[(string)entry.Key] = (string)entry.Value!;
+        foreach (var (key, value) in overrides)
+        {
+            if (string.IsNullOrEmpty(key) || key.Contains('=') || key.Contains('\0') || value == null || value.Contains('\0'))
+                throw new ArgumentException("启动环境变量名称或值无效。", nameof(overrides));
+            values[key] = value;
+        }
+        var block = string.Join("\0", values.Select(pair => pair.Key + "=" + pair.Value)) + "\0\0";
+        return new EnvironmentBlock(block).Initialize();
     }
 
     [StructLayout(LayoutKind.Sequential)]

@@ -84,6 +84,18 @@ C:\
 - 安装只改引擎路径。模型调优参数、活动后端与运行身份保留；引用旧公共安装路径的模型预设同步该路径，独立手工路径仍保留。
 - 再次点击 GUI 更新按钮可取消。未完成安装不启用；已成功提交的其它引擎不撤销。CLI 遇到单项失败继续报告其它项，整体返回非零；取消终止后续任务。
 
+### llama.cpp v1 与 PolyStrata 仓库迁移（2026-11-14）
+
+- 官方 `v1.0.0` 稳定说明对应 `b12359`，稳定页只有 `nightly-tag.txt`；滚动nightly是另一选择，
+  当前更新器仍选择最新兼容nightly，不是“锁定v1.0.0”频道。不要把b12375和b12359当成同一份发布。
+- 原生包与cudart不仅同名/同CUDA，还必须来自所选官方仓库/tag的对应asset URL；不混入其它发布或镜像。
+- 面板可选 `--moe-cache-mib`、`--moe-cache-cpu-share` 和 `f8_e4m3`，默认不启用；
+  实际引擎help支持检查不能代替模型/内核验证，旧版/Prism缺支持时明确拒绝，不先停旧服务再失败。
+- PolyStrata当前规范来源为 `simplexai-labs/PolyStrata`；历史 `VecSzn/PolyStrata` 安装metadata与receipt不改写。
+  poly.9仍配套CUDA13.0原生包/源码/wheel pins，不使用llama.cpp的13.5 DLL；KVMem内置poly worker不可单独替换。
+- 此批仅完成启动器与fixture兼容验证，没有安装b12359/b12375或poly.9；完整边界见
+  [v1适配说明](LLAMACPP-V1-ADAPTATION.md)。
+
 ### 4.0 版本和下载缓存保留
 
 每个内置后端/架构保留当前版与最近一版旧版。仅由启动器新安装产生的 `.llama-manager-owned.json` 有效记录可参与清理；原手工目录不自动认领。

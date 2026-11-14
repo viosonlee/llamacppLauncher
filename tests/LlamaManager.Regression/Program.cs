@@ -30,6 +30,17 @@ internal static class Program
 
     public static async Task<int> Main(string[] args)
     {
+        if (args.FirstOrDefault() == ProcessAndStreamRegression.ChildSwitch)
+            return await ProcessAndStreamRegression.DispatchAsync(args);
+        if (args.FirstOrDefault() == "--plugin-probe-fixture")
+            return await PluginBehaviorRegression.ProbeHelperAsync(args);
+        if (args.FirstOrDefault() == "--gpu-native-helper")
+            return await GpuNativeLaunchRegression.RunHelperAsync(args);
+        if (args.FirstOrDefault() == "--real-gpu-launch")
+        {
+            await GpuNativeLaunchRegression.RunAsync(Path.Combine(ConfigService.GetManagerRoot(), "logs", "gpu-transaction-acceptance"));
+            return 0;
+        }
         if (args.FirstOrDefault() == "--real-log-cache")
         {
             if (args.Length != 2) throw new ArgumentException("--real-log-cache requires a log path.");
@@ -400,8 +411,53 @@ internal static class Program
                 Run(() => EngineRetentionRegression.RunOwnedDownloadRetention(_root)));
             await Test("retention: failures and cancellation preserve committed versions", () =>
                 Run(() => EngineRetentionRegression.RunFailuresAndCancellation(_root)));
+            await Test("llama v1: version and driver parsing", () => Run(LlamaV1CompatibilityRegression.RunVersionAndDriverParsing));
+            await Test("llama v1: pinned stable-nightly and CUDA plans", () => Run(() => LlamaV1CompatibilityRegression.RunPinnedManagedPlans(_root)));
+            await Test("llama v1: never mix release provenance", () => Run(() => LlamaV1CompatibilityRegression.RunNoCrossReleasePairing(_root)));
+            await Test("llama v1: latest selection skips metadata-only release", LlamaV1CompatibilityRegression.RunLatestSelectionAsync);
+            await Test("llama v1: stock and Prism remain isolated", () => Run(LlamaV1CompatibilityRegression.RunStockPrismIsolation));
+            await Test("llama v1: existing arguments and q8_0 remain unchanged", () => Run(LlamaV1CompatibilityRegression.RunExistingArgumentsAndSchema));
+            await Test("llama v1: pinned server telemetry shapes", () => Run(LlamaV1CompatibilityRegression.RunPinnedServerTelemetry));
+            await Test("llama v1: optional parameter defaults", () => Run(LlamaV1ParameterRegression.RunDefaults));
+            await Test("llama v1: parameter values and validation", () => Run(LlamaV1ParameterRegression.RunValuesAndValidation));
+            await Test("llama v1: parameter raw arguments and quotes", () => Run(LlamaV1ParameterRegression.RunRawArguments));
+            await Test("llama v1: parameter schema visibility and help", () => Run(LlamaV1ParameterRegression.RunSchema));
+            await Test("poly: canonical repository routing and release pins", () => PolyRepositoryMigrationRegression.RunCanonicalCatalogAsync(_root));
+            await Test("poly: legacy metadata reuse and ownership preservation", () => PolyRepositoryMigrationRegression.RunLegacyOwnedReuseAsync(_root));
+            await Test("v1 features: explicit opt-in checks actual executable capabilities", LlamaFeatureGateRegression.RunCapabilitiesAsync);
+            await Test("v1 features: bounded cache shares probes and isolates cancellation", LlamaFeatureGateRegression.RunCacheAsync);
+            await Test("v1 features: unsupported native options refuse before service spawn", () => LlamaFeatureGateRegression.RunLaunchRefusalAsync(_root, _model));
+            await Test("v1 features: native help probes allow large normal output but stay bounded", LlamaFeatureGateRegression.RunProbeBoundsAsync);
+            await Test("round16: plugin launch uses its selected model", () => Run(() => PluginBehaviorRegression.RunModelSelection(_root, _model)));
+            await Test("round17: plugin one-shot port override and precedence", () => Run(() => PluginBehaviorRegression.RunPortOverrides(_root)));
+            await Test("round18: plugin custom HTTP and TCP readiness agree", () => PluginBehaviorRegression.RunReadinessContractAsync(_root));
+            await Test("round19: malformed plugin manifests reject before launch", () => Run(PluginBehaviorRegression.RunInvalidManifest));
+            await Test("round20: backend status validates live process identity", () => PluginBehaviorRegression.RunStatusIdentityAsync(_root));
+            await Test("round21: plugin probe failures and cancellation are bounded", () => PluginBehaviorRegression.RunBoundedProbeAsync(_root));
+            await Test("round22: installer drains output and cleans cancelled children", ProcessAndStreamRegression.RunPythonInstallerAsync);
+            await Test("round23: GPU memory probe bounds time output and process lifetime", ProcessAndStreamRegression.RunGpuMemoryAsync);
+            await Test("round24: streaming speed request has end-to-end deadline", ProcessAndStreamRegression.RunSpeedDeadlineAsync);
+            await Test("round25: partial SSE errors and early EOF are not successful results", ProcessAndStreamRegression.RunSpeedCompletionAsync);
+            await Test("round29: malformed config structure recovers from backup", () => Run(ConfigAndModelSafetyRegression.RunConfigRecovery));
+            await Test("round30: model files validate before cache reuse and publication", ConfigAndModelSafetyRegression.RunModelDownloadSafetyAsync);
             await Test("plugins: manifest parse, validation and argument templating", () =>
                 Run(() => PluginRegression.RunManifest(_root)));
+            await Test("launch: native child receives plan environment without mutating parent", () =>
+                LaunchEnvironmentRegression.RunAsync(_root, _model));
+            await Test("launch: PolyStrata discards readiness after session replacement", () =>
+                LaunchReadinessRegression.RunAsync(_root, _model, strata: true));
+            await Test("launch: plugin discards readiness after session replacement", () =>
+                LaunchReadinessRegression.RunAsync(_root, _model, strata: false));
+            await Test("launch: stopped PolyStrata/plugin cannot report a late readiness success", async () =>
+            {
+                foreach (var strata in new[] { true, false })
+                    await LaunchReadinessRegression.RunAsync(_root, _model, strata, "stop");
+            });
+            await Test("launch: cancelled PolyStrata/plugin readiness preserves explicit stop safety", async () =>
+            {
+                foreach (var strata in new[] { true, false })
+                    await LaunchReadinessRegression.RunAsync(_root, _model, strata, "cancel");
+            });
             await Test("plugins: discovery rejects built-in id collisions", () =>
                 Run(() => PluginRegression.RunDiscovery(_root)));
             await Test("download: release-to-plan mapping and repo routing", () =>
@@ -817,10 +873,10 @@ internal static class Program
                 Check(!smallest.Fits(64), "a 64 MiB card cannot fit anything");
                 Check(list[^1].Fits(list[^1].VramMb * 2), "double the stated VRAM must fit");
 
-                // The GGUF guard rejects an HTML error page and accepts the real magic.
+                // The GGUF guard rejects HTML and requires a complete bounded metadata/descriptor table.
                 var junk = Path.Combine(_root, "junk.gguf");
                 File.WriteAllText(junk, "<html><body>Not Found</body></html>");
-                Throws<IOException>(() => ModelDownloadService.VerifyGguf(junk));
+                Throws<InvalidDataException>(() => ModelDownloadService.VerifyGguf(junk));
                 ModelDownloadService.RemoveInvalid(junk);
                 Check(!File.Exists(junk), "invalid download was not removed");
                 var good = Path.Combine(_root, "good.gguf");
@@ -1108,6 +1164,29 @@ internal static class Program
                 Check(process != null, "concurrent CLI starts did not produce a managed session");
                 await ServerService.StopAsync(config);
             });
+            await Test("GPU launch: main prepublication gap blocks plugin and permits CPU embedding", () => GpuLaunchRegression.RunMainVsPluginAsync(_root, _model));
+            await Test("GPU launch: plugin prepublication gap blocks main and preserves stop identity", () => GpuLaunchRegression.RunPluginVsMainAsync(_root, _model));
+            await Test("GPU launch: wait cancellation and real save failure clean only owned child", () => GpuLaunchRegression.RunCancellationAndSaveFailureAsync(_root, _model));
+            await Test("GPU launch: removed-plugin ownership and concurrent session snapshots", GpuLaunchRegression.RunSnapshotAsync);
+            await Test("GPU launch: teardown cleans all captured fixture children before restoring config", () =>
+                GpuLaunchRegression.RunCleanupSafetyAsync(_root, _model));
+            await Test("GPU launch: unregistered owners cannot be offered automatic stop", () => Run(() =>
+            {
+                Check(LlamaManager.Engines.EngineArbiter.AutomaticStopBackend("llamacpp") != null, "registered backend lost stop action");
+                foreach (var id in new[] { "removed-plugin-" + Guid.NewGuid().ToString("N"), "strata-diagnostic" })
+                {
+                    try { LlamaManager.Engines.EngineArbiter.AutomaticStopBackend(id); throw new Exception("unregistered owner offered automatic stop"); }
+                    catch (InvalidOperationException ex) { Check(ex.Message.Contains(id) && ex.Message.Contains("不能自动停止"), "missing owner/manual-stop guidance"); }
+                }
+            }));
+            await Test("fixtures: runtime copy refuses source overlap before creating directories", () => Run(() =>
+            {
+                var descendant = Path.Combine(AppContext.BaseDirectory, "must-not-create-" + Guid.NewGuid().ToString("N"));
+                Throws<InvalidOperationException>(() => Fixtures.CopyRuntime(descendant));
+                Check(!Directory.Exists(descendant), "overlap guard created a recursive-copy destination");
+                Throws<InvalidOperationException>(() => Fixtures.CopyRuntime(AppContext.BaseDirectory));
+                Throws<InvalidOperationException>(() => Fixtures.CopyRuntime(Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(AppContext.BaseDirectory))!));
+            }));
         }
         finally
         {

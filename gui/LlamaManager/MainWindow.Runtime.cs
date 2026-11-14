@@ -29,7 +29,8 @@ public partial class MainWindow
             using var process = isLlamacpp ? ServerService.GetManagedProcess(_config) : null;
             using var embedding = ServerService.GetEmbeddingProcess(_config);
             var embeddingSession = embedding == null ? null : _config.RunningEmbedding;
-            var readyTask = session == null ? Task.FromResult(false) : ServerService.TestApiReadyAsync(session.Port, _lifetime.Token);
+            var readyTask = session == null || backend is not IServerBackend selectedServer ? Task.FromResult(false)
+                : selectedServer.ReadyAsync(LlamaCppBackend.ToEngineSession(session) with { BackendId = backendId }, _lifetime.Token);
             var embeddingReadyTask = embeddingSession == null ? Task.FromResult(false) : ServerService.TestApiReadyAsync(embeddingSession.Port, _lifetime.Token);
             var cudaTask = CudaService.DetectAsync(selectedModel);
             var autostartTask = AutostartService.GetStatusAsync();
@@ -105,8 +106,7 @@ public partial class MainWindow
             EmbeddingStatusText.Text = embeddingSession == null ? "未启动" :
                 $"{(embeddingReadyTask.Result ? "就绪" : "加载中")} · PID {embeddingSession.ProcessId} · :{embeddingSession.Port}";
             EmbeddingStatusDot.Fill = (Brush)FindResource(embeddingSession == null ? "TextFillColorSecondaryBrush" : embeddingReadyTask.Result ? "SystemFillColorSuccessBrush" : "SystemFillColorCautionBrush");
-            EmbeddingToggleButton.Content = _embeddingStarting ? "终止启动" : embeddingSession == null ? "启动服务" : "停止服务";
-            EmbeddingToggleButton.IsEnabled = !_embeddingStarting && isLlamacpp;
+            UpdateEmbeddingToggleState(isLlamacpp, embeddingSession != null);
             if (_updateCount == 0)
             {
                 EmbeddingPortBox.Text = embeddingSession?.Port > 0 ? embeddingSession.Port.ToString() : _config.EmbeddingPort.ToString();
@@ -121,6 +121,13 @@ public partial class MainWindow
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
         catch (Exception ex) { LogService.Write("状态检测失败：" + ex.Message); }
         finally { _refreshing = false; }
+    }
+
+    // Shared by status polling and the immediate start transition: "终止启动" must stay clickable.
+    private void UpdateEmbeddingToggleState(bool isLlamacpp, bool running)
+    {
+        EmbeddingToggleButton.Content = _embeddingStarting ? "终止启动" : running ? "停止服务" : "启动服务";
+        EmbeddingToggleButton.IsEnabled = isLlamacpp;
     }
 
     private int ResolveConfiguredPort(IEngineBackend? backend)
@@ -139,17 +146,27 @@ public partial class MainWindow
         var backend = SelectedEngineBackend();
         if (backend is not IServerBackend server) return;
 
+        // Refuse invalid input before probing/downloading or stopping a conflicting service.
+        // SaveEngineParameters checks again below, after any asynchronous environment setup.
+        try
+        {
+            if (!ValidateEngineParameters()) { ShowParameterValidationFailure(); return; }
+        }
+        catch (Exception ex) { ShowError("参数有误", ex); return; }
+
         // GPU mutual exclusion: a GPU-heavy engine cannot start while another holds the GPU.
         var conflict = EngineArbiter.ConflictFor(_config, backend.Descriptor.Id);
         if (conflict != null)
         {
+            IServerBackend other;
+            try { other = EngineArbiter.AutomaticStopBackend(conflict); }
+            catch (InvalidOperationException ex) { ShowError("无法自动停止占用服务", ex); return; }
             var decision = MessageBox.Show(
                 $"{EngineArbiter.DisplayName(conflict)} 正在运行，两者共享显卡。\n\n现在停止它并继续启动 {backend.Descriptor.DisplayName} 吗？",
                 "显存冲突", MessageBoxButton.OKCancel, MessageBoxImage.Warning);
             if (decision != MessageBoxResult.OK) return;
             try
             {
-                var other = BackendRegistry.ServerById(conflict)!;
                 var otherSlot = SlotFor(conflict);
                 var otherSession = _config.GetRunning(otherSlot);
                 await other.StopAsync(otherSession != null ? LlamaCppBackend.ToEngineSession(otherSession) : new EngineSession { BackendId = conflict },
@@ -202,11 +219,19 @@ public partial class MainWindow
                 }
             }
 
+            // Every backend, including llama.cpp, must pass the schema gate before settings
+            // are persisted or a running instance is stopped for restart.
+            if (!SaveEngineParameters(backend))
+            {
+                ShowParameterValidationFailure();
+                return;
+            }
             if (backend.Descriptor.Id == "llamacpp")
             {
-                SaveCurrentConfig();
                 var launch = new ManagerConfig { ModelPath = _config.ModelPath, Args = _config.Args, Port = _config.Port };
                 var open = _config.AutoOpenBrowser;
+                // Unsupported opt-in features must fail before stopping the user's existing service.
+                await LlamaCppFeatureGate.EnsureAsync(ConfigService.GetLlamaServerPath(launch.ModelPath), launch.Args, _startCancellation.Token);
                 using var running = ServerService.GetManagedProcess(_config);
                 if (running != null) await MainBackend.StopAsync(LlamaCppBackend.ToEngineSession(_config.RunningServer!), new DelegateLogSink(LogService.Write));
                 _startCancellation.Token.ThrowIfCancellationRequested();
@@ -215,11 +240,6 @@ public partial class MainWindow
             }
             else
             {
-                if (!SaveEngineParameters(backend))
-                {
-                    ShowParameterValidationFailure();
-                    return;
-                }
                 _config = ConfigService.ReadConfig();
                 await server.StartAsync(new EngineStartRequest { Config = _config },
                     new DelegateLogSink(msg => { LogService.Write(msg); AppendEngineOutput(msg); }), _startCancellation.Token);
@@ -266,7 +286,7 @@ public partial class MainWindow
             if (backend is not IServerBackend server) return;
             var session = SelectedSession();
             if (session == null) return;
-            if (!await ServerService.TestApiReadyAsync(session.Port, _lifetime.Token)) return;
+            if (!await server.ReadyAsync(LlamaCppBackend.ToEngineSession(session) with { BackendId = backend.Descriptor.Id }, _lifetime.Token)) return;
             if (backend is StrataBackend strata && !strata.HasWebUi(_config))
             {
                 // Do not open a page the installed frontend cannot serve; "/props" is JSON.
@@ -333,7 +353,7 @@ public partial class MainWindow
             {
                 _embeddingStarting = true;
                 _embeddingCancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
-                EmbeddingToggleButton.Content = "终止启动";
+                UpdateEmbeddingToggleState(IsLlamaCppSelected(), running: false);
                 await MainBackend.StartAsync(new EngineStartRequest { Config = _config, Embedding = true },
                     new DelegateLogSink(LogService.Write), _embeddingCancellation.Token);
             }

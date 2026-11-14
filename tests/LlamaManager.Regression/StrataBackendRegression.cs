@@ -93,6 +93,15 @@ internal static class StrataBackendRegression
         foreach (var unsupported in new[] { "--expert-slots", "--prefill", "--max-new", "--mtp", "--pool-workers" })
             Check(!runArgs.Contains(unsupported), $"strata-poly has no {unsupported}; never emit it");
 
+        // Explicit off must override both inherited settings and poly.6 engine defaults.
+        config.Engines["polystrata"].Parameters["tensorCoreMma"] = "0";
+        config.Engines["polystrata"].Parameters["polyFlashAttention"] = "0";
+        var offPlan = backend.BuildLaunch(new EngineStartRequest { Config = config });
+        foreach (var name in new[] { "STRATA_GDN_MMA", "STRATA_FATTN", "STRATA_FDEC" })
+            Equal("0", offPlan.Environment.GetValueOrDefault(name));
+        config.Engines["polystrata"].Parameters.Remove("tensorCoreMma");
+        config.Engines["polystrata"].Parameters.Remove("polyFlashAttention");
+
         // The panel's own fields must reach the command line.
         config.Engines["polystrata"].Parameters["threads"] = "8";
         var panelPlan = backend.BuildLaunch(new EngineStartRequest { Config = config });

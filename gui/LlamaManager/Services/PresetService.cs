@@ -28,7 +28,7 @@ public static class PresetService
         string? moeOffload = null;
         if (device.Available)
         {
-            if (device.SupportsFit) gpuLayers = 999; // fit reduces layers/context as needed
+            if (device.SupportsFit) gpuLayers = 999; // Legacy explicit preference; fit does not guarantee shrinking explicit layers/context.
             else if (layers > 0 && device.FreeVramMb > 0)
             {
                 var modelMb = Math.Max(1, bytes / (1024d * 1024));

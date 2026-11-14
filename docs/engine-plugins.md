@@ -227,6 +227,12 @@ public sealed record EngineSession
 
 ## 7. 插件机制（外部进程 + 清单）
 
+实现补充（2026-11-14）：插件模板/会话优先使用该后端的 `EngineSettings.ModelPath`。
+端口优先级为一次性请求→参数 `port`→后端 `Port`→清单默认→主默认，均校验1–65535。
+`ready.type=http` 使用清单指定的本地 `ready.path`；`tcp` 实际连接loopback端口，启动/状态使用同一策略。
+单次探测2秒，HTTP不跟随跳转；`ready.timeoutSeconds` 必须1–3600。非法对象图、路径型id或重复参数在初始化前拒绝。
+版本探测5秒，错误/超时不报可用，运行中取消会终止探测；版本正则匹配上限200ms。
+
 ### 7.1 发现
 
 扫描：

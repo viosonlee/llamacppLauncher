@@ -27,11 +27,8 @@
 | DEF-06 | P2 | 部分证据、待核实 | PolyStrata Q2_K 预检白名单疑似过时；其它类型须按模型家族验证 |
 | DEF-07 | P2 | 代码审读 | PolyStrata 预检硬编码"6GB 低于 8GB 最低要求"（且重复实现） |
 | DEF-08 | P2 | 已修复（2026-11-01） | 小数点/逗号输入、逐项与整面板保存口径一致 |
-| DEF-09 | P2 | 代码审读 | GPU 互斥只在 GUI 生效，CLI/自启动可双开吃显存引擎 |
-| DEF-10 | P2 | 代码审读 | GPU 互斥只看配置记录，不看进程是否存活 |
 | DEF-11 | P2 | 已修复（2026-11-08） | 下载临时文件名固定 `.part`，并发下载互相踩踏并互删 |
 | DEF-12 | P3 | 已修复（2026-11-08） | 采样签名按路径保留当前观察、LRU最多256条，失败/变化不缓存 |
-| DEF-13 | P3 | 代码审读 | 多个 mmproj/draft 候选时选择不确定 |
 | DEF-14 | P2 | 已修复（2026-11-08） | 后台线程直接修改共享 `_config.ModelPresets` |
 | DEF-15 | P3 | 代码审读 | 状态轮询每 2 秒读两遍日志（服务未运行时也读） |
 | DEF-16 | P3 | 已修复（2026-11-08） | 共享日志缓存64路径LRU、容量增长回读、超大请求不驻留且不静默截行数 |
@@ -47,10 +44,76 @@
 | DEF-26 | P2 | 已修复（2026-11-08） | 预检硬编码“6GB 低于 8GB 最低要求”，且兼容性说明从未显示 |
 | DEF-27 | P2 | 已修复（2026-11-08） | 未填写的回复上限固定8192，在小上下文合法配置下阻止启动 |
 | DEF-28 | P2 | 已修复（2026-11-08） | 已校验下载单次重命名遇Windows临时锁即失败；第12轮补有界发布重试 |
+| DEF-29 | P1 | 已修复（2026-11-14） | 启动环境未传入子进程、显式关闭加速未覆盖默认 |
+| DEF-30 | P1 | 已修复（2026-11-14） | 迟到就绪响应未核对当前槽位完整身份 |
+| DEF-31 | P2 | 已修复（2026-11-14） | 未注册占用者被提供不存在的自动停止接口 |
+| DEF-32 | P2 | 已加固并验证（2026-11-14） | 回归失败清理遗漏子进程，运行时可能递归复制自身 |
 | DEF-09 | P2 | 已修复（2026-11-08） | GPU 互斥只在 GUI 生效，CLI/自启动可双开占显存引擎 |
 | DEF-10 | P2 | 已修复（2026-11-08） | GPU 互斥只看配置记录，不看进程是否存活 |
 
 ---
+
+## DEF-33–DEF-47 第16–30轮新增问题（2026-11-14，工程修复已集成验证）
+
+| 编号 | 位置 / 原问题 | 修复与回归 |
+|---|---|---|
+| DEF-33 | ProcessPluginBackend 模板/会话使用主ModelPath而非插件模型 | 当前后端优先，空值回退；round16先失败后通过 |
+| DEF-34 | ProcessPluginBackend.ResolvePort忽略一次性Port | 明确请求优先级和范围；round17先失败后通过 |
+| DEF-35 | 插件ready.path和TCP策略未在各入口统一使用 | BackendReadinessProbe+GUI/CLI后端调用；round18先失败后通过 |
+| DEF-36 | PluginManifest.Validate对null图/路径id/无效ready无保护 | 前置结构和边界验证；round19先失败后通过 |
+| DEF-37 | 三后端StatusAsync仅凭非null记录报存活 | EngineSessionStatus前后完整身份检查；round20先失败后通过 |
+| DEF-38 | 插件版本探测非零/超时仍可用、取消不及时 | 共享有界进程探测+200ms正则；round21先失败后通过 |
+| DEF-39 | PythonInstaller.DefaultRunner双管道未排空、取消泄漏 | 双流并发丢弃+本次树清理；round22真实进程验证 |
+| DEF-40 | GpuMemoryService无超时、stderr阻塞、失败退出仍采样 | 三秒期限、4096字符保留、取消清理；round23真实进程验证 |
+| DEF-41 | SpeedTestService响应头后的SSE正文不受HttpClient期限约束 | 端到端默认600秒令牌；round24头后挂起/半行/发现超时验证 |
+| DEF-42 | SpeedTestService已输出内容后error/EOF仍成功 | 错误优先、要求完成标记；round25错误及正常兼容控制验证 |
+| DEF-43 | BuildChoice把未列在精选项中的自定义值重置 | 保存自由文本、重建/失焦/默认操作保持机器值；round26 WPF验证 |
+| DEF-44 | 嵌入“终止启动”按钮被状态轮询禁用 | 统一即时/轮询按钮状态；round27实际WPF按钮取消验证 |
+| DEF-45 | llama.cpp启动绕过schema检查，可能先停旧实例 | 启动副作用前检查，统一验证后保存；round28 WPF参数持久化验证 |
+| DEF-46 | ConfigStore.Normalize先于结构验证，null图NRE绕过备份 | 前置结构验证、保留操作错误/损坏证据；round29隔离配置验证 |
+| DEF-47 | ModelDownloadService无长度检查、坏同大小缓存通过、覆盖后才验 | 精确长度+有界描述表，staging内先验再发布；round30本地HTTP并发/失败/取消验证 |
+
+本批15个独立问题的分区旧代码复现、修复与测试证据详见 [第16–30轮](ITERATION-16-30.md)。
+首次完整集成回归157通过0失败；工程修复不代表已部署/提交，也不证明所有真实引擎推理或权重完整性。
+
+## DEF-29 启动计划环境变量没有进入Windows子进程（已修复，2026-11-14）
+
+- 严重度：P1。位置：`Services/DetachedProcess.cs`、`Engines/StrataBackend.cs`、`Engines/ProcessPluginBackend.cs`。
+- 复现：真实Windows假服务需要 `child-中文=✓`，实际读到父进程的 `parent`；新增回归137通过/1失败。
+  原因是Start丢弃LaunchPlan.Environment，CreateProcess的environment参数始终为null。
+- 同类问题：关闭加速开关只省略变量；新增断言期待 `STRATA_FATTN=0` 实际为空，无法覆盖poly.6默认或父进程设置。
+- 修复：构建独立Unicode环境块，合并继承环境（大小写不敏感），不修改父进程；两个后端都传入计划环境。
+  显式off写0。非法变量名/NUL值在创建及截断日志前拒绝。
+- 验证：真实子进程中文值、大小写覆盖、空值覆盖、继承项、父进程不变与非法块保护通过。
+  这是原生进程/参数传递证据，不等同于GPU性能或所有模型推理验证。
+
+## DEF-30 迟到的就绪响应被归给已替换会话（已修复，2026-11-14）
+
+- 严重度：P1。位置：`StrataBackend.WaitReadyAsync`、`ProcessPluginBackend.WaitReadyAsync`。
+- 复现：HTTP假服务用文件栅栏确认health请求已到达；替换已登记槽位后释放响应。
+  两个后端都仍返回成功并写“已就绪”，新增回归138通过/2失败。
+- 修复：`LaunchSessionGuard` 在探测前后核对当前槽位与PID/创建时间/引擎路径，取消先检查；
+  不再仅凭端口200就绪。发生替换仅结束旧等待，不清除新记录或杀替换进程。
+- 验证：PolyStrata/插件的会话替换、显式停止、取消等待六种组合通过；清理仍以本次捕获身份为准。
+  保留普通服务取消等待后可继续管理的语义，KVMem失败/取消仍走其原有身份安全清理。
+
+## DEF-31 未注册占用者仍被提供自动停止操作（已修复，2026-11-14）
+
+- 严重度：P2。位置：`MainWindow.Runtime.cs` 的GPU冲突对话框。
+- 代码审读：互斥现在能发现removed-plugin/strata-diagnostic，但GUI仍把注册表查询结果当非null调用StopAsync。
+- 修复：显示确认框前使用 `EngineArbiter.AutomaticStopBackend` 核实接口；不存在时指名并说明不能自动停止，
+  请由原启动工具处理。保留未知活跃占用者的保守拒绝，不尝试误杀。
+- 验证：已注册后端可解析，未注册与归档诊断ID均给出明确手动处理错误；未自动点击真实用户对话框。
+
+## DEF-32 启动回归失败清理与运行时自复制防护不足（测试基础设施，2026-11-14）
+
+- 严重度：P2。位置：`GpuLaunchRegression`、`GpuNativeLaunchRegression`、`Fixtures.CopyRuntime`。
+- 代码审读：竞争者若被错误放行或写入失败后子进程未清理，旧测试finally会恢复配置而遗漏其身份；
+  standalone测试若把目标建在自身运行时目录下，递归枚举会把刚复制的文件再次复制。
+- 处理：记录每个fixture创建的身份，独立清理并确认退出后才恢复配置；无法安全清理时保留证据。
+  CopyRuntime在任何目录创建前拒绝源/目标重合或互相包含。只允许测试自身已验证的进程被清理。
+- 验证：目录重合/子目录/父目录均被前置拒绝，两个已创建fixture统一清理后进程与端口释放；
+  完整回归145通过/0失败。同根双Windows父进程原生验收通过（明确Created/Waiting栅栏、竞争者零创建）。
 
 ## DEF-09 / DEF-10 GPU 互斥只覆盖 GUI 且不验证存活
 
@@ -251,9 +314,9 @@
 - 修复建议：校验前按当前区域把 `,` 归一化为 `.`（或过滤只允许 `.` 并在 RangeHint 写明）；
   启动路径（`StrataBackend.BuildRunConfig` 用 InvariantCulture 输出）保持不变。
 
-## DEF-09 GPU 互斥只在 GUI 生效
+## DEF-09 GPU 互斥只在 GUI 生效（历史证据）
 
-**严重度 P2 · 代码审读**
+**严重度 P2 · 已修复；当前实现与跨进程补强见上方 DEF-09 / DEF-10**
 
 - 位置：`Engines/EngineArbiter.cs`（实现）与唯一调用点 `MainWindow.Runtime.cs:139`。
 - 现象：`CommandLineService` 的 `--start` / `--service` 与 `AutostartService` 直接调用
@@ -262,9 +325,9 @@
 - 修复建议：把互斥检查下沉到共享启动入口（例如 `IServerBackend.StartAsync` 的统一包装）；
   非交互场景（autostart/服务）遇到冲突应拒绝并写日志，而不是静默启动。
 
-## DEF-10 GPU 互斥不校验进程存活
+## DEF-10 GPU 互斥不校验进程存活（历史证据）
 
-**严重度 P2 · 代码审读**
+**严重度 P2 · 已修复；当前实现与跨进程补强见上方 DEF-09 / DEF-10**
 
 - 位置：`Engines/EngineArbiter.cs`（`ActiveGpuBackend` 仅判断 `config.GetRunning(slot) != null`）。
 - 影响：崩溃/断电残留的 session 记录会让"启动另一个引擎"弹出不必要的显存冲突对话框；

@@ -489,6 +489,9 @@ public partial class MainWindow
     private void ApplyLlamaCppParameter(ParameterSpec spec, Control control, string? explicitValue = null)
     {
         var value = explicitValue ?? ReadControlValue(control, spec);
+        // TextChanged also sees incomplete input (e.g. the '.' while typing '.5'). Keep the
+        // previous arguments until a valid value exists; OnParameterEdited paints inline errors.
+        if (ValidateValue(spec, value) != null) return;
         var updated = LlamaCppParameters.Apply(ArgsTextBox.Text, spec.Key, value);
         if (updated == ArgsTextBox.Text) return;
         _parsingArgs = true;
@@ -761,7 +764,7 @@ public partial class MainWindow
     /// </summary>
     private static ComboBox BuildChoice(ParameterSpec spec, string current)
     {
-        var combo = new ComboBox { FontSize = 11 };
+        var combo = new ComboBox { FontSize = 11, IsEditable = spec.Editable };
         foreach (var choice in spec.Choices ?? [])
         {
             combo.Items.Add(new ComboBoxItem
@@ -771,11 +774,7 @@ public partial class MainWindow
                 Tag = choice,
             });
         }
-        var selected = combo.Items.OfType<ComboBoxItem>()
-            .FirstOrDefault(item => item.Tag is ParamChoice choice && choice.Value == current)
-            ?? combo.Items.OfType<ComboBoxItem>().FirstOrDefault();
-        combo.SelectedItem = selected;
-        combo.IsEditable = spec.Editable;
+        SelectChoice(combo, current);
         return combo;
     }
 
@@ -799,12 +798,16 @@ public partial class MainWindow
         return combo.SelectedItem is ComboBoxItem { Tag: ParamChoice choice } ? choice.Value : fallback;
     }
 
-    /// <summary>Selects the item whose <see cref="ParamChoice.Value"/> matches; falls back to the first.</summary>
+    /// <summary>Selects a machine value, preserving custom text in editable choices.</summary>
     private static void SelectChoice(ComboBox combo, string value)
     {
         var items = combo.Items.OfType<ComboBoxItem>().ToList();
-        combo.SelectedItem = items.FirstOrDefault(item => item.Tag is ParamChoice choice && choice.Value == value)
-            ?? items.FirstOrDefault();
+        var selected = items.FirstOrDefault(item => item.Tag is ParamChoice choice && choice.Value == value);
+        // Presets are suggestions for editable fields, not an exhaustive list of valid values.
+        // In particular, rebuilding must not turn a persisted -ngl 35 or -b 4096 into "默认".
+        if (selected == null && !combo.IsEditable) selected = items.FirstOrDefault();
+        combo.SelectedItem = selected;
+        if (combo.IsEditable) combo.Text = selected?.Content?.ToString() ?? value;
     }
 
     /// <summary>Builds the on/off control a Boolean parameter uses; it writes "1" / "0".</summary>
@@ -866,8 +869,12 @@ public partial class MainWindow
         }
         if (backend is LlamaCppBackend)
         {
-            // llama.cpp's values already live in ArgsTextBox; SaveCurrentConfig validates the
-            // port and writes Args/Port back to the main config.
+            // Free text normally commits on focus loss, but a panel save/start can happen before
+            // that event. Commit it only AFTER validation, so the saved args match what was checked.
+            foreach (var spec in backend.Parameters)
+                if (_engineParameterControls.TryGetValue(spec.Key, out var control) && control is ComboBox { IsEditable: true })
+                    ApplyLlamaCppParameter(spec, control);
+            // SaveCurrentConfig validates the port and writes Args/Port and the model preset.
             SaveCurrentConfig();
             return true;
         }

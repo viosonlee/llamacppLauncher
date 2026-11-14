@@ -16,6 +16,8 @@ public sealed class ProcessPluginBackend : IServerBackend
 {
     private readonly PluginManifest _manifest;
     private readonly string _installDir;
+    internal Func<EngineSession, CancellationToken, Task>? BeforePublishAsync { get; init; }
+    internal Action? OnStartLeaseContention { get; init; }
 
     public ProcessPluginBackend(PluginManifest manifest, string installDir)
     {
@@ -32,6 +34,7 @@ public sealed class ProcessPluginBackend : IServerBackend
     /// <summary>Must be called once before use; kept separate so the constructor stays simple.</summary>
     public ProcessPluginBackend Initialize()
     {
+        if (_manifest.Validate() is { } problem) throw new ArgumentException(problem, nameof(_manifest));
         Descriptor = new BackendDescriptor(_manifest.Id, _manifest.DisplayName, _manifest.Description,
             BuiltIn: false, GpuHeavy: _manifest.GpuHeavy);
         Parameters = _manifest.Parameters.Select(p => p.ToParameterSpec()).ToArray();
@@ -46,37 +49,30 @@ public sealed class ProcessPluginBackend : IServerBackend
 
     public async Task<BackendStatus> ProbeAsync(CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         var exe = ExecutablePath();
         if (!File.Exists(exe)) return BackendStatus.Unavailable("未找到引擎可执行文件：" + exe);
         if (_manifest.Detect == null || _manifest.Detect.VersionArg.Count == 0)
             return new BackendStatus(true, exe, null, null);
-        return await Task.Run(() =>
+        var arguments = string.Join(" ", _manifest.Detect.VersionArg.Select(LauncherArguments.Quote));
+        var pattern = _manifest.Detect.VersionRegex;
+        return await Task.Run(async () =>
         {
-            Process? process = null;
             try
             {
                 var start = StrataService.CaptureStart(exe);
-                foreach (var arg in _manifest.Detect.VersionArg) start.ArgumentList.Add(arg);
-                process = Process.Start(start);
-                if (process == null) return new BackendStatus(true, exe, null, null);
-                var stdout = process.StandardOutput.ReadToEndAsync();
-                var stderr = process.StandardError.ReadToEndAsync();
-                if (!process.WaitForExit(5000)) return new BackendStatus(true, exe, null, null);
-                var text = stdout.GetAwaiter().GetResult() + stderr.GetAwaiter().GetResult();
-                var version = _manifest.Detect.VersionRegex.Length > 0
-                    ? Regex.Match(text, _manifest.Detect.VersionRegex) is { Success: true } m ? m.Groups[1].Value : null
+                start.Arguments = arguments;
+                var text = await ProcessProbe.RunAsync(start, TimeSpan.FromSeconds(5), ct).ConfigureAwait(false);
+                ct.ThrowIfCancellationRequested();
+                var version = pattern.Length > 0
+                    ? Regex.Match(text, pattern, RegexOptions.None, TimeSpan.FromMilliseconds(200)) is { Success: true } m ? m.Groups[1].Value : null
                     : null;
                 return new BackendStatus(true, exe, version, null);
             }
-            catch (Exception ex) when (ex is IOException or System.ComponentModel.Win32Exception or InvalidOperationException)
-            {
-                return BackendStatus.Unavailable("探测失败：" + ex.Message);
-            }
-            finally
-            {
-                try { if (process is { HasExited: false }) process.Kill(true); } catch { }
-                process?.Dispose();
-            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            { return BackendStatus.Unavailable("版本探测超时（5秒），已终止探测进程。"); }
+            catch (Exception ex) when (ex is IOException or System.ComponentModel.Win32Exception or InvalidOperationException or ArgumentException or TimeoutException)
+            { return BackendStatus.Unavailable("探测失败：" + ex.Message); }
         }, ct).ConfigureAwait(false);
     }
 
@@ -112,11 +108,8 @@ public sealed class ProcessPluginBackend : IServerBackend
         return PolyStrataCompatibility.Analyze(md);
     }
 
-    public Task<EngineStatus> StatusAsync(EngineSession? session, CancellationToken ct)
-    {
-        if (session == null) return Task.FromResult(new EngineStatus(false, false, null, "未运行"));
-        return Task.FromResult(new EngineStatus(true, false, session.Port, null));
-    }
+    public Task<EngineStatus> StatusAsync(EngineSession? session, CancellationToken ct) =>
+        EngineSessionStatus.QueryAsync(session, ReadyAsync, ct);
 
     public LaunchPlan BuildLaunch(EngineStartRequest request)
     {
@@ -143,10 +136,16 @@ public sealed class ProcessPluginBackend : IServerBackend
         return parameters;
     }
 
+    private string ResolveModel(ManagerConfig config)
+    {
+        var selected = config.Engines.GetValueOrDefault(_manifest.Id)?.ModelPath;
+        return string.IsNullOrWhiteSpace(selected) ? config.ModelPath : selected;
+    }
+
     private string Substitute(string template, EngineStartRequest request, IReadOnlyDictionary<string, string> parameters)
     {
         var result = template
-            .Replace("{model}", request.Config.ModelPath, StringComparison.OrdinalIgnoreCase)
+            .Replace("{model}", ResolveModel(request.Config), StringComparison.OrdinalIgnoreCase)
             .Replace("{port}", ResolvePort(request).ToString(), StringComparison.OrdinalIgnoreCase);
         foreach (var (key, value) in parameters)
             result = result.Replace("{" + key + "}", value, StringComparison.OrdinalIgnoreCase);
@@ -155,55 +154,60 @@ public sealed class ProcessPluginBackend : IServerBackend
 
     public async Task<EngineSession> StartAsync(EngineStartRequest request, ILogSink log, CancellationToken ct)
     {
-        var plan = BuildLaunch(request);
-        var port = ResolvePort(request);
-        var portProblem = port > 0
-            ? ServerService.PortUnavailableReason(port, new LauncherArguments(string.Join(" ", plan.Arguments.Select(LauncherArguments.Quote))).Get("--host"))
-            : null;
-        if (portProblem != null) throw new InvalidOperationException(portProblem);
-        var args = string.Join(" ", plan.Arguments.Select(LauncherArguments.Quote));
-        log.Write($"启动插件引擎 {_manifest.Id}：{plan.FileName} {args}");
-        var logName = _manifest.Id;
-        var process = DetachedProcess.Start(plan.FileName, args,
-            Path.Combine(ConfigService.GetManagerRoot(), "logs", $"engine-{logName}.stdout.log"),
-            Path.Combine(ConfigService.GetManagerRoot(), "logs", $"engine-{logName}.stderr.log"),
-            plan.WorkingDirectory);
-        var session = new EngineSession
+        request = request with { Config = JsonSerializer.Deserialize<ManagerConfig>(JsonSerializer.Serialize(request.Config))! };
+        EngineSession session;
+        using (var gpu = _manifest.GpuHeavy ? await EngineArbiter.AcquireGpuStartLeaseAsync(ct, OnStartLeaseContention).ConfigureAwait(false) : null)
+        using (await EngineArbiter.AcquireBackendLeaseAsync(_manifest.Id, ct).ConfigureAwait(false))
         {
-            BackendId = _manifest.Id,
-            ProcessId = process.Id,
-            StartTimeUtcTicks = process.StartTime.ToUniversalTime().Ticks,
-            ExecutablePath = plan.FileName,
-            ModelPath = request.Config.ModelPath,
-            Arguments = args,
-            Port = port,
-        };
-        process.Dispose();
-        ConfigService.SaveSessionSlot(request.Config, _manifest.Id, ToServerSession(session));
+            var latest = ConfigService.ReadConfig();
+            EngineArbiter.EnsureGpuAvailable(latest, _manifest.Id, _manifest.GpuHeavy, displayName: _manifest.DisplayName);
+            var recorded = latest.GetRunning(_manifest.Id);
+            using (var existing = recorded == null ? null : ServerService.ValidateProcess(recorded))
+                if (existing != null) throw new InvalidOperationException($"{_manifest.DisplayName} 已在运行，不会启动第二个实例。");
+            var plan = BuildLaunch(request);
+            var port = ResolvePort(request);
+            var portProblem = port > 0
+                ? ServerService.PortUnavailableReason(port, new LauncherArguments(string.Join(" ", plan.Arguments.Select(LauncherArguments.Quote))).Get("--host"))
+                : null;
+            if (portProblem != null) throw new InvalidOperationException(portProblem);
+            var args = string.Join(" ", plan.Arguments.Select(LauncherArguments.Quote));
+            log.Write($"启动插件引擎 {_manifest.Id}：{plan.FileName} {args}");
+            ct.ThrowIfCancellationRequested();
+            using var process = DetachedProcess.Start(plan.FileName, args,
+                Path.Combine(ConfigService.GetManagerRoot(), "logs", $"engine-{_manifest.Id}.stdout.log"),
+                Path.Combine(ConfigService.GetManagerRoot(), "logs", $"engine-{_manifest.Id}.stderr.log"), plan.WorkingDirectory, plan.Environment);
+            ServerSession? captured = null;
+            try
+            {
+                session = new EngineSession { BackendId = _manifest.Id, ProcessId = process.Id,
+                    StartTimeUtcTicks = process.StartTime.ToUniversalTime().Ticks, ExecutablePath = plan.FileName,
+                    ModelPath = ResolveModel(request.Config), Arguments = args, Port = port };
+                captured = ToServerSession(session);
+                using (var verified = ServerService.ValidateProcess(captured))
+                    if (verified == null) throw new InvalidOperationException("插件新进程身份验证失败。");
+                if (BeforePublishAsync != null) await BeforePublishAsync(session, ct).ConfigureAwait(false);
+                ct.ThrowIfCancellationRequested();
+                using (var verified = ServerService.ValidateProcess(captured))
+                    if (verified == null) throw new InvalidOperationException("插件登记前进程身份已变化。");
+                ConfigService.SaveSessionSlot(request.Config, _manifest.Id, captured);
+            }
+            catch
+            {
+                await EngineArbiter.CleanupUnpublishedAsync(process, captured, plan.FileName).ConfigureAwait(false);
+                throw;
+            }
+        }
         await WaitReadyAsync(session, log, ct).ConfigureAwait(false);
         return session;
     }
 
     public async Task StopAsync(EngineSession session, ILogSink log)
     {
-        Process? process = null;
-        try
-        {
-            if (session.ProcessId > 0) process = Process.GetProcessById(session.ProcessId);
-            if (process != null && (process.HasExited ||
-                process.StartTime.ToUniversalTime().Ticks != session.StartTimeUtcTicks))
-            {
-                process.Dispose();
-                process = null;
-            }
-        }
-        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
-        {
-            process = null;
-        }
+        using var lifecycle = await EngineArbiter.AcquireBackendLeaseAsync(_manifest.Id, CancellationToken.None).ConfigureAwait(false);
+        Process? process = session.ProcessId > 0 ? ServerService.ValidateProcess(ToServerSession(session)) : null;
         if (process == null)
         {
-            ConfigService.SaveSessionSlot(ConfigService.ReadConfig(), _manifest.Id, null);
+            ConfigService.ClearSessionSlotIfMatches(_manifest.Id, ToServerSession(session));
             log.Write("记录的引擎进程已不存在，已清理记录。");
             return;
         }
@@ -212,20 +216,36 @@ public sealed class ProcessPluginBackend : IServerBackend
             log.Write($"正在停止 {_manifest.DisplayName}，PID {process.Id}。");
             process.Kill(entireProcessTree: true);
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            try { await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false); } catch (OperationCanceledException) { }
+            try { await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false); }
+            catch (OperationCanceledException ex) { throw new InvalidOperationException("引擎进程尚未退出，保留运行记录。", ex); }
         }
-        ConfigService.SaveSessionSlot(ConfigService.ReadConfig(), _manifest.Id, null);
+        ConfigService.ClearSessionSlotIfMatches(_manifest.Id, ToServerSession(session));
     }
 
     public Task<bool> ReadyAsync(EngineSession session, CancellationToken ct) =>
-        ServerService.TestApiReadyAsync(session.Port, ct);
+        BackendReadinessProbe.QueryAsync(session.Port, _manifest.Ready.Type, _manifest.Ready.Path, ct,
+            new LauncherArguments(session.Arguments).Get("--host"));
 
     public int ResolvePort(EngineStartRequest request)
     {
-        var parameters = MergeParameters(request);
-        if (parameters.TryGetValue("port", out var port) && int.TryParse(port, out var value)) return value;
+        static int Checked(int value) => value is >= 1 and <= 65535
+            ? value : throw new ArgumentOutOfRangeException(nameof(value), "端口必须为1–65535。");
+        static int Parse(string value) => int.TryParse(value, out var port) ? Checked(port)
+            : throw new ArgumentException("插件端口必须为整数。");
+        if (request.Port is { } overridden)
+        {
+            Checked(overridden);
+            if (!_manifest.Launch.Arguments.Concat(_manifest.Launch.Environment.Values)
+                .Any(value => value.Contains("{port}", StringComparison.OrdinalIgnoreCase)))
+                throw new ArgumentException("该插件启动参数/环境未包含 {port}，无法安全应用一次性端口覆盖。");
+            return overridden;
+        }
         var settings = request.Config.Engines.GetValueOrDefault(_manifest.Id);
-        return settings?.Port ?? 0;
+        var configured = settings?.Parameters.LastOrDefault(p => p.Key.Equals("port", StringComparison.OrdinalIgnoreCase)).Value;
+        if (!string.IsNullOrWhiteSpace(configured)) return Parse(configured);
+        if (settings?.Port is { } common && common != 0) return Checked(common);
+        var declared = _manifest.Parameters.FirstOrDefault(p => p.Key.Equals("port", StringComparison.OrdinalIgnoreCase))?.Default;
+        return !string.IsNullOrWhiteSpace(declared) ? Parse(declared) : Checked(request.Config.Port);
     }
 
     public string HealthUrl(EngineSession session) =>
@@ -237,24 +257,20 @@ public sealed class ProcessPluginBackend : IServerBackend
     private async Task WaitReadyAsync(EngineSession session, ILogSink log, CancellationToken ct)
     {
         var deadline = DateTime.UtcNow.AddSeconds(_manifest.Ready.TimeoutSeconds);
+        var expected = ToServerSession(session);
         while (DateTime.UtcNow < deadline)
         {
-            ct.ThrowIfCancellationRequested();
-            if (ProcessGone(session))
-                throw new InvalidOperationException($"{_manifest.DisplayName} 提前退出。请查看 logs\\engine-{_manifest.Id}.stderr.log。");
-            var ready = _manifest.Ready.Type.Equals("tcp", StringComparison.OrdinalIgnoreCase)
-                ? ServerService.TestPortInUse(session.Port)
-                : await ServerService.TestApiReadyAsync(session.Port, ct).ConfigureAwait(false);
-            if (ready) { log.Write($"{_manifest.DisplayName} 已就绪：http://127.0.0.1:{session.Port}"); return; }
+            LaunchSessionGuard.EnsureCurrent(_manifest.Id, expected, ct);
+            var ready = await ReadyAsync(session, ct).ConfigureAwait(false);
+            if (ready)
+            {
+                LaunchSessionGuard.EnsureCurrent(_manifest.Id, expected, ct);
+                log.Write($"{_manifest.DisplayName} 已就绪：http://127.0.0.1:{session.Port}");
+                return;
+            }
             await Task.Delay(500, ct).ConfigureAwait(false);
         }
         log.Write($"{_manifest.Ready.TimeoutSeconds} 秒内 API 尚未就绪，进程仍在加载；可查看日志或停止服务。");
-    }
-
-    private static bool ProcessGone(EngineSession session)
-    {
-        try { using var process = Process.GetProcessById(session.ProcessId); return process.HasExited; }
-        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException) { return true; }
     }
 
     private static ServerSession ToServerSession(EngineSession session) => new()

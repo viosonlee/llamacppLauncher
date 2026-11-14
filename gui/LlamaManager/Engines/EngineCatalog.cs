@@ -42,7 +42,8 @@ public sealed record EngineInstallPlan(
 public static class EngineCatalog
 {
     public const string LlamaCppRepo = "ggml-org/llama.cpp";
-    public const string PolyStrataRepo = "VecSzn/PolyStrata";
+    // Canonical remote for new queries/source archives; installed provenance is historical, not rewritten.
+    public const string PolyStrataRepo = "simplexai-labs/PolyStrata";
     public const string KvmemRepo = "kvmem/kvmem";
 
     /// <summary>Engine directories live under the manager root, one folder per backend id.</summary>
@@ -115,7 +116,8 @@ public static class EngineCatalog
         foreach (var binary in release.Assets)
         {
             var match = Regex.Match(binary.Name, @"^llama-(b\d{1,18})-bin-win-cuda-(\d{1,2}\.\d{1,2})-x64\.zip$", RegexOptions.IgnoreCase);
-            if (!match.Success || !match.Groups[1].Value.Equals(release.Tag, StringComparison.OrdinalIgnoreCase)) continue;
+            if (!match.Success || !match.Groups[1].Value.Equals(release.Tag, StringComparison.OrdinalIgnoreCase) ||
+                !IsLlamaReleaseAsset(binary, release.Tag)) continue;
             var cuda = match.Groups[2].Value;
             if (!Version.TryParse(cuda, out var version)) continue;
             if (computeCapability > 0 && computeCapability < 8.0 && cuda != "12.4") continue;
@@ -123,9 +125,9 @@ public static class EngineCatalog
             if (!Version.TryParse(maximum.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture), out var driver) || version > driver) continue;
             // CUDA 12.4 and CUDA 13.x are the upstream Windows families with supported mappings.
             if (cuda != "12.4" && version.Major != 13) continue;
-            var runtime = release.Assets.FirstOrDefault(a =>
-                a.Name.Equals($"cudart-llama-bin-win-cuda-{cuda}-x64.zip", StringComparison.OrdinalIgnoreCase) ||
-                a.Name.Equals($"cudart-llama-{release.Tag}-bin-win-cuda-{cuda}-x64.zip", StringComparison.OrdinalIgnoreCase));
+            var runtime = release.Assets.FirstOrDefault(a => IsLlamaReleaseAsset(a, release.Tag) &&
+                (a.Name.Equals($"cudart-llama-bin-win-cuda-{cuda}-x64.zip", StringComparison.OrdinalIgnoreCase) ||
+                 a.Name.Equals($"cudart-llama-{release.Tag}-bin-win-cuda-{cuda}-x64.zip", StringComparison.OrdinalIgnoreCase)));
             if (runtime != null) candidates.Add((binary, runtime, cuda, version));
         }
         var chosen = candidates.OrderByDescending(c => c.Version).FirstOrDefault();
@@ -134,6 +136,14 @@ public static class EngineCatalog
         return new EngineInstallPlan("llamacpp", [chosen.Binary, chosen.Runtime], root, null, null)
         { PackageRoot = root, CudaVersion = chosen.Cuda, Architecture = "cuda" + chosen.Cuda };
     }
+
+    // Untagged cudart names repeat across releases: URL provenance must agree with the selected
+    // release too. Managed upstream acquisition never treats an arbitrary mirror/fork as stock.
+    private static bool IsLlamaReleaseAsset(ReleaseAsset asset, string tag) =>
+        Uri.TryCreate(asset.Url, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps &&
+        uri.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase) && uri.IsDefaultPort &&
+        uri.UserInfo.Length == 0 && uri.Query.Length == 0 && uri.Fragment.Length == 0 &&
+        Uri.UnescapeDataString(uri.AbsolutePath).Equals($"/{LlamaCppRepo}/releases/download/{tag}/{asset.Name}", StringComparison.Ordinal);
 
     /// <summary>PolyStrata's source, native ZIP and runtime pins must be from one release; CUDA is read from its BUILD stamp.</summary>
     public static EngineInstallPlan? ManagedPolyStrataPlan(ReleaseInfo release, string managerRoot)

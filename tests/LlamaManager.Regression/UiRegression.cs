@@ -432,6 +432,10 @@ internal static class UiRegression
                 }
                 finally { windowConfig.Engines["polystrata"] = System.Text.Json.JsonSerializer.Deserialize<EngineSettings>(savedSettings)!; }
 
+                // Numbered startup/editor rounds reuse this Application and dispatcher; no
+                // second Application, real launch or modal validation dialog is involved.
+                UiStartupRegression.Run(window);
+
                 // Leave the persisted active backend as llama.cpp so later tests start clean.
                 ConfigService.SaveActiveBackend(ConfigService.ReadConfig(), "llamacpp");
 

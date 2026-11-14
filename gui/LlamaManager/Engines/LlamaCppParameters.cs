@@ -1,3 +1,4 @@
+using System.Globalization;
 using LlamaManager.Services;
 
 namespace LlamaManager.Engines;
@@ -15,6 +16,13 @@ public static class LlamaCppParameters
 {
     private static readonly Lazy<IReadOnlyList<ParameterSpec>> LazySpecs = new(Build);
 
+    // Optional v1-era features, not a capability declaration for every llama.cpp/Prism binary.
+    // Reference: https://raw.githubusercontent.com/ggml-org/llama.cpp/v1.0.0/common/arg.cpp
+    private const string V1Requirement = "本项属于 llama.cpp v1 相关能力（部分旧构建仅支持其中部分选项）；旧版 / Prism 不保证支持，启动前按所选引擎的 --help 核对。";
+    private const string Fp8Help = "\n• f8_e4m3：可选 FP8 缓存格式，不等同于 q8_0，也不会自动替换 q8_0。" +
+        "需模型架构及后端注意力内核支持，不保证所有模型 / GPU 可用；不统一要求 RTX 40 系列及以上。" +
+        "可能影响精度，不保证提速；未选择时不改变现有缓存类型。" + V1Requirement;
+
     /// <summary>The flags this panel owns, keyed by spec key.</summary>
     private static readonly Dictionary<string, string> FlagOf = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -30,6 +38,8 @@ public static class LlamaCppParameters
         ["ubatchSize"] = "-ub",
         ["moeOffload"] = "--n-cpu-moe",
         ["cpuMoe"] = "--cpu-moe",
+        ["moeCacheMib"] = "--moe-cache-mib",
+        ["moeCacheCpuShare"] = "--moe-cache-cpu-share",
         ["specType"] = "--spec-type",
         ["draftModel"] = "-md",
         ["mmproj"] = "--mmproj",
@@ -45,6 +55,7 @@ public static class LlamaCppParameters
         {
             new ParamChoice("", "默认（未量化 / f16）", "不传该参数，由引擎决定。", Recommended: true),
             new ParamChoice("q8_0", "q8_0（8-bit）"),
+            new ParamChoice("f8_e4m3", "f8_e4m3（FP8，需引擎 / 模型 / 内核支持）", Fp8Help.Trim()),
             new ParamChoice("q4_0", "q4_0（4-bit）"),
             new ParamChoice("q4_1", "q4_1（4-bit）"),
             new ParamChoice("f16", "f16"),
@@ -69,11 +80,11 @@ public static class LlamaCppParameters
 
             new("contextQuantK", "K 缓存量化", "基本", ParamType.Choice, "", "K 缓存量化类型（-ctk）。",
                 Choices: quantChoices,
-                Help: "【K 缓存量化】\n• 作用：压缩注意力 Key 缓存（-ctk），降低显存占用。\n• 默认：不量化。量化会带来轻微精度损失，但能显著省显存。"),
+                Help: "【K 缓存量化】\n• 作用：压缩注意力 Key 缓存（-ctk），降低显存占用。\n• 默认：不量化。量化会带来轻微精度损失，但能显著省显存。" + Fp8Help),
 
             new("contextQuantV", "V 缓存量化", "基本", ParamType.Choice, "", "V 缓存量化类型（-ctv）。",
                 Choices: quantChoices,
-                Help: "【V 缓存量化】\n• 作用：压缩注意力 Value 缓存（-ctv）。\n• 注意：V 缓存的量化对输出质量影响通常比 K 更明显，建议先试 K。"),
+                Help: "【V 缓存量化】\n• 作用：压缩注意力 Value 缓存（-ctv）。\n• 注意：V 缓存的量化对输出质量影响通常比 K 更明显，建议先试 K。" + Fp8Help),
 
             new("offloadLayers", "GPU 卸载层数", "基本", ParamType.Choice, "", "卸载到 GPU 的层数（-ngl）。",
                 Choices:
@@ -83,7 +94,7 @@ public static class LlamaCppParameters
                     new ParamChoice("auto", "自动（auto）"),
                     new ParamChoice("0", "0（纯 CPU）"),
                 ],
-                Help: "【GPU 卸载层数】\n• 作用：把多少层放到 GPU（-ngl）。\n• all：全部卸载；auto：由引擎估算；0：纯 CPU。\n• 也可直接输入层数，例如 35。\n• 显存不足时引擎会回退部分层到 CPU，实际以加载日志为准。",
+                Help: "【GPU 卸载层数】\n• 作用：把多少层放到 GPU（-ngl）。\n• all：全部卸载；auto：由引擎估算；0：纯 CPU。\n• 也可直接输入层数，例如 35。\n• --fit on 主要调整未指定/自动参数，不保证把显式 all/层数或上下文自动缩小；显存不足仍可能失败，实际以加载日志为准。",
                 Unit: "层", Editable: true),
 
             new("cpuCores", "CPU 线程", "基本", ParamType.Choice, "", "CPU 线程数（-t）。",
@@ -146,9 +157,30 @@ public static class LlamaCppParameters
                 Help: "【MoE 卸载层数】\n• 作用：把前 N 层的 MoE 权重留在 CPU（--n-cpu-moe），为 KV 缓存腾出显存。\n• 建议：显存吃紧时从小到大试，配合实测速度决定。",
                 VisibleWhen: "model.moe", Editable: true, Min: 0, Max: 999),
 
-            new("cpuMoe", "MoE 全部走 CPU", "MoE", ParamType.Boolean, "0", "所有 MoE 权重留在 CPU（--cpu-moe）。",
-                Help: "【MoE 全部走 CPU】\n• 作用：所有 MoE 专家都在 CPU 计算（--cpu-moe）。\n• 适合显存极小但内存充足的机器；速度会明显下降。",
+            new("cpuMoe", "MoE 权重全留 CPU", "MoE", ParamType.Boolean, "0", "所有 MoE 权重留在 CPU（--cpu-moe）。",
+                Help: "【MoE 权重全留 CPU】\n• 作用：所有 MoE 专家权重驻留 CPU 主机内存（--cpu-moe）。\n• 可减少权重显存占用，但需要足够主机内存，速度取决于模型与硬件。\n• 在支持 --moe-cache-mib 的引擎中，可为 GPU 分配层的这些专家权重额外设置 GPU 缓存；权重驻留 CPU 不等于全部计算始终只走 CPU。",
                 VisibleWhen: "model.moe"),
+
+            new("moeCacheMib", "MoE 专家 GPU 缓存", "MoE", ParamType.Integer, "",
+                "主机驻留专家张量的 GPU 缓存大小（--moe-cache-mib），额外占用显存；0 关闭，留空不传。" + V1Requirement,
+                Min: 0, Max: int.MaxValue,
+                Help: "【MoE 专家 GPU 缓存】\n• 作用：为驻留 CPU（主机内存）的专家张量分配 GPU 缓存（--moe-cache-mib，单位 MiB），会额外占用 GPU 显存，需为模型、KV 缓存和计算缓冲区预留空间。" +
+                    "\n• 条件：仅适用于 MoE + GPU 后端，且层已分配给 GPU、该层专家张量仍驻留 CPU；纯 CPU 或专家全在 GPU 时不适用。可配合 --n-cpu-moe / --cpu-moe。" +
+                    "\n• 多卡：不兼容张量并行（--split-mode tensor）；这不同于用 --tensor-split 设置各 GPU 的分配比例。" +
+                    "\n• 默认：留空不传，不改变引擎默认行为（默认 0，关闭）；显式 0 也表示关闭。过小缓存可能无法容纳必要的专家，实际可用性以引擎检查为准。" +
+                    "\n• 边界：这是专家权重的 GPU 缓存，不是 KVMem / KV 缓存分页、SSD 卸载或 RAM 预算；不保证提速，需按模型与硬件实测。" +
+                    "\n• 版本：" + V1Requirement,
+                VisibleWhen: "model.moe", Unit: "MiB", RangeHint: "非负整数，0 关闭；留空不传（引擎默认 0）"),
+
+            new("moeCacheCpuShare", "MoE 缓存未命中 CPU 比例", "MoE", ParamType.Decimal, "",
+                "缓存已满后，未命中专家交由 CPU 计算的比例（--moe-cache-cpu-share，0–1），不是缓存大小或 RAM 预算。" + V1Requirement,
+                Min: 0, Max: 1,
+                Help: "【MoE 缓存未命中 CPU 比例】\n• 作用：启用 --moe-cache-mib 且缓存已满后，缓存未命中的专家有多少比例直接用主机专家在 CPU 计算，而不上传到 GPU（--moe-cache-cpu-share）。不是所有专家的 CPU 占比，也不是缓存命中率。" +
+                    "\n• 范围：0–1；0 表示不把未命中计算分给 CPU，1 表示全部分给 CPU；留空不传（引擎默认 0），不会自动启用缓存。" +
+                    "\n• 条件：MoE + GPU 后端、GPU 分配层的专家张量驻留 CPU，可配合 --n-cpu-moe / --cpu-moe；不兼容张量并行（--split-mode tensor）。" +
+                    "\n• 资源：专家 GPU 缓存仍占用显存；本项不是 KVMem、SSD 卸载或 RAM 预算，也不保证提速，需实测 CPU / GPU 分工。" +
+                    "\n• 版本：" + V1Requirement,
+                VisibleWhen: "model.moe", RangeHint: "0–1（小数），留空不传（引擎默认 0）"),
 
             new("specType", "投机解码类型", "投机解码", ParamType.Choice, "", "投机解码方式（--spec-type）。",
                 Choices:
@@ -224,6 +256,21 @@ public static class LlamaCppParameters
                 return parsed.Get("--spec-type") == "draft-mtp" ? parsed.Set("--spec-type", null) : original;
         }
         if (!FlagOf.TryGetValue(key, out var known)) return original;
+        // Validate only the newly edited value. Reading raw args, or editing another field, must
+        // not normalize/reject unrelated hand-written options (including newer engine options).
+        if (text != null && known == "--moe-cache-mib")
+        {
+            if (!int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var mib) || mib < 0)
+                throw new ArgumentException("MoE 专家 GPU 缓存必须为 0–2147483647 的整数 MiB；0 关闭，留空不传。", nameof(value));
+        }
+        if (text != null && known == "--moe-cache-cpu-share")
+        {
+            // Match the panel's Decimal input convention, independent of the current locale.
+            text = text.Replace(',', '.');
+            if (!double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var share)
+                || !double.IsFinite(share) || share < 0 || share > 1)
+                throw new ArgumentException("MoE 缓存未命中 CPU 比例必须为 0–1 的有限数字；留空不传（默认 0）。", nameof(value));
+        }
         return parsed.Set(known, text);
     }
 }

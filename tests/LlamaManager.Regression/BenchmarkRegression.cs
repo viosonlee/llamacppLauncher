@@ -11,8 +11,12 @@ internal static class BenchmarkRegression
         var config = new ManagerConfig { ModelPath = model, Port = Fixtures.FreePort() };
         config.Args = $"--host 127.0.0.1 --port {config.Port} -ngl 0";
         ConfigService.SaveConfig(config);
-        Check(await ServerService.StartAsync(config), "fixture service did not start");
-        var session = config.RunningServer!;
+        // Accepted transient cleanup is tested beside the actual forced-CPU embedding slot,
+        // not beside a main server that remains conservatively GPU-heavy even with -ngl 0.
+        config.EmbeddingModelPath = model;
+        config.EmbeddingPort = Fixtures.FreePort();
+        Check(await ServerService.StartEmbeddingAsync(config), "CPU embedding fixture did not start");
+        var session = config.RunningEmbedding!;
         var variantPorts = new List<int>();
         void ObserveStart(string message)
         {
@@ -48,10 +52,10 @@ internal static class BenchmarkRegression
                 "a benchmark borrowed the agent/service port");
             foreach (var port in variantPorts)
                 await Fixtures.AssertListenerReleasedAsync(port, TimeSpan.FromSeconds(10), "benchmark failure/cancellation");
-            Equal(session, ConfigService.ReadConfig().RunningServer);
+            Equal(session, ConfigService.ReadConfig().RunningEmbedding);
             Check(ServerService.IsSessionAlive(session) && await ServerService.TestApiReadyAsync(session.Port),
                 "benchmark stopped or replaced the existing fixture service");
         }
-        finally { await ServerService.StopAsync(config); }
+        finally { await ServerService.StopEmbeddingAsync(config); }
     }
 }

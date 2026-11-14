@@ -220,7 +220,7 @@ internal static class BuiltInUpdateRegression
     }
 
     private static ReleaseInfo Names(string tag, params string[] names) => new(tag,
-        names.Select(n => new ReleaseAsset(n, "https://fixture.invalid/" + n, new string('a', 64))).ToArray());
+        names.Select(n => new ReleaseAsset(n, $"https://github.com/{EngineCatalog.LlamaCppRepo}/releases/download/{tag}/{n}", new string('a', 64))).ToArray());
     private static string[] PairNames(string tag, string cuda) =>
         [$"llama-{tag}-bin-win-cuda-{cuda}-x64.zip", $"cudart-llama-{tag}-bin-win-cuda-{cuda}-x64.zip"];
     private static JsonArray Releases(params ReleaseInfo[] releases) => new(releases.Select(r => (JsonNode)new JsonObject
@@ -356,7 +356,8 @@ internal static class BuiltInUpdateRegression
             var a = Zip(Path.Combine(directory, names[0]), binary); var b = Zip(Path.Combine(directory, names[1]), runtime);
             _zipPaths[names[0]] = a; _zipPaths[names[1]] = b;
             return new ReleaseInfo(tag,
-            [new(names[0], "https://fixture.invalid/" + names[0], badSha ? new string('0', 64) : Hash(a)), new(names[1], "https://fixture.invalid/" + names[1], Hash(b))]);
+            [new(names[0], $"https://github.com/{EngineCatalog.LlamaCppRepo}/releases/download/{tag}/{names[0]}", badSha ? new string('0', 64) : Hash(a)),
+             new(names[1], $"https://github.com/{EngineCatalog.LlamaCppRepo}/releases/download/{tag}/{names[1]}", Hash(b))]);
         }
 
         public void Dispose()
